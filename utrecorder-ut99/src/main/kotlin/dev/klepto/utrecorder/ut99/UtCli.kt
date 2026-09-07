@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
+import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.toAbsolutePath
 import dev.klepto.utrecorder.common.log.logger
 import java.nio.file.Path
@@ -7,10 +8,6 @@ import kotlin.system.exitProcess
 
 /**
  * Command line entry point of the Unreal Tournament module, provisioning an installation and driving [UtCompiler].
- *
- * It exists so that a process that cannot depend on this module - the Gradle build, which resolves it as an artifact
- * rather than a classpath - can still reach it, by forking a JVM against the module runtime classpath. Everything it
- * does is already available as an API; nothing here is logic of its own.
  *
  * ```
  * UtCli install [--install=<dir>]
@@ -20,8 +17,11 @@ import kotlin.system.exitProcess
  * `--install` names the installation to provision and compile with, so that callers that cannot share one - concurrent
  * builds, say - can each hold their own. It defaults to the installation [UtConfig.DEFAULT] names.
  *
- * @param arguments The command line arguments, the command first and its options after it.
- * @author Augustinas R. <http://github.com/klepto>
+ * `--jobs` names the directory the run writes its configuration and its compiler log under, so that a caller driving
+ * the compiler - a build, say - collects the diagnostics of a failed run beside the output it was producing. It
+ * defaults to [Workspace.DEFAULT]. Either way only a failed run leaves anything behind.
+ *
+ * @property arguments The command line arguments, the command first and its options after it.
  */
 class UtCli(
     private val arguments: List<String>,
@@ -39,13 +39,7 @@ class UtCli(
     /**
      * The `--key=value` options the arguments hold, by key.
      */
-    private val options =
-        arguments
-            .filter { it.startsWith(OPTION_PREFIX) }
-            .associate { option ->
-                val entry = option.removePrefix(OPTION_PREFIX)
-                entry.substringBefore('=') to entry.substringAfter('=', "")
-            }
+    private val options = parseOptions()
 
     /**
      * The configuration the command runs against, holding the installation the `--install` option names.
@@ -56,6 +50,27 @@ class UtCli(
      * The installation the command runs against.
      */
     private val installDirectory = config.gameDirectory
+
+    /**
+     * The workspace the command runs its tasks in, rooted at the directory the `--jobs` option names.
+     */
+    private val workspace = path("jobs")?.let { Workspace(directory = it) } ?: Workspace.DEFAULT
+
+    /**
+     * Reads the `--key=value` options the [arguments] hold into a map, by key.
+     */
+    private fun parseOptions(): Map<String, String> =
+        arguments
+            .filter { it.startsWith(OPTION_PREFIX) }
+            .associate(::parseOption)
+
+    /**
+     * Splits one `--key=value` [option] into its key and its value, which is empty when the option carries none.
+     */
+    private fun parseOption(option: String): Pair<String, String> {
+        val entry = option.removePrefix(OPTION_PREFIX)
+        return entry.substringBefore('=') to entry.substringAfter('=', "")
+    }
 
     /**
      * Runs the command the arguments name and returns the exit code of the process.
@@ -78,7 +93,7 @@ class UtCli(
      */
     private fun install(): UtInstallation {
         UtInstaller(config).install()
-        return UtInstallation(installDirectory)
+        return UtInstallation(installDirectory, workspace)
     }
 
     /**

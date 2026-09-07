@@ -332,12 +332,12 @@ class PathsTest :
             }
         }
 
-        context("deleteRecursivelyQuietly") {
+        context("deleteRecursivelyCatching") {
             test("removes a populated directory tree") {
                 val directory = (root / "delete-tree").apply { createDirectories() }
                 (directory / "child").writeText(SAMPLE)
 
-                directory.deleteRecursivelyQuietly()
+                directory.deleteRecursivelyCatching()
 
                 directory.shouldNotExist()
             }
@@ -345,7 +345,7 @@ class PathsTest :
             test("does not throw for a path that does not exist") {
                 val missing = root / "delete-absent"
 
-                missing.deleteRecursivelyQuietly()
+                missing.deleteRecursivelyCatching()
 
                 missing.shouldNotExist()
             }

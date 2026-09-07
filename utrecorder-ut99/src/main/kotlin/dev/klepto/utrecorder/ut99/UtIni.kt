@@ -6,11 +6,13 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 /**
- * Represents an editable Unreal Tournament configuration file. Comments, blank lines and the order of the original
- * file are preserved, and keys that appear more than once within a section are kept as separate entries.
+ * An Unreal Tournament configuration file held as its original lines, edited in place and written back. Comments,
+ * blank lines and the order of the original file are preserved, and keys that appear more than once within a section
+ * are kept as separate entries.
+ *
+ * Use [read] to read one from disk.
  *
  * @param text The contents of the configuration file.
- * @author Augustinas R. <http://github.com/klepto>
  */
 class UtIni(
     text: String,
@@ -18,7 +20,11 @@ class UtIni(
     /**
      * The line separator used by the original file.
      */
-    private val newline = if (text.contains("\r\n")) "\r\n" else "\n"
+    private val newline =
+        when {
+            text.contains("\r\n") -> "\r\n"
+            else -> "\n"
+        }
 
     /**
      * The lines of the configuration file.
@@ -85,11 +91,11 @@ class UtIni(
     /**
      * Writes the configuration to the given [path] and returns it.
      */
-    fun write(path: Path): Path {
-        path.parent?.createDirectories()
-        path.writeText(toString(), CHARSET)
-        return path
-    }
+    fun write(path: Path): Path =
+        path.also {
+            it.parent?.createDirectories()
+            it.writeText(toString(), CHARSET)
+        }
 
     /**
      * Returns the contents of the configuration file.
@@ -117,7 +123,11 @@ class UtIni(
         if (start == -1) return null
 
         val length = lines.subList(start + 1, lines.size).indexOfFirst { isSection(it) }
-        val end = if (length == -1) lines.size else start + 1 + length
+        val end =
+            when (length) {
+                -1 -> lines.size
+                else -> start + 1 + length
+            }
         return (start + 1) until end
     }
 
@@ -145,19 +155,19 @@ class UtIni(
 
     companion object {
         /**
-         * Reads the configuration file at the given [path].
+         * The charset Unreal Tournament reads and writes its text files in. Maps every byte to a single character, so
+         * that a file survives a read and a write untouched.
          */
-        fun read(path: Path): UtIni = UtIni(path.readText(CHARSET))
-
-        /**
-         * The charset of Unreal Tournament configuration files. Maps every byte to a single character, so that files
-         * survive a read and write untouched.
-         */
-        private val CHARSET = Charsets.ISO_8859_1
+        val CHARSET = Charsets.ISO_8859_1
 
         /**
          * The prefix of a comment line.
          */
         private const val COMMENT = ";"
+
+        /**
+         * Reads the configuration file at the given [path].
+         */
+        fun read(path: Path): UtIni = UtIni(path.readText(CHARSET))
     }
 }

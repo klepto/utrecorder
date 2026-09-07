@@ -16,7 +16,7 @@ class PropertySource(
      * A dotted [key] reads from an underscored environment variable, since a dot is not a legal character in an
      * environment variable name on every platform.
      */
-    fun get(key: String): String? =
+    operator fun get(key: String): String? =
         property("$prefix.$key")
             ?: environment("${prefix.uppercase()}_${key.uppercase().replace('.', '_')}")
 

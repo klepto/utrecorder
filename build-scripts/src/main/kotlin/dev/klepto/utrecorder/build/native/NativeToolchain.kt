@@ -10,13 +10,12 @@ import java.io.Serializable
 import javax.inject.Inject
 
 /**
- * The C toolchain a native binary is compiled by.
+ * The C toolchain a native binary is compiled by, carried as a task input.
  *
- * A task input, so that a build cached against one toolchain is not reused against another - the two do not produce
- * the same binary.
+ * Use [Source] to discover the toolchain of the machine the build runs on.
  *
- * @param kind Which compiler this is, which decides the shape of the command line.
- * @param command The compiler to invoke, or the environment script that puts it on the path for [Kind.MSVC].
+ * @property kind Which compiler this is, which decides the shape of the command line.
+ * @property command The compiler to invoke, or the environment script that puts it on the path for [Kind.MSVC].
  */
 data class NativeToolchain(
     val kind: Kind,
@@ -40,22 +39,25 @@ data class NativeToolchain(
     }
 
     companion object {
+        /**
+         * The `gcc` command, which is expected to be on the path.
+         */
         private const val GCC = "gcc"
+
+        /**
+         * The MinGW command targeting 32-bit Windows, which is expected to be on the path.
+         */
         private const val MINGW = "i686-w64-mingw32-gcc"
     }
 
     /**
-     * Discovers the C toolchain for a platform, or nothing when the machine holds none. A task that needs one then
-     * fails with its own message, naming what to install for the platform it was asked to build.
-     *
-     * A [ValueSource] rather than a plain function, because discovery runs external processes and its result is a task
-     * input: this way the configuration cache records it properly instead of treating it as an undeclared read.
-     *
-     * MinGW is preferred on Windows when it is on the path, because it needs no environment script and produces the
-     * same 32-bit output. Visual Studio is the fallback, through `VsDevCmd.bat -arch=x86 -host_arch=x64` - the
-     * supported cross toolset, since Microsoft deprecated the x86-hosted compiler but never the x86 target.
+     * Discovers the C toolchain for a platform, or nothing when the machine holds none. On Windows MinGW is preferred
+     * when it is on the path, and the Visual Studio environment script is the fallback.
      */
     abstract class Source : ValueSource<NativeToolchain, Source.Parameters> {
+        /**
+         * The parameters the discovery reads.
+         */
         interface Parameters : ValueSourceParameters {
             /**
              * The name of the [NativePlatform] to find a toolchain for.
@@ -63,13 +65,19 @@ data class NativeToolchain(
             val platform: Property<String>
         }
 
+        /**
+         * The service the discovery runs its probing commands through.
+         */
         @get:Inject
         abstract val exec: ExecOperations
 
         override fun obtain(): NativeToolchain? {
             val platform = NativePlatform.valueOf(parameters.platform.get())
             if (!platform.isWindows) {
-                return if (runs(GCC)) NativeToolchain(Kind.GCC, GCC) else null
+                return when {
+                    runs(GCC) -> NativeToolchain(Kind.GCC, GCC)
+                    else -> null
+                }
             }
             if (runs(MINGW)) return NativeToolchain(Kind.MINGW, MINGW)
             val tools = visualStudioTools() ?: return null

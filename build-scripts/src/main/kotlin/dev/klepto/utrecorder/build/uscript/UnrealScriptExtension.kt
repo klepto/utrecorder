@@ -6,10 +6,8 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 
 /**
- * An UnrealScript package the module compiles.
- *
- * The name is the package name, and UCC derives it from the directory the sources sit in, so the two are the same
- * thing: `src/main/uscript/UTRecorder` compiles to `UTRecorder.u`.
+ * An UnrealScript package the module compiles. The name is the package name and the directory the sources sit in:
+ * `src/main/uscript/UTRecorder` compiles to `UTRecorder.u`.
  */
 abstract class UnrealScriptPackage : Named {
     /**
@@ -19,19 +17,15 @@ abstract class UnrealScriptPackage : Named {
     abstract val sources: DirectoryProperty
 
     /**
-     * The packages this one compiles against, beyond the ones the installation configures by default. `EditPackages`
-     * is ordered, so these are appended before this package and a package of this module that another one depends on
-     * belongs here.
+     * The packages this one compiles against, beyond the ones the installation configures by default. They are
+     * appended to `EditPackages` before this package, which is what a package of this module depends on.
      */
     abstract val editPackages: ListProperty<String>
 }
 
 /**
- * Configures the UnrealScript packages a module compiles.
- *
- * Every directory under [sourceDirectory] registers a package of its own, so a module that follows the layout needs
- * no configuration at all. The container is there for the cases the convention does not cover - naming the packages a
- * package depends on, or holding sources somewhere else.
+ * Configures the UnrealScript packages a module compiles. Every directory under [sourceDirectory] registers a package
+ * of its own, and [packages] names what the layout cannot say, such as the packages a package compiles against.
  */
 abstract class UnrealScriptExtension {
     /**
@@ -40,8 +34,7 @@ abstract class UnrealScriptExtension {
     abstract val sourceDirectory: DirectoryProperty
 
     /**
-     * The recorder home directory the compiler provisions its Unreal Tournament installation into. Not a task
-     * input: it holds a materialized game installation, which is neither reproducible nor worth hashing.
+     * The recorder home directory the compiler provisions its Unreal Tournament installation into. Not a task input.
      */
     abstract val homeDirectory: DirectoryProperty
 

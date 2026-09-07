@@ -1,7 +1,10 @@
 package dev.klepto.utrecorder.common.io
 
+import com.github.stephenc.javaisotools.loopfs.iso9660.Iso9660FileEntry
 import com.github.stephenc.javaisotools.loopfs.iso9660.Iso9660FileSystem
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipFile
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import java.io.InputStream
@@ -53,14 +56,22 @@ private fun Path.extractIso(
     for (entry in fileSystem) {
         val name = entry.path.trim('/')
         if (name.isEmpty() || !filter(name)) continue
-
-        val file = target.resolveEntry(name)
-        if (entry.isDirectory) {
-            file.createDirectories()
-        } else {
-            fileSystem.getInputStream(entry).use { it.writeTo(file) }
-        }
+        fileSystem.extractEntry(entry, target.resolveEntry(name))
     }
+}
+
+/**
+ * Writes the given ISO [entry] to [file], creating the directory instead when the entry is one.
+ */
+private fun Iso9660FileSystem.extractEntry(
+    entry: Iso9660FileEntry,
+    file: Path,
+) {
+    if (entry.isDirectory) {
+        file.createDirectories()
+        return
+    }
+    getInputStream(entry).use { it.writeTo(file) }
 }
 
 /**
@@ -73,15 +84,23 @@ private fun Path.extractZip(
     for (entry in zip.entries) {
         val name = entry.name.trim('/')
         if (name.isEmpty() || !filter(name)) continue
-
-        val file = target.resolveEntry(name)
-        if (entry.isDirectory) {
-            file.createDirectories()
-        } else {
-            zip.getInputStream(entry).use { it.writeTo(file) }
-            if (entry.unixMode and OWNER_EXECUTE != 0) file.markExecutable()
-        }
+        zip.extractEntry(entry, target.resolveEntry(name))
     }
+}
+
+/**
+ * Writes the given zip [entry] to [file], creating the directory instead when the entry is one.
+ */
+private fun ZipFile.extractEntry(
+    entry: ZipArchiveEntry,
+    file: Path,
+) {
+    if (entry.isDirectory) {
+        file.createDirectories()
+        return
+    }
+    getInputStream(entry).use { it.writeTo(file) }
+    if (entry.unixMode and OWNER_EXECUTE != 0) file.markExecutable()
 }
 
 /**
@@ -97,25 +116,35 @@ private fun Path.extractTarBzip2(
             val entry = tar.nextEntry ?: break
             val name = entry.name.trim('/')
             if (name.isEmpty() || !filter(name)) continue
-
-            val file = target.resolveEntry(name)
-            when {
-                entry.isDirectory -> {
-                    file.createDirectories()
-                }
-
-                entry.isSymbolicLink || entry.isLink -> {
-                    links += file to entry.linkName
-                }
-
-                else -> {
-                    tar.writeTo(file)
-                    if (entry.mode and OWNER_EXECUTE != 0) file.markExecutable()
-                }
-            }
+            tar.extractEntry(entry, target.resolveEntry(name), links)
         }
     }
     links.forEach { (file, name) -> target.link(file, name) }
+}
+
+/**
+ * Writes the given tar [entry] to [file], creating the directory instead when the entry is one and collecting the
+ * links into [links], which are resolved once the whole archive is extracted.
+ */
+private fun TarArchiveInputStream.extractEntry(
+    entry: TarArchiveEntry,
+    file: Path,
+    links: MutableList<Pair<Path, String>>,
+) {
+    when {
+        entry.isDirectory -> {
+            file.createDirectories()
+        }
+
+        entry.isSymbolicLink || entry.isLink -> {
+            links += file to entry.linkName
+        }
+
+        else -> {
+            writeTo(file)
+            if (entry.mode and OWNER_EXECUTE != 0) file.markExecutable()
+        }
+    }
 }
 
 /**
@@ -129,7 +158,11 @@ private fun Path.link(
     file.parent?.createDirectories()
     file.deleteIfExists()
     runCatching { Files.createSymbolicLink(file, Path.of(name)) }.getOrElse {
-        val source = if (name.startsWith("/")) resolveEntry(name.trimStart('/')) else file.resolveSibling(name)
+        val source =
+            when {
+                name.startsWith("/") -> resolveEntry(name.trimStart('/'))
+                else -> file.resolveSibling(name)
+            }
         check(source.exists()) { "Cannot link $file to $name" }
         source.copyTo(file, overwrite = true)
         file.markExecutable()

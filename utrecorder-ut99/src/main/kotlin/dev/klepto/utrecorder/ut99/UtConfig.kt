@@ -8,37 +8,23 @@ import java.nio.file.Path
 /**
  * Everything the Unreal Tournament module needs from its environment.
  *
- * A value rather than a global, so that callers that cannot share one installation - concurrent builds, a server
- * running several recordings - each hold a configuration of their own, and so that a class reaching for a URL or a
- * directory has to say so in its constructor.
+ * Use [DEFAULT] for the configuration the current process works against, or [fromProperties] to build one from a given
+ * [PropertySource].
  *
- * @author Augustinas R. <http://github.com/klepto>
+ * @property directories The directories the installation is materialized under.
+ * @property gameDirectory The directory where the game is installed. Named separately from [directories], so that
+ * callers that cannot share one installation can each name their own.
+ * @property isoUrl The URL of the original UT ISO file.
+ * @property isoMd5 The MD5 hash of the original UT ISO file.
+ * @property patchUrl The URL of the UT patch releases.
+ * @property patchVersion The version of the UT patch to use.
  */
 data class UtConfig(
-    /**
-     * The directories the installation is materialized under.
-     */
     val directories: Directories = Directories.DEFAULT,
-    /**
-     * The directory where the game is installed. Named separately from [directories], so that callers that cannot
-     * share one installation can each name their own.
-     */
     val gameDirectory: Path = directories.installs[GAME_DIRECTORY],
-    /**
-     * The URL of the original UT ISO file.
-     */
     val isoUrl: String = DEFAULT_ISO_URL,
-    /**
-     * The MD5 hash of the original UT ISO file.
-     */
     val isoMd5: String = DEFAULT_ISO_MD5,
-    /**
-     * The URL of the UT patch releases.
-     */
     val patchUrl: String = DEFAULT_PATCH_URL,
-    /**
-     * The version of the UT patch to use.
-     */
     val patchVersion: String = DEFAULT_PATCH_VERSION,
 ) {
     /**
@@ -58,6 +44,31 @@ data class UtConfig(
 
     companion object {
         /**
+         * The name the installation takes within the installs directory.
+         */
+        private const val GAME_DIRECTORY = "ut99"
+
+        /**
+         * The URL the original UT ISO is fetched from by default.
+         */
+        private const val DEFAULT_ISO_URL = "https://archive.org/download/ut-goty/UT_GOTY_CD1.iso"
+
+        /**
+         * The MD5 hash the fetched ISO is verified against by default.
+         */
+        private const val DEFAULT_ISO_MD5 = "e5127537f44086f5ed36a9d29f992c00"
+
+        /**
+         * The URL the patch releases are fetched from by default.
+         */
+        private const val DEFAULT_PATCH_URL = "https://github.com/OldUnreal/UnrealTournamentPatches/releases/download"
+
+        /**
+         * The patch version an installation is materialized with by default.
+         */
+        private const val DEFAULT_PATCH_VERSION = "469e"
+
+        /**
          * The configuration a caller that names none works against. Resolved on first use rather than at class load,
          * so that the order in which classes happen to load cannot decide what a process installs.
          */
@@ -72,23 +83,10 @@ data class UtConfig(
         ): UtConfig =
             UtConfig(
                 directories = directories,
-                isoUrl = properties.get("iso_url") ?: DEFAULT_ISO_URL,
-                isoMd5 = properties.get("iso_md5") ?: DEFAULT_ISO_MD5,
-                patchUrl = properties.get("patch_url") ?: DEFAULT_PATCH_URL,
-                patchVersion = properties.get("patch_version") ?: DEFAULT_PATCH_VERSION,
+                isoUrl = properties["iso_url"] ?: DEFAULT_ISO_URL,
+                isoMd5 = properties["iso_md5"] ?: DEFAULT_ISO_MD5,
+                patchUrl = properties["patch_url"] ?: DEFAULT_PATCH_URL,
+                patchVersion = properties["patch_version"] ?: DEFAULT_PATCH_VERSION,
             )
-
-        /**
-         * The name the installation takes within the installs directory.
-         */
-        private const val GAME_DIRECTORY = "ut99"
-
-        private const val DEFAULT_ISO_URL = "https://archive.org/download/ut-goty/UT_GOTY_CD1.iso"
-
-        private const val DEFAULT_ISO_MD5 = "e5127537f44086f5ed36a9d29f992c00"
-
-        private const val DEFAULT_PATCH_URL = "https://github.com/OldUnreal/UnrealTournamentPatches/releases/download"
-
-        private const val DEFAULT_PATCH_VERSION = "469e"
     }
 }

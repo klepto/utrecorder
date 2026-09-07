@@ -1,9 +1,7 @@
 package dev.klepto.utrecorder.common.install
 
 /**
- * Represents an installation procedure.
- *
- * @author Augustinas R. <http://github.com/klepto>
+ * A dependency that materializes itself on disk, and reports whether it already has.
  */
 interface Installer {
     /**
@@ -28,7 +26,9 @@ interface Installer {
 }
 
 /**
- * Installer that runs a sequence of other installers.
+ * The installer produced by [Installer.plus], running the [installers] it holds in order.
+ *
+ * @property installers The installers this one runs, in the order they were combined.
  */
 data class SequenceInstaller(
     val installers: List<Installer>,

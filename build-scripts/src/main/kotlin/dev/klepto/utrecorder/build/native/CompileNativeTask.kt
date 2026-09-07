@@ -20,14 +20,10 @@ import java.io.File
 import javax.inject.Inject
 
 /**
- * Compiles one native binary from the C sources of a unit.
+ * Compiles one native binary from the C sources of a unit. The compiler runs in [workDirectory] and only the binary it
+ * produced is copied into [outputDirectory].
  *
- * The compiler runs in a work directory rather than in the output directory, and only the binary it produced is copied
- * out. Every toolchain leaves intermediates behind - MSVC alone writes `.obj`, `.exp` and `.lib` - and the output
- * directory is what lands in the jar, so it has to hold the artifacts and nothing else.
- *
- * A binary the current platform does not build is not an error. Its output is cleared and the task succeeds, so a
- * Linux build of a module holding a Windows-only injector is a normal build rather than a broken one.
+ * A binary the current platform does not build is not an error: the output is cleared and the task succeeds.
  */
 @CacheableTask
 abstract class CompileNativeTask : DefaultTask() {
@@ -87,12 +83,21 @@ abstract class CompileNativeTask : DefaultTask() {
     @get:Internal
     abstract val workDirectory: DirectoryProperty
 
+    /**
+     * The service the compiler is run through.
+     */
     @get:Inject
     abstract val exec: ExecOperations
 
+    /**
+     * The service the task directories are cleared through.
+     */
     @get:Inject
     abstract val files: FileSystemOperations
 
+    /**
+     * Compiles the binary, or clears the output and returns when this platform does not build it.
+     */
     @TaskAction
     fun compile() {
         val output = outputDirectory.get().asFile
@@ -150,19 +155,19 @@ abstract class CompileNativeTask : DefaultTask() {
             // -m32 because the Linux patch is x86: a 64-bit shared object cannot be loaded into a 32-bit game. It
             // needs gcc-multilib and libc6-dev-i386 on a 64-bit host.
             NativeToolchain.Kind.GCC ->
-                if (shared) {
-                    listOf(toolchain.command, "-m32", "-shared", "-fPIC", "-O2", "-o", fileName) + paths + "-ldl"
-                } else {
-                    listOf(toolchain.command, "-m32", "-O2", "-o", fileName) + paths
+                when {
+                    shared -> listOf(toolchain.command, "-m32", "-shared", "-fPIC", "-O2", "-o", fileName) + paths + "-ldl"
+                    else -> listOf(toolchain.command, "-m32", "-O2", "-o", fileName) + paths
                 }
 
             NativeToolchain.Kind.MINGW ->
-                if (shared) {
-                    listOf(toolchain.command, "-O2", "-shared", "-o", fileName) +
-                        paths + listOf("-lws2_32", "-static-libgcc")
-                } else {
+                when {
+                    shared ->
+                        listOf(toolchain.command, "-O2", "-shared", "-o", fileName) +
+                            paths + listOf("-lws2_32", "-static-libgcc")
+
                     // -municode gives the injector the wmain entry point it is written against.
-                    listOf(toolchain.command, "-O2", "-municode", "-o", fileName) + paths + "-static-libgcc"
+                    else -> listOf(toolchain.command, "-O2", "-municode", "-o", fileName) + paths + "-static-libgcc"
                 }
 
             NativeToolchain.Kind.MSVC -> listOf("cmd", "/c", visualStudioCommand(toolchain, paths, fileName, shared))
@@ -180,10 +185,9 @@ abstract class CompileNativeTask : DefaultTask() {
     ): String {
         val sources = paths.joinToString(" ") { "\"$it\"" }
         val compile =
-            if (shared) {
-                "cl /nologo /O2 /LD $sources /Fe:\"$fileName\" /link ws2_32.lib gdi32.lib user32.lib"
-            } else {
-                "cl /nologo /O2 $sources /Fe:\"$fileName\" /link /SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup"
+            when {
+                shared -> "cl /nologo /O2 /LD $sources /Fe:\"$fileName\" /link ws2_32.lib gdi32.lib user32.lib"
+                else -> "cl /nologo /O2 $sources /Fe:\"$fileName\" /link /SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup"
             }
         return "call \"${toolchain.command}\" -arch=x86 -host_arch=x64 -no_logo && $compile"
     }
@@ -192,11 +196,12 @@ abstract class CompileNativeTask : DefaultTask() {
      * Returns the message naming what to install when no toolchain was found for [target].
      */
     private fun missingToolchain(target: NativePlatform): String =
-        if (target.isWindows) {
-            "No 32-bit C toolchain found. Install Visual Studio Build Tools with the x86 compiler, " +
-                "or put i686-w64-mingw32-gcc on PATH, to build ${binaryName.get()}."
-        } else {
-            "gcc is not on PATH. Install it to build ${binaryName.get()}."
+        when {
+            target.isWindows ->
+                "No 32-bit C toolchain found. Install Visual Studio Build Tools with the x86 compiler, " +
+                    "or put i686-w64-mingw32-gcc on PATH, to build ${binaryName.get()}."
+
+            else -> "Gcc is not on PATH. Install it to build ${binaryName.get()}."
         }
 
     companion object {

@@ -1,11 +1,11 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.io.Workspace
-import dev.klepto.utrecorder.common.io.deleteRecursivelyQuietly
+import dev.klepto.utrecorder.common.io.deleteRecursivelyCatching
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
-import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableResult
+import dev.klepto.utrecorder.common.process.executable
 import java.nio.file.Path
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.absolutePathString
@@ -19,11 +19,10 @@ import kotlin.io.path.isDirectory
 import kotlin.io.path.writeText
 
 /**
- * Represents the Unreal Tournament compiler and it's commands.
+ * The UCC utility of an installation, compiling UnrealScript packages and decompressing `.uz` archives.
  *
- * @param executablePath Path to the UT compiler executable.
- * @param workspace The workspace a compile runs its task in.
- * @author Augustinas R. <http://github.com/klepto>
+ * @property executablePath Path to the UT compiler executable.
+ * @property workspace The workspace a compile runs its task in.
  */
 class UtCompiler(
     private val executablePath: Path,
@@ -47,17 +46,9 @@ class UtCompiler(
      * The compiler executable configured with the necessary environment variables.
      */
     private val executable =
-        Executable(executablePath.toAbsolutePath(), workingDirectory = directory)
-            .prependEnvironment("LD_LIBRARY_PATH" to directory.toString())
-
-    /**
-     * Default home directory arguments.
-     */
-    private val homeArguments =
-        if (UT_PLATFORM != UtPlatform.WINDOWS) {
-            listOf("-nohomedir")
-        } else {
-            emptyList()
+        executable(executablePath.toAbsolutePath()) {
+            workingDirectory = directory
+            prependEnvironment("LD_LIBRARY_PATH", "$directory")
         }
 
     /**
@@ -65,7 +56,7 @@ class UtCompiler(
      */
     private fun run(vararg arguments: String): ExecutableResult =
         executable
-            .copy(arguments = arguments.toList() + homeArguments)
+            .copy(arguments = arguments.toList() + UT_PLATFORM.homeArguments)
             .startAndAwait()
 
     /**
@@ -126,7 +117,7 @@ class UtCompiler(
                     producedPath.deleteIfExists()
                     run("make", "-nobind", "-bytehax", "-packages=$packageName", "-ini=${iniPath.absolutePathString()}")
                 } finally {
-                    stagedPath.deleteRecursivelyQuietly()
+                    stagedPath.deleteRecursivelyCatching()
                 }
 
             taskDirectory[MAKE_LOG].writeText(result.output.joinToString(System.lineSeparator()))

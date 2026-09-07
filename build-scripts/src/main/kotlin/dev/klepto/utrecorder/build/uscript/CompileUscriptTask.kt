@@ -24,14 +24,8 @@ import javax.inject.Inject
 
 /**
  * Compiles one UnrealScript package into a `.u` file by forking `UtCli` against the runtime classpath of
- * `utrecorder-ut99`.
- *
- * It forks rather than calls because the build that runs this plugin is an included build: it cannot depend on a
- * subproject of the build it configures, so the only way to reach the compiler is as a resolved artifact.
- *
- * The Unreal Tournament installation UCC comes from is not an input. It is hundreds of megabytes of materialized game
- * data, hashing it would cost more than the compile, and it is fully determined by [compilerClasspath] - the jar it is
- * provisioned by - together with [patchVersion], which overrides the version that jar defaults to.
+ * `utrecorder-ut99`. The Unreal Tournament installation UCC comes from is not a task input: [compilerClasspath] and
+ * [patchVersion] determine it.
  */
 @CacheableTask
 abstract class CompileUscriptTask : DefaultTask() {
@@ -86,7 +80,8 @@ abstract class CompileUscriptTask : DefaultTask() {
     abstract val outputDirectory: DirectoryProperty
 
     /**
-     * The directory the configuration and the output of the compiler run are written to.
+     * The directory the configuration and the output of the compiler run are written under. A run that succeeds leaves
+     * it empty, a run that fails keeps its job directory there.
      */
     @get:OutputDirectory
     abstract val logDirectory: DirectoryProperty
@@ -97,12 +92,21 @@ abstract class CompileUscriptTask : DefaultTask() {
     @get:ServiceReference(UCC_SERVICE)
     abstract val ucc: Property<UccService>
 
+    /**
+     * The service the compiler is forked through.
+     */
     @get:Inject
     abstract val exec: ExecOperations
 
+    /**
+     * The service the task directories are cleared through.
+     */
     @get:Inject
     abstract val files: FileSystemOperations
 
+    /**
+     * Compiles the package, clearing the output and the log of the previous run first.
+     */
     @TaskAction
     fun compile() {
         val outputPath = outputDirectory.file("${packageName.get()}.u").get().asFile
@@ -121,16 +125,34 @@ abstract class CompileUscriptTask : DefaultTask() {
             environment("UTRECORDER_HOME", homeDirectory.get().asFile.absolutePath)
             patchVersion.orNull?.let { environment("UTRECORDER_PATCH_VERSION", it) }
 
-            args =
-                listOfNotNull(
-                    "make",
-                    "--sources=${sources.get().asFile.absolutePath}",
-                    "--output=${outputPath.absolutePath}",
-                    "--jobs=${logPath.absolutePath}",
-                    editPackages.get().takeIf { it.isNotEmpty() }?.let { "--edit-packages=${it.joinToString(",")}" },
-                )
+            args = compilerArguments(outputPath.absolutePath, logPath.absolutePath)
         }
     }
+
+    /**
+     * Returns the `UtCli` arguments that compile this package into [outputPath], running the compiler under [logPath]
+     * so that a failed compile leaves its configuration and its log there.
+     */
+    private fun compilerArguments(
+        outputPath: String,
+        logPath: String,
+    ): List<String> =
+        listOfNotNull(
+            "make",
+            "--sources=${sources.get().asFile.absolutePath}",
+            "--output=$outputPath",
+            "--jobs=$logPath",
+            editPackagesArgument(),
+        )
+
+    /**
+     * Returns the `--edit-packages` argument, or `null` when this package compiles against no extra packages.
+     */
+    private fun editPackagesArgument(): String? =
+        editPackages
+            .get()
+            .takeIf { it.isNotEmpty() }
+            ?.let { "--edit-packages=${it.joinToString(",")}" }
 
     companion object {
         /**

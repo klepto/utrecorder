@@ -4,11 +4,9 @@ import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.file.Directory
 
 /**
- * Registers one element for every directory under [sourceDirectory], named after the directory.
- *
- * Both toolchain plugins take their units from the layout - a directory is an UnrealScript package or a native binary
- * - so a module that follows the layout configures nothing. Listed eagerly, because the task of a unit has to exist
- * by the time the task graph is built, and sorted so that the build is the same whatever order the filesystem lists.
+ * Registers one element for every directory under [sourceDirectory], named after the directory. The directories are
+ * listed eagerly and in name order, so that the elements exist before the task graph is built and a build does not
+ * depend on the order the filesystem lists them in.
  */
 internal fun <T : Any> NamedDomainObjectContainer<T>.createFromLayout(sourceDirectory: Directory) {
     sourceDirectory.asFile

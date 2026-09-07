@@ -16,10 +16,12 @@ import kotlin.time.Duration.Companion.days
 /**
  * The directory tasks run in, and how it treats what they leave behind.
  *
- * @param directory The directory the working directory of a task is created under.
- * @param keep Whether the working directory of a successful task is kept.
- * @param retention How long the working directory of a failed task is kept before a later task removes it.
- * @author Augustinas R. <http://github.com/klepto>
+ * Use [DEFAULT] for the workspace the current process runs its tasks in, or [fromProperties] to build one from a given
+ * [PropertySource].
+ *
+ * @property directory The directory the working directory of a task is created under.
+ * @property keep Whether the working directory of a successful task is kept.
+ * @property retention How long the working directory of a failed task is kept before a later task removes it.
  */
 class Workspace(
     val directory: Path = Directories.DEFAULT.tasks,
@@ -43,7 +45,7 @@ class Workspace(
         val taskDirectory = createTaskDirectory(name)
         val result = block(taskDirectory)
         if (!keep) {
-            taskDirectory.deleteRecursivelyQuietly()
+            taskDirectory.deleteRecursivelyCatching()
         }
         return result
     }
@@ -73,10 +75,26 @@ class Workspace(
             } catch (_: IOException) {
                 return
             }
-        expired.forEach(Path::deleteRecursivelyQuietly)
+        expired.forEach(Path::deleteRecursivelyCatching)
     }
 
     companion object {
+        /**
+         * Whether the working directory of a successful task is kept by default. Leftovers are the diagnostics of a
+         * failed run, so a successful run leaves none behind unless a caller asks for it.
+         */
+        private const val DEFAULT_KEEP = false
+
+        /**
+         * How long a leftover working directory is kept by default.
+         */
+        private val DEFAULT_RETENTION = 7.days
+
+        /**
+         * The timestamp the name of a working directory carries.
+         */
+        private val TIMESTAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
+
         /**
          * The workspace a caller that names none runs its tasks in. Resolved on first use rather than at class load.
          */
@@ -94,21 +112,5 @@ class Workspace(
                 keep = properties.get("tasks.keep") { it.toBoolean() } ?: DEFAULT_KEEP,
                 retention = properties.get("tasks.retention") { Duration.parse(it) } ?: DEFAULT_RETENTION,
             )
-
-        /**
-         * Whether the working directory of a successful task is kept by default. Leftovers are the diagnostics of a
-         * failed run, so a successful run leaves none behind unless a caller asks for it.
-         */
-        private const val DEFAULT_KEEP = false
-
-        /**
-         * How long a leftover working directory is kept by default.
-         */
-        private val DEFAULT_RETENTION = 7.days
-
-        /**
-         * The timestamp the name of a working directory carries.
-         */
-        private val TIMESTAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
     }
 }

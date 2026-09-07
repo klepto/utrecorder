@@ -9,15 +9,13 @@ enum class NativeBinaryType {
 }
 
 /**
- * A platform the native binaries are built for.
+ * A platform the native binaries are built for, both of them 32-bit.
  *
- * Only one of these can be produced by a build, because nothing here cross-compiles: the toolchain on the machine
- * targets the machine. The jar therefore carries the platform as its classifier rather than holding every platform's
- * binaries at once.
+ * Use [current] for the platform the build runs on, which is the only one it can produce binaries for.
  *
- * Both targets are 32-bit, because Unreal Tournament is. On Windows the injector and the library it injects have to
- * match the bitness of the game, and `CreateRemoteThread` cannot cross it. On Linux the 469 patch ships x86 so that
- * one `System` directory serves both platforms, which means gcc needs `-m32` and the 32-bit development libraries.
+ * @property id The name the platform takes as a jar classifier.
+ * @property sharedLibrarySuffix The extension a shared library takes on this platform.
+ * @property executableSuffix The extension an executable takes on this platform.
  */
 enum class NativePlatform(
     val id: String,
@@ -49,11 +47,7 @@ enum class NativePlatform(
     companion object {
         /**
          * The platform the build runs on, and therefore the only one it can produce binaries for. Throws on anything
-         * that is neither Windows nor Linux, rather than guessing - Unreal Tournament runs on those two, so a build
-         * anywhere else has nothing to target and should say so instead of failing later in the compiler.
-         *
-         * Detection matches `OperatingSystem` in `utrecorder-common`, which this cannot use: `build-scripts` is an
-         * included build and cannot depend on a subproject of the build it configures.
+         * that is neither Windows nor Linux.
          */
         val current: NativePlatform
             get() {

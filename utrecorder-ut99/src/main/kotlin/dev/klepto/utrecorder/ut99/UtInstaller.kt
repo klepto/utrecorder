@@ -18,10 +18,9 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 /**
- * Downloads and installs the Unreal Tournament and the latest patch.
+ * Downloads Unreal Tournament and the latest patch, and materializes them into the configured game directory.
  *
- * @param config The installation to provision and the sources it is provisioned from.
- * @author Augustinas R. <http://github.com/klepto>
+ * @property config The installation to provision and the sources it is provisioned from.
  */
 @OptIn(ExperimentalPathApi::class)
 class UtInstaller(
@@ -41,11 +40,6 @@ class UtInstaller(
      * The version file of the current UT installation.
      */
     private val versionFile = directory[VERSION_FILE]
-
-    /**
-     * The root directories of the original UT iso.
-     */
-    private val isoRoots = setOf("System", "System400", "Maps", "Music", "Sounds", "Textures", "Help", "Web")
 
     /**
      * Runs UT iso installer, UT patch installer and creates a version file.
@@ -72,7 +66,7 @@ class UtInstaller(
     private fun installIso(directory: Path) {
         val isoPath = config.cacheDirectory[ISO_FILE]
         Downloader(config.isoUrl, config.isoMd5).download(isoPath)
-        isoPath.extract(directory) { it.substringBefore('/') in isoRoots }
+        isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }
 
         val target = directory[System]
         val source = directory[System400].takeIf { it.isDirectory() } ?: return
@@ -100,6 +94,11 @@ class UtInstaller(
     override fun isInstalled() = versionFile.exists() && versionFile.readText().trim() == config.patchFileName
 
     companion object {
+        /**
+         * The root directories of the original UT iso.
+         */
+        private val ISO_ROOTS = setOf("System", "System400", "Maps", "Music", "Sounds", "Textures", "Help", "Web")
+
         /**
          * The name of the file recording which patch an installation was materialized with.
          */

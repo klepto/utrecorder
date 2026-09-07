@@ -10,13 +10,8 @@ import org.gradle.api.provider.Property
 const val EMBEDDED_ARTIFACT_INDEX = "index"
 
 /**
- * Configures the build outputs a module embeds in its jar, so that a module built by an external toolchain can hand
- * its outputs to the modules that consume it through the classpath rather than through the filesystem.
- *
- * The plugin that owns the toolchain - `utrecorder.unrealscript`, and the C plugin after it - registers its compile
- * tasks and adds their output directories to [artifacts]. Everything from there on is the same for every toolchain:
- * the contents land in the jar under [namespace], an index naming them lands beside them, and
- * `dev.klepto.utrecorder.common.io.EmbeddedArtifacts` reads them back at runtime.
+ * Configures the build outputs a module embeds in its jar. A toolchain plugin adds its compile task outputs to
+ * [artifacts], which land in the jar under [namespace] together with an index naming them.
  */
 abstract class EmbeddedArtifactsExtension {
     /**

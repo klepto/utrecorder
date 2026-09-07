@@ -3,9 +3,7 @@ package dev.klepto.utrecorder.ut99
 import dev.klepto.utrecorder.common.io.PathName
 
 /**
- * Represents a directory in the UT installation.
- *
- * @author Augustinas R. <http://github.com/klepto>
+ * A directory of a UT installation, resolved against the installation root with the `get` operator.
  */
 sealed interface UtDirectory : PathName {
     /**
@@ -21,7 +19,7 @@ sealed interface UtDirectory : PathName {
         get() = emptySet()
 
     /**
-     * Represents the system directory.
+     * The directory holding the executables, the configuration and the compiled packages.
      */
     object System : UtDirectory {
         override val pathName = "System"
@@ -29,7 +27,7 @@ sealed interface UtDirectory : PathName {
     }
 
     /**
-     * Represents the system400 directory.
+     * The directory the original ISO ships its 400-series system files in, merged into [System] on install.
      */
     object System400 : UtDirectory {
         override val pathName = "System400"

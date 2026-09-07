@@ -21,19 +21,65 @@ import kotlin.io.path.moveTo
 import kotlin.io.path.walk
 
 /**
- * Converts the byte array to a hexadecimal string.
+ * Returns a path obtained by resolving the given [name] on this path.
  */
-private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+operator fun Path.get(name: String): Path = resolve(name)
 
 /**
- * Calculates the digest of the file using the given [algorithm] (e.g. "MD5", "SHA-256").
+ * Returns a path obtained by resolving the given [name] on this path.
  */
-fun Path.digest(algorithm: String): String {
-    val digest = MessageDigest.getInstance(algorithm)
-    inputStream().use { input ->
-        DigestInputStream(input, digest).use { it.transferTo(OutputStream.nullOutputStream()) }
+operator fun Path.get(name: PathName): Path = get(name.pathName)
+
+/**
+ * A constant that names one path segment, so that a caller resolves it with [get] rather than repeating the literal.
+ *
+ * @property pathName The segment this constant resolves to.
+ */
+interface PathName {
+    val pathName: String
+}
+
+/**
+ * Returns this string as an absolute, normalized path.
+ */
+fun String.toAbsolutePath(): Path = Paths.get(this).toAbsolutePath().normalize()
+
+/**
+ * Returns the home directory of the user this process runs as, read from [properties].
+ */
+fun homeDirectory(properties: PropertySource = PropertySource.DEFAULT): Path =
+    checkNotNull(properties.property("user.home")) { "No user.home system property" }.toAbsolutePath()
+
+/**
+ * Returns the directory this path sits in, creating it if it does not exist.
+ */
+fun Path.createParentDirectory(): Path = toAbsolutePath().parent.apply { createDirectories() }
+
+/**
+ * Creates a uniquely named directory under this directory, creating this directory first if it does not exist.
+ */
+fun Path.createTemporaryDirectory(prefix: String): Path {
+    createDirectories()
+    return createTempDirectory(this, prefix)
+}
+
+/**
+ * Creates a temporary file next to this path, named after it. The file a caller stages into and the file it becomes
+ * sit on one filesystem, so that putting it in place is a rename rather than a copy.
+ */
+fun Path.createTemporaryFile(): Path = createTempFile(createParentDirectory(), "$fileName-", ".tmp")
+
+/**
+ * Runs [block] against a staging directory created next to this path, and removes the directory once it returns or
+ * throws. Nothing the block staged survives a failure.
+ */
+fun <T> Path.stage(block: (Path) -> T): T {
+    val staging = createParentDirectory().createTemporaryDirectory("$fileName-")
+    try {
+        return block(staging)
+    } finally {
+        staging.deleteRecursivelyCatching()
     }
-    return digest.digest().toHex()
 }
 
 /**
@@ -77,82 +123,35 @@ private fun Path.moveFile(target: Path) =
     }
 
 /**
- * Runs [block] against a staging directory created next to this path, and removes the directory once it returns or
- * throws.
- *
- * Staging is a sibling of what it becomes rather than a directory under `cache/`, so that moving it into place is a
- * rename within one filesystem and a cache wipe cannot destroy a materialization in flight.
- *
- * Nothing survives a failure, unlike the working directory of a task: a half-materialized target is bulk to discard
- * rather than something to read afterwards.
+ * Calculates the digest of the file using the given [algorithm] (e.g. "MD5", "SHA-256").
  */
-fun <T> Path.stage(block: (Path) -> T): T {
-    val staging = parentDirectory().createTemporaryDirectory("$fileName-")
-    try {
-        return block(staging)
-    } finally {
-        staging.deleteRecursivelyQuietly()
+fun Path.digest(algorithm: String): String {
+    val digest = MessageDigest.getInstance(algorithm)
+    inputStream().use { input ->
+        DigestInputStream(input, digest).use { it.transferTo(OutputStream.nullOutputStream()) }
     }
+    return digest.digest().toHex()
 }
 
 /**
- * Creates a uniquely named directory under this directory, creating this directory first if it does not exist.
+ * Converts the byte array to a hexadecimal string.
  */
-fun Path.createTemporaryDirectory(prefix: String): Path {
-    createDirectories()
-    return createTempDirectory(this, prefix)
-}
+private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
 /**
- * Creates a temporary file next to this path, named after it. The file a caller stages into and the file it becomes
- * sit on one filesystem, so that putting it in place is a rename rather than a copy.
- */
-fun Path.createTemporaryFile(): Path = createTempFile(parentDirectory(), "$fileName-", ".tmp")
-
-/**
- * Returns the directory this path sits in, creating it if it does not exist.
- */
-private fun Path.parentDirectory(): Path = toAbsolutePath().parent.apply { createDirectories() }
-
-/**
- * Returns this string as an absolute, normalized path.
- */
-fun String.toAbsolutePath(): Path = Paths.get(this).toAbsolutePath().normalize()
-
-/**
- * Returns the home directory of the user this process runs as, read from [properties].
- */
-fun homeDirectory(properties: PropertySource = PropertySource.DEFAULT): Path =
-    checkNotNull(properties.property("user.home")) { "no user.home system property" }.toAbsolutePath()
-
-/**
- * Removes this path and everything under it, leaving it in place if it cannot be removed.
- *
- * A directory holding a file some other process still has open - a handle a just-exited child leaks on Windows,
- * typically - is left behind rather than failing an operation that has already produced its result.
+ * Removes this path and everything under it, and returns the outcome. A path a caller cannot remove — a directory
+ * holding a file another process still has open, typically — is left in place, and the failure is the caller's to read.
  */
 @OptIn(ExperimentalPathApi::class)
-fun Path.deleteRecursivelyQuietly() {
+fun Path.deleteRecursivelyCatching(): Result<Unit> = catchingIo { deleteRecursively() }
+
+/**
+ * Runs [block] and returns its outcome, holding an [IOException] it throws as a failure. Every other failure is the
+ * caller's, so it is left to propagate rather than turned into a result nothing reads.
+ */
+private inline fun <T> catchingIo(block: () -> T): Result<T> =
     try {
-        deleteRecursively()
-    } catch (_: IOException) {
-        // Left in place.
+        Result.success(block())
+    } catch (cause: IOException) {
+        Result.failure(cause)
     }
-}
-
-/**
- * Returns a path obtained by resolving the given [name] on this path.
- */
-operator fun Path.get(name: String): Path = resolve(name)
-
-/**
- * Returns a path obtained by resolving the given [name] on this path.
- */
-operator fun Path.get(name: PathName): Path = resolve(name.pathName)
-
-/**
- * Represents a path name.
- */
-interface PathName {
-    val pathName: String
-}

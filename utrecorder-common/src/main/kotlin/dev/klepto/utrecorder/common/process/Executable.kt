@@ -1,7 +1,8 @@
 package dev.klepto.utrecorder.common.process
 
-import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.closeTimeout
-import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.maxOutputLines
+import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.CLOSE_TIMEOUT
+import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.MAX_OUTPUT_LINES
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -12,9 +13,71 @@ import kotlin.time.TimeSource
 import kotlin.time.toJavaDuration
 
 /**
- * Immutable executable command configuration.
+ * Returns the executable of the program at [executablePath], described by [configure]. Environment values already set
+ * for the current process are read from [properties].
+ */
+fun executable(
+    executablePath: Path,
+    properties: PropertySource = PropertySource.DEFAULT,
+    configure: ExecutableBuilder.() -> Unit = {},
+): Executable = ExecutableBuilder(executablePath, properties).apply(configure).build()
+
+/**
+ * A mutable description of an executable, built into the immutable value by [executable].
  *
- * @author Augustinas R. <https://github.com/klepto>
+ * @property executablePath The path of the program to run.
+ * @property properties The source the environment of the current process is read from.
+ */
+class ExecutableBuilder(
+    var executablePath: Path,
+    private val properties: PropertySource = PropertySource.DEFAULT,
+) {
+    /**
+     * The directory the process starts in.
+     */
+    var workingDirectory: Path = Path.of("").toAbsolutePath()
+
+    /**
+     * The arguments passed to the program, in the order the program receives them.
+     */
+    val arguments = mutableListOf<String>()
+
+    /**
+     * The environment variables the process starts with, layered over the ones it inherits.
+     */
+    val environment = mutableMapOf<String, String>()
+
+    /**
+     * Puts [value] in front of the variable [name], separated by the platform path separator. What follows it is the
+     * value this configuration already holds, or the one the current process inherited.
+     */
+    fun prependEnvironment(
+        name: String,
+        value: String,
+    ) {
+        val existing = environment[name] ?: properties.environment(name)
+        environment[name] =
+            when {
+                existing.isNullOrEmpty() -> value
+                else -> value + File.pathSeparator + existing
+            }
+    }
+
+    /**
+     * Returns the immutable executable this configuration describes.
+     */
+    fun build(): Executable = Executable(executablePath, arguments.toList(), workingDirectory, environment.toMap())
+}
+
+/**
+ * An immutable command line and the process environment it starts under, reusable across runs.
+ *
+ * Use [executable] to build one.
+ *
+ * @property executablePath The path of the program to run.
+ * @property arguments The arguments passed to the program, in the order the program receives them.
+ * @property workingDirectory The directory the process starts in.
+ * @property environment The environment variables the process starts with, layered over the ones it inherits.
  */
 data class Executable(
     val executablePath: Path,
@@ -22,35 +85,6 @@ data class Executable(
     val workingDirectory: Path = Path.of("").toAbsolutePath(),
     val environment: Map<String, String> = emptyMap(),
 ) {
-    /**
-     * Creates a new executable with the given [arguments].
-     */
-    fun arguments(vararg arguments: String) = copy(arguments = this.arguments + arguments.toList())
-
-    /**
-     * Creates a new executable with the given [environment].
-     */
-    fun environment(vararg environment: Pair<String, String>) = copy(environment = this.environment + environment.toMap())
-
-    /**
-     * Creates a new executable with the given [environment] values prepended to the values inherited from the current
-     * configuration.
-     */
-    fun prependEnvironment(vararg environment: Pair<String, String>) =
-        copy(
-            environment =
-                this.environment +
-                    environment.associate { (key, value) ->
-                        val existing = this.environment[key] ?: System.getenv(key)
-                        key to if (existing.isNullOrEmpty()) value else value + File.pathSeparator + existing
-                    },
-        )
-
-    /**
-     * Creates a new executable with the given [workingDirectory].
-     */
-    fun workingDirectory(workingDirectory: Path) = copy(workingDirectory = workingDirectory)
-
     /**
      * Starts the process using this executable configuration. The error stream is merged into the output stream, which
      * the returned [ExecutableProcess] starts reading immediately.
@@ -76,9 +110,10 @@ data class Executable(
 }
 
 /**
- * Represents a started executable process.
+ * A running process started from an [Executable], holding its trailing output lines and the thread that reads them.
  *
- * @author Augustinas R. <https://github.com/klepto>
+ * @property executable The configuration the process was started from.
+ * @property process The process this one reads and waits on.
  */
 class ExecutableProcess(
     val executable: Executable,
@@ -97,7 +132,7 @@ class ExecutableProcess(
     private val lock = Any()
 
     /**
-     * The process output, capped to the last [maxOutputLines] lines.
+     * The process output, capped to the last [MAX_OUTPUT_LINES] lines.
      */
     private val output = ArrayDeque<String>()
 
@@ -121,31 +156,40 @@ class ExecutableProcess(
     /**
      * The thread that reads the process output until the stream closes, or until a [consumer] throws.
      */
-    private val daemon: Thread =
-        Thread {
-            try {
-                process
-                    .inputStream
-                    .bufferedReader()
-                    .forEachLine { line ->
-                        synchronized(lock) {
-                            notifyConsumer(consumer, line)
-                        }
-                    }
-            } catch (cause: IOException) {
-                if (!closing) throw cause
-            }
-        }.apply {
+    private val daemon: Thread = startOutputReader()
+
+    /**
+     * Starts and returns the thread backing [daemon].
+     */
+    private fun startOutputReader(): Thread =
+        Thread(::readOutput).apply {
             isDaemon = true
             name = executable.toString()
             start()
         }
 
     /**
+     * Reads the process output until the stream closes, or until a [consumer] throws. A read that fails after [close]
+     * has been called is the closed stream itself and is discarded.
+     */
+    private fun readOutput() {
+        try {
+            process.inputStream.bufferedReader().forEachLine(::consumeLine)
+        } catch (cause: IOException) {
+            if (!closing) throw cause
+        }
+    }
+
+    /**
+     * Delivers the given [line] to the head of the consumer chain.
+     */
+    private fun consumeLine(line: String) = synchronized(lock) { notifyConsumer(consumer, line) }
+
+    /**
      * Appends the given [line] to the process [output].
      */
     private fun appendOutput(line: String) {
-        if (output.size >= maxOutputLines) output.removeFirst()
+        if (output.size >= MAX_OUTPUT_LINES) output.removeFirst()
         output += line
     }
 
@@ -168,17 +212,26 @@ class ExecutableProcess(
      * fails the process and every other consumer along with it, and is left unregistered if it throws during the
      * replay.
      */
-    fun drain(consumer: (String) -> Unit): ExecutableProcess =
-        apply {
-            synchronized(lock) {
-                output.forEach { line -> notifyConsumer(consumer, line) }
+    fun drain(consumer: (String) -> Unit): ExecutableProcess = apply { synchronized(lock) { registerConsumer(consumer) } }
 
-                val current = this.consumer
-                this.consumer = { line ->
-                    current(line)
-                    consumer(line)
-                }
-            }
+    /**
+     * Replays the buffered [output] to the given [consumer] and appends it to the consumer chain.
+     */
+    private fun registerConsumer(consumer: (String) -> Unit) {
+        output.forEach { line -> notifyConsumer(consumer, line) }
+        this.consumer = chainConsumers(this.consumer, consumer)
+    }
+
+    /**
+     * Returns the consumer that invokes [first] and then [second].
+     */
+    private fun chainConsumers(
+        first: (String) -> Unit,
+        second: (String) -> Unit,
+    ): (String) -> Unit =
+        { line ->
+            first(line)
+            second(line)
         }
 
     /**
@@ -214,34 +267,36 @@ class ExecutableProcess(
     }
 
     /**
-     * Attempts to close the process gracefully. If the process is still running after [closeTimeout], it will be
+     * Attempts to close the process gracefully. If the process is still running after [CLOSE_TIMEOUT], it will be
      * forcefully terminated. Ends the output reading thread along with the stream it reads.
      */
     override fun close() {
         closing = true
         process.destroy()
-        process.waitFor(closeTimeout.toJavaDuration())
+        process.waitFor(CLOSE_TIMEOUT.toJavaDuration())
         if (isRunning) process.destroyForcibly()
     }
 
     companion object {
         /**
-         * Timeout for [close] method.
+         * The time a process is given to exit on its own before it is terminated forcibly.
          */
-        private val closeTimeout = 5.seconds
+        private val CLOSE_TIMEOUT = 5.seconds
 
         /**
          * Maximum number of lines to keep in the process [output] buffer.
          */
-        private val maxOutputLines = 5000
+        private const val MAX_OUTPUT_LINES = 5000
     }
 }
 
 /**
- * Represents the result of an executed executable command. The [output] holds the trailing lines emitted by the
+ * The exit code and output of a process that has finished. The [output] holds the trailing lines emitted by the
  * process, earlier lines are dropped once the process exceeds the retained line count.
  *
- * @author Augustinas R. <https://github.com/klepto>
+ * @property executable The configuration the process was started from.
+ * @property output The trailing lines the process emitted.
+ * @property exitCode The code the process exited with.
  */
 data class ExecutableResult(
     val executable: Executable,
@@ -263,11 +318,13 @@ data class ExecutableResult(
     /**
      * Throws an exception if the process exited with a failure code.
      */
-    fun orThrow(): ExecutableResult =
-        apply {
-            check(isSuccess) {
-                val lines = output.takeLast(10).joinToString("\n")
-                "Process $executable exited with code $exitCode: $lines"
-            }
-        }
+    fun orThrow(): ExecutableResult = apply { check(isSuccess) { failureMessage() } }
+
+    /**
+     * Returns the message of the exception [orThrow] throws.
+     */
+    private fun failureMessage(): String {
+        val lines = output.takeLast(10).joinToString("\n")
+        return "Process $executable exited with code $exitCode: $lines"
+    }
 }

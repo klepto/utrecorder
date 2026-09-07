@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.common.io
 
+import java.net.URL
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.writeBytes
@@ -15,9 +16,8 @@ import kotlin.io.path.writeBytes
  * Artifacts that differ per platform are published as classifier variants of the same module rather than as separate
  * entries here, so a namespace always holds exactly the artifacts of the platform the consumer resolved.
  *
- * @param namespace The directory the artifacts sit in, both in the jar and in the index resource path.
- * @param classLoader The class loader the artifacts are read from.
- * @author Augustinas R. <http://github.com/klepto>
+ * @property namespace The directory the artifacts sit in, both in the jar and in the index resource path.
+ * @property classLoader The class loader the artifacts are read from.
  */
 class EmbeddedArtifacts(
     private val namespace: String,
@@ -27,21 +27,30 @@ class EmbeddedArtifacts(
      * The names of the artifacts this namespace holds, in the order the index lists them. Every index on the classpath
      * contributes, so a namespace assembled from more than one module reads as one.
      */
-    val names: List<String> by lazy {
+    val names: List<String> by lazy { readNames() }
+
+    /**
+     * Reads the artifact names from every index this namespace holds on the classpath.
+     */
+    private fun readNames(): List<String> =
         classLoader
             .getResources("$namespace/$INDEX")
             .asSequence()
-            .flatMap {
-                it
-                    .openStream()
-                    .use { stream -> stream.readBytes() }
-                    .decodeToString()
-                    .lineSequence()
-            }.map { it.trim() }
+            .flatMap(::readIndex)
+            .map { it.trim() }
             .filter { it.isNotEmpty() }
             .distinct()
             .toList()
-    }
+
+    /**
+     * Reads the lines of the index at the given [url].
+     */
+    private fun readIndex(url: URL): Sequence<String> =
+        url
+            .openStream()
+            .use { it.readBytes() }
+            .decodeToString()
+            .lineSequence()
 
     /**
      * Reads the artifact of the given [name].

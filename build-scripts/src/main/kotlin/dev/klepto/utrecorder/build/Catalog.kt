@@ -27,9 +27,15 @@ private const val KTLINT_VERSION_ALIAS = "ktlint"
 private val Project.libs: VersionCatalog
     get() = extensions.getByType<VersionCatalogsExtension>().named("libs")
 
+/**
+ * Returns the library the catalogue holds under [alias].
+ */
 internal fun Project.lib(alias: String): Provider<MinimalExternalModuleDependency> =
     libs.findLibrary(alias).orFail("library", alias)
 
+/**
+ * Returns the bundle the catalogue holds under [alias].
+ */
 internal fun Project.bundle(alias: String): Provider<ExternalModuleDependencyBundle> =
     libs.findBundle(alias).orFail("bundle", alias)
 
@@ -57,4 +63,4 @@ internal val Project.ktlintVersion: String
 private fun <T> Optional<T>.orFail(
     kind: String,
     alias: String,
-): T = orElseThrow { IllegalStateException("no $kind '$alias' in version catalog") }
+): T = orElseThrow { IllegalStateException("No $kind '$alias' in version catalog") }

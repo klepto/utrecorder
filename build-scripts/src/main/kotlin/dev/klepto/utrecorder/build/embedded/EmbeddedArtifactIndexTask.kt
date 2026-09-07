@@ -12,11 +12,7 @@ import org.gradle.api.tasks.TaskAction
 
 /**
  * Writes the index naming the embedded artifacts of a module, one path per line, relative to the namespace directory
- * they sit in.
- *
- * A classpath cannot be listed, so without the index a consumer would have to know every artifact name up front. The
- * paths are sorted, so that the same set of artifacts always produces the same index and an unchanged rebuild does not
- * churn the jar.
+ * they sit in. The paths are sorted, so that the same set of artifacts always produces the same index.
  */
 @CacheableTask
 abstract class EmbeddedArtifactIndexTask : DefaultTask() {
@@ -33,6 +29,9 @@ abstract class EmbeddedArtifactIndexTask : DefaultTask() {
     @get:OutputFile
     abstract val index: RegularFileProperty
 
+    /**
+     * Writes the index of the artifacts this task was given.
+     */
     @TaskAction
     fun generate() {
         val names = mutableListOf<String>()

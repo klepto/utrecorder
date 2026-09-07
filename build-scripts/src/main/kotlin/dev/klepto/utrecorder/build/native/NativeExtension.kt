@@ -7,11 +7,9 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
 
 /**
- * A native binary the module compiles.
- *
- * The name is the base name of the binary, and the directory the sources sit in: `src/main/native/uthooks` compiles to
- * `uthooks.dll` on Windows and `uthooks.so` on Linux. Every `.c` file under that directory is one translation unit of
- * the same binary.
+ * A native binary the module compiles. The name is the base name of the binary and the directory the sources sit in:
+ * `src/main/native/uthooks` compiles to `uthooks.dll` on Windows and `uthooks.so` on Linux, from every `.c` file under
+ * that directory.
  */
 abstract class NativeBinary : Named {
     /**
@@ -25,18 +23,14 @@ abstract class NativeBinary : Named {
     abstract val type: Property<NativeBinaryType>
 
     /**
-     * The platforms this binary is built for. Defaults to all of them; the injector is the one that is not, because
-     * only Windows needs a process started suspended and written into.
+     * The platforms this binary is built for. Defaults to all of them.
      */
     abstract val platforms: SetProperty<NativePlatform>
 }
 
 /**
- * Configures the native binaries a module compiles.
- *
- * Every directory under [sourceDirectory] registers a binary of its own. Unlike an UnrealScript package, a binary
- * cannot be fully inferred from the layout - nothing in the sources says whether they are a library or a program - so
- * a module declares at least the type of anything that is not a shared library.
+ * Configures the native binaries a module compiles. Every directory under [sourceDirectory] registers a binary of its
+ * own, and a module declares the [NativeBinary.type] of anything that is not a shared library.
  */
 abstract class NativeExtension {
     /**
