@@ -2,11 +2,10 @@ package dev.klepto.utrecorder.common.io
 
 import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.time.TimestampId
 import java.io.IOException
 import java.nio.file.Path
 import java.time.Instant
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import kotlin.io.path.getLastModifiedTime
 import kotlin.io.path.isDirectory
 import kotlin.io.path.listDirectoryEntries
@@ -54,11 +53,11 @@ class Workspace(
      * Creates the working directory of a task named [name], pruning the directories left behind by expired ones first.
      *
      * The name carries a timestamp so that leftovers read in the order they were produced, and the directory is
-     * created rather than resolved, so that two tasks starting within the same millisecond never share one.
+     * created rather than resolved, so that two tasks starting within the same second never share one.
      */
     private fun createTaskDirectory(name: String): Path {
         prune()
-        return directory.createTemporaryDirectory("$name-${LocalDateTime.now().format(TIMESTAMP)}-")
+        return directory.createTemporaryDirectory("$name-${ids.next()}-")
     }
 
     /**
@@ -91,9 +90,10 @@ class Workspace(
         private val DEFAULT_RETENTION = 7.days
 
         /**
-         * The timestamp the name of a working directory carries.
+         * The timestamps the name of a working directory carries, so that two tasks started within one second read
+         * apart.
          */
-        private val TIMESTAMP: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
+        private val ids = TimestampId()
 
         /**
          * The workspace a caller that names none runs its tasks in. Resolved on first use rather than at class load.

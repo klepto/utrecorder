@@ -15,6 +15,11 @@ import java.util.Optional
 private const val JAVA_VERSION_ALIAS = "java"
 
 /**
+ * The alias the detekt tool version takes in the version catalogue.
+ */
+private const val DETEKT_VERSION_ALIAS = "detekt"
+
+/**
  * The alias the ktlint tool version takes in the version catalogue.
  */
 private const val KTLINT_VERSION_ALIAS = "ktlint"
@@ -47,6 +52,15 @@ internal fun Project.bundle(alias: String): Provider<ExternalModuleDependencyBun
  */
 internal val Project.javaVersion: Int
     get() = libs.findVersion(JAVA_VERSION_ALIAS).orFail("version", JAVA_VERSION_ALIAS).requiredVersion.toInt()
+
+/**
+ * The detekt tool version the static analysis runs.
+ *
+ * Pinned in the version catalogue rather than left to the Gradle plugin's own default, so that the plugin and the
+ * analyzer it forks are always the same release.
+ */
+internal val Project.detektVersion: String
+    get() = libs.findVersion(DETEKT_VERSION_ALIAS).orFail("version", DETEKT_VERSION_ALIAS).requiredVersion
 
 /**
  * The ktlint tool version the formatter runs.

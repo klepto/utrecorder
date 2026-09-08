@@ -1,6 +1,8 @@
 package dev.klepto.utrecorder.common.process
 
 import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.os.OS
+import dev.klepto.utrecorder.common.os.OperatingSystem
 import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.CLOSE_TIMEOUT
 import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.MAX_OUTPUT_LINES
 import java.io.File
@@ -61,6 +63,18 @@ class ExecutableBuilder(
                 existing.isNullOrEmpty() -> value
                 else -> value + File.pathSeparator + existing
             }
+    }
+
+    /**
+     * Puts [path] in front of the variable [operatingSystem] resolves shared libraries through, so that a program
+     * started from this configuration loads the libraries sitting there. An operating system that resolves libraries
+     * without such a variable, Windows among them, is left alone.
+     */
+    fun prependLibraryPath(
+        path: Path,
+        operatingSystem: OperatingSystem = OS,
+    ) {
+        operatingSystem.libraryPathVariable?.let { prependEnvironment(it, "$path") }
     }
 
     /**

@@ -54,7 +54,7 @@ class UtCli(
     /**
      * The workspace the command runs its tasks in, rooted at the directory the `--jobs` option names.
      */
-    private val workspace = path("jobs")?.let { Workspace(directory = it) } ?: Workspace.DEFAULT
+    private val workspace = path("tasks")?.let { Workspace(directory = it) } ?: Workspace.DEFAULT
 
     /**
      * Reads the `--key=value` options the [arguments] hold into a map, by key.
@@ -75,6 +75,7 @@ class UtCli(
     /**
      * Runs the command the arguments name and returns the exit code of the process.
      */
+    @Suppress("TooGenericExceptionCaught")
     fun run(): Int =
         try {
             when (command) {

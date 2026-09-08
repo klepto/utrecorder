@@ -350,4 +350,66 @@ class PathsTest :
                 missing.shouldNotExist()
             }
         }
+
+        context("readLinesOrEmpty") {
+            test("reads back the lines of an existing file") {
+                file("read-lines", "first\nsecond").readLinesOrEmpty() shouldBe listOf("first", "second")
+            }
+
+            test("returns no lines for a missing file") {
+                (root / "read-lines-absent").readLinesOrEmpty() shouldBe emptyList()
+            }
+
+            test("decodes with the given charset") {
+                val path = (root / "read-lines-charset").apply { writeText("café", Charsets.ISO_8859_1) }
+
+                path.readLinesOrEmpty(Charsets.ISO_8859_1) shouldBe listOf("café")
+            }
+        }
+
+        context("copy") {
+            test("copies the content and keeps the source contents intact") {
+                val source = file("copy-source", SAMPLE)
+                val target = root / "copy-target"
+
+                source.copy(target)
+
+                source.readText() shouldBe SAMPLE
+                target.readText() shouldBe SAMPLE
+            }
+
+            test("fails with the default message when the source is missing") {
+                val exception =
+                    shouldThrow<IllegalStateException> {
+                        (root / "copy-absent").copy(root / "copy-absent-target")
+                    }
+
+                exception.message shouldBe "No file to copy at ${root / "copy-absent"}"
+            }
+
+            test("fails with the given message when the source is missing") {
+                val exception =
+                    shouldThrow<IllegalStateException> {
+                        (root / "copy-absent-custom").copy(root / "copy-absent-custom-target") { "custom failure" }
+                    }
+
+                exception.message shouldBe "custom failure"
+            }
+        }
+
+        context("readTextOrEmpty") {
+            test("reads back the contents of an existing file") {
+                file("read-text", SAMPLE).readTextOrEmpty() shouldBe SAMPLE
+            }
+
+            test("returns an empty string for a missing file") {
+                (root / "read-text-absent").readTextOrEmpty() shouldBe ""
+            }
+
+            test("decodes with the given charset") {
+                val path = (root / "read-text-charset").apply { writeText("café", Charsets.ISO_8859_1) }
+
+                path.readTextOrEmpty(Charsets.ISO_8859_1) shouldBe "café"
+            }
+        }
     })

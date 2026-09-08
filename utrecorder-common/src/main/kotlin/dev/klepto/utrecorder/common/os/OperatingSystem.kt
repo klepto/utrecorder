@@ -14,19 +14,31 @@ import java.nio.file.Path
  */
 enum class OperatingSystem {
     WINDOWS {
+        override val libraryPathVariable: String? = null
+
         override fun dataDirectory(properties: PropertySource): Path =
             properties.environment("LOCALAPPDATA")?.toAbsolutePath()
                 ?: homeDirectory(properties)["AppData"]["Local"]
     },
     LINUX {
+        override val libraryPathVariable: String = "LD_LIBRARY_PATH"
+
         override fun dataDirectory(properties: PropertySource): Path =
             properties.environment("XDG_DATA_HOME")?.toAbsolutePath()
                 ?: homeDirectory(properties)[".local"]["share"]
     },
     UNKNOWN {
+        override val libraryPathVariable: String? = LINUX.libraryPathVariable
+
         override fun dataDirectory(properties: PropertySource): Path = LINUX.dataDirectory(properties)
     },
     ;
+
+    /**
+     * The environment variable this operating system resolves shared libraries through, or `null` for one that
+     * resolves them without one.
+     */
+    abstract val libraryPathVariable: String?
 
     /**
      * Returns the directory this operating system holds per-application data under, read from [properties].

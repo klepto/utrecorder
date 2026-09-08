@@ -48,7 +48,7 @@ class UtCompiler(
     private val executable =
         executable(executablePath.toAbsolutePath()) {
             workingDirectory = directory
-            prependEnvironment("LD_LIBRARY_PATH", "$directory")
+            prependLibraryPath(directory)
         }
 
     /**

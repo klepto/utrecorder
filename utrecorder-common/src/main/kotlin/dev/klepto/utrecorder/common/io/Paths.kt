@@ -3,6 +3,7 @@ package dev.klepto.utrecorder.common.io
 import dev.klepto.utrecorder.common.config.PropertySource
 import java.io.IOException
 import java.io.OutputStream
+import java.nio.charset.Charset
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -11,13 +12,17 @@ import java.security.DigestInputStream
 import java.security.MessageDigest
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.PathWalkOption
+import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.createTempFile
 import kotlin.io.path.deleteRecursively
+import kotlin.io.path.exists
 import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 import kotlin.io.path.moveTo
+import kotlin.io.path.readLines
+import kotlin.io.path.readText
 import kotlin.io.path.walk
 
 /**
@@ -83,6 +88,18 @@ fun <T> Path.stage(block: (Path) -> T): T {
 }
 
 /**
+ * Copies the file to the given [target] path. Throws if this path holds no file, with the message [failureMessage]
+ * returns.
+ */
+fun Path.copy(
+    target: Path,
+    failureMessage: () -> String = { "No file to copy at $this" },
+) {
+    check(exists(), failureMessage)
+    copyTo(target)
+}
+
+/**
  * Moves the file to the given [target] path, replacing whatever is already there.
  *
  * Directories are merged into [target] one file at a time, overwriting the files it already holds and leaving the
@@ -120,6 +137,24 @@ private fun Path.moveFile(target: Path) =
         moveTo(target, StandardCopyOption.ATOMIC_MOVE)
     } catch (_: AtomicMoveNotSupportedException) {
         moveTo(target, StandardCopyOption.REPLACE_EXISTING)
+    }
+
+/**
+ * Returns the lines of the file at this path decoded with [charset], or no lines if the file does not exist.
+ */
+fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<String> =
+    when {
+        exists() -> readLines(charset)
+        else -> emptyList()
+    }
+
+/**
+ * Returns the contents of the file at this path decoded with [charset], or an empty string if the file does not exist.
+ */
+fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
+    when {
+        exists() -> readText(charset)
+        else -> ""
     }
 
 /**
