@@ -1,4 +1,4 @@
-package dev.klepto.utrecorder.ut99
+package dev.klepto.utrecorder.ut99.demo
 
 /**
  * A cursor over the bytes of a bunch payload, reading the strings the engine writes into it.

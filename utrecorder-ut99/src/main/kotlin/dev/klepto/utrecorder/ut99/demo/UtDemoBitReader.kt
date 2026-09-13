@@ -1,4 +1,4 @@
-package dev.klepto.utrecorder.ut99
+package dev.klepto.utrecorder.ut99.demo
 
 /**
  * A cursor over the bits of a demo packet, read least significant bit first within each byte.

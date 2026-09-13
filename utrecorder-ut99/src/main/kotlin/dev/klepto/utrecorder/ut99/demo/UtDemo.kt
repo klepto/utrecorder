@@ -1,24 +1,25 @@
-package dev.klepto.utrecorder.ut99
+package dev.klepto.utrecorder.ut99.demo
 
 import java.nio.file.Path
 import kotlin.io.path.readBytes
 import kotlin.time.Duration
 
 /**
- * What a recorded Unreal Tournament demo holds that a run needs before playing it: the map it opens, the packages it
- * loads and how long it plays.
+ * Parsed fields of an Unreal Tournament `.dem` file.
  *
- * Use [read] to read one from a file or from its bytes.
+ * Use [read] to parse a demo from a [Path] or from its bytes.
  *
  * @property map The map the demo opens, such as `CTF-BT-II-CoZyliciouS`.
  * @property packages The packages the demo loads, in the order the demo names them. A package named more than once
  * appears once, as its first entry, with names compared ignoring case.
  * @property duration The demo time of the last record. It can overshoot the played length by a fraction of a second.
+ * @property cap The cap that ends the run the demo records, or `null` when the demo holds no cap.
  */
 data class UtDemo(
     val map: String,
     val packages: List<UtDemoPackage>,
     val duration: Duration,
+    val cap: UtDemoCap?,
 ) {
     companion object {
         /**

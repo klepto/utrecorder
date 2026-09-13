@@ -1,4 +1,4 @@
-package dev.klepto.utrecorder.ut99
+package dev.klepto.utrecorder.ut99.demo
 
 import kotlin.time.Duration.Companion.seconds
 
@@ -15,7 +15,7 @@ internal object UtDemoReader {
         val map = checkNotNull(lines.firstNotNullOfOrNull(::levelOf)) { "Demo names no map" }
         val packages = lines.mapNotNull(::packageOf).distinctBy { it.name.lowercase() }
         val duration = (records.lastOrNull()?.time ?: 0f).toDouble().seconds
-        return UtDemo(map, packages, duration)
+        return UtDemo(map, packages, duration, UtDemoCapReader.read(records))
     }
 
     /**
