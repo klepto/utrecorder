@@ -10,6 +10,7 @@ import io.kotest.matchers.shouldBe
 import io.ktor.client.plugins.ClientRequestException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ServerSocket
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.listDirectoryEntries
@@ -33,9 +34,11 @@ class DownloaderTest :
         val notFound: (HttpExchange) -> Unit = { it.sendResponseHeaders(404, -1) }
         var handler = notFound
         var requests = 0
+        val methods = mutableListOf<String>()
 
         server.createContext("/") { exchange ->
             requests++
+            methods += exchange.requestMethod
             try {
                 handler(exchange)
             } finally {
@@ -52,6 +55,7 @@ class DownloaderTest :
         beforeTest {
             handler = notFound
             requests = 0
+            methods.clear()
         }
 
         val url = "http://${server.address.hostString}:${server.address.port}/file"
@@ -288,5 +292,29 @@ class DownloaderTest :
             shouldThrow<ClientRequestException> { Downloader(url).download(root / "clean-failure") }
 
             leftovers() shouldBe emptyList()
+        }
+
+        test("reports a URL that answers a HEAD request with 200 as existing") {
+            serve()
+
+            Downloader(url).exists() shouldBe true
+        }
+
+        test("reports a URL that answers 404 as not existing") {
+            Downloader(url).exists() shouldBe false
+        }
+
+        test("reports a URL whose host refuses the connection as not existing") {
+            val refused = ServerSocket(0).use { "http://${InetAddress.getLoopbackAddress().hostAddress}:${it.localPort}/file" }
+
+            Downloader(refused).exists() shouldBe false
+        }
+
+        test("probes with a HEAD request so that no body is pulled") {
+            serve()
+
+            Downloader(url).exists()
+
+            methods shouldBe listOf("HEAD")
         }
     })

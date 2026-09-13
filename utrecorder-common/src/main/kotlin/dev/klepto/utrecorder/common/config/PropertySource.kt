@@ -29,6 +29,17 @@ class PropertySource(
     ): T? = get(key)?.let(mapper)
 
     /**
+     * Returns the comma-separated values of the given [key], trimmed and without the empty ones, or `null` if it holds
+     * none.
+     */
+    fun list(key: String): List<String>? =
+        get(key)
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() }
+
+    /**
      * Returns the value of the given system property [name], or `null` if it holds none. Unprefixed, for the
      * properties the JVM defines rather than this application.
      */

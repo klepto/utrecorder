@@ -49,6 +49,7 @@ class UtInstanceTest :
                         sleepSeconds = WINDOWS_SLEEP_SECONDS,
                     )
                 }
+
                 UtPlatform.LINUX -> {
                     val scriptPath = root / "runner.sh"
                     scriptPath.writeText(LINUX_SCRIPT)
@@ -136,8 +137,7 @@ class UtInstanceTest :
         /**
          * Returns [gameArgLines] with the `arg=` prefix stripped off each line.
          */
-        fun strippedGameArgLines(result: UtInstanceResult): List<String> =
-            gameArgLines(result).map { it.removePrefix("arg=") }
+        fun strippedGameArgLines(result: UtInstanceResult): List<String> = gameArgLines(result).map { it.removePrefix("arg=") }
 
         val installation = createFakeInstall("install")
 

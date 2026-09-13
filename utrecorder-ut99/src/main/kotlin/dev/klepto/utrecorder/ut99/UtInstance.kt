@@ -477,8 +477,7 @@ class UtInstance internal constructor(
     /**
      * Returns how the run ended, waiting up to [timeout] for it, and holds the outcome for every later await.
      */
-    private fun captureOutcome(timeout: Duration): Result<UtInstanceResult> =
-        runCatching { captureResult(timeout) }.also { outcome = it }
+    private fun captureOutcome(timeout: Duration): Result<UtInstanceResult> = runCatching { captureResult(timeout) }.also { outcome = it }
 
     /**
      * Returns what the run wrote, waiting up to [timeout] for it to end. The files of the run are deleted on every

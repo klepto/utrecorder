@@ -92,4 +92,26 @@ class PropertySourceTest :
         test("environment treats an empty variable as missing") {
             testSource.environment("UTRECORDER_TEST_ENV_EMPTY").shouldBeNull()
         }
+
+        test("list splits a comma-separated value and trims each entry") {
+            property("$TEST_PREFIX.redirect_urls", " http://one.test , http://two.test ")
+
+            testSource.list("redirect_urls") shouldBe listOf("http://one.test", "http://two.test")
+        }
+
+        test("list drops empty entries") {
+            property("$TEST_PREFIX.redirect_urls", "http://one.test,,   ,http://two.test")
+
+            testSource.list("redirect_urls") shouldBe listOf("http://one.test", "http://two.test")
+        }
+
+        test("list returns null for a key nothing holds") {
+            testSource.list("redirect_urls").shouldBeNull()
+        }
+
+        test("list returns null for a key holding only separators and blanks") {
+            property("$TEST_PREFIX.redirect_urls", " , ,, ")
+
+            testSource.list("redirect_urls").shouldBeNull()
+        }
     })

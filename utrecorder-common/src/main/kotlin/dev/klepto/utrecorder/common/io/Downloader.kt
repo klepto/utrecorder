@@ -11,6 +11,7 @@ import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.contentLength
+import io.ktor.http.isSuccess
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.copyAndClose
 import io.ktor.utils.io.streams.asByteWriteChannel
@@ -76,6 +77,15 @@ class Downloader(
             temporary.deleteIfExists()
         }
     }
+
+    /**
+     * Returns `true` when the URL this downloader fetches answers a request. A failure of any kind — a refused
+     * connection, a timeout, a status other than success — is `false`.
+     */
+    fun exists(): Boolean =
+        runCatching {
+            createHttpClient().useBlocking { head(url).status.isSuccess() }
+        }.getOrDefault(false)
 
     /**
      * Reports the file already held by [outputPath] to [listener] as a download that is complete.

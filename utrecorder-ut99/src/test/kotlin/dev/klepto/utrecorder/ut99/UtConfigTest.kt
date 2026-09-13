@@ -53,4 +53,17 @@ class UtConfigTest :
 
             config.patchFileName shouldBe "OldUnreal-UTPatch${config.patchVersion}-$platformSuffix"
         }
+
+        test("fromProperties reads redirect_urls as a comma-separated list") {
+            property("utrecorder.redirect_urls", " http://one.test , http://two.test ")
+
+            val config = UtConfig.fromProperties(directories = directories)
+            config.redirectUrls shouldBe listOf("http://one.test", "http://two.test")
+        }
+
+        test("redirectUrls defaults to the two redirects when redirect_urls is unset") {
+            val config = UtConfig.fromProperties(directories = directories)
+
+            config.redirectUrls shouldBe listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com")
+        }
     })

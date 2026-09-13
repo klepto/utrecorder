@@ -62,6 +62,14 @@ class UtInstallation(
         configure: UtInstanceBuilder.() -> Unit = {},
     ): UtInstance = UtInstanceBuilder(this, name).apply(configure).build()
 
+    /**
+     * Returns the packages [directory] holds: every regular file directly in it whose extension is the one the
+     * directory declares, compared ignoring case. A directory that is not there, and one that declares no extension,
+     * hold no packages. The GUID of each is read only when it is asked for.
+     */
+    fun packages(directory: UtDirectory): List<UtPackage> =
+        directory.extension?.let { packagesIn(this.directory[directory], it) } ?: emptyList()
+
     companion object {
         /**
          * The name of the game configuration of an installation.

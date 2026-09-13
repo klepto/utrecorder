@@ -18,6 +18,10 @@ import java.nio.file.Path
  * @property isoMd5 The MD5 hash of the original UT ISO file.
  * @property patchUrl The URL of the UT patch releases.
  * @property patchVersion The version of the UT patch to use.
+ * @property redirectUrls The base URLs a package a demo names is fetched from when neither the installation nor the
+ * packages directory holds it. They serve plain HTTP, and no redirect in the UT ecosystem serves TLS, so a package is
+ * fetched over an unauthenticated connection. A `.u` package is UnrealScript bytecode the game executes and the GUID
+ * check reads a field the downloaded file itself supplies, so whoever can answer the request can serve code.
  */
 data class UtConfig(
     val directories: Directories = Directories.DEFAULT,
@@ -26,6 +30,7 @@ data class UtConfig(
     val isoMd5: String = DEFAULT_ISO_MD5,
     val patchUrl: String = DEFAULT_PATCH_URL,
     val patchVersion: String = DEFAULT_PATCH_VERSION,
+    val redirectUrls: List<String> = DEFAULT_REDIRECT_URLS,
 ) {
     /**
      * The directory where game packages are stored.
@@ -69,6 +74,11 @@ data class UtConfig(
         private const val DEFAULT_PATCH_VERSION = "469e"
 
         /**
+         * The redirects a package is fetched from by default.
+         */
+        private val DEFAULT_REDIRECT_URLS = listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com")
+
+        /**
          * The configuration a caller that names none works against. Resolved on first use rather than at class load,
          * so that the order in which classes happen to load cannot decide what a process installs.
          */
@@ -87,6 +97,7 @@ data class UtConfig(
                 isoMd5 = properties["iso_md5"] ?: DEFAULT_ISO_MD5,
                 patchUrl = properties["patch_url"] ?: DEFAULT_PATCH_URL,
                 patchVersion = properties["patch_version"] ?: DEFAULT_PATCH_VERSION,
+                redirectUrls = properties.list("redirect_urls") ?: DEFAULT_REDIRECT_URLS,
             )
     }
 }

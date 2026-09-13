@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.ut99.demo
 
+import dev.klepto.utrecorder.ut99.UtPackage
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -26,12 +27,11 @@ internal object UtDemoReader {
     /**
      * Returns the package a `USES` [line] names, or `null` if the line is not one.
      */
-    private fun packageOf(line: String): UtDemoPackage? {
+    private fun packageOf(line: String): UtPackage? {
         val fields = fieldsOf(line, "USES") ?: return null
-        return UtDemoPackage(
+        return UtPackage.named(
             name = fields["PKG"].orEmpty(),
             guid = fields["GUID"].orEmpty(),
-            fileName = fields["FNAME"].orEmpty(),
         )
     }
 
