@@ -11,9 +11,11 @@ import kotlin.time.Duration
 
 /**
  * Recorder playing local demo files in an Unreal Tournament installation and reporting the demo-time range each run
- * played.
+ * played, and recording a demo into an mp4 through two passes and a mux.
  *
- * @property config The configuration demos are played with.
+ * Use [playDemo] for a single-pass playback whose marks a caller reads, and [record] for the full recording.
+ *
+ * @property config The configuration demos are played and recorded with.
  */
 class UtRecorder(
     private val config: RecorderConfig = RecorderConfig.DEFAULT,
@@ -61,6 +63,30 @@ class UtRecorder(
             recorderIni.deleteIfExists()
         }
     }
+
+    /**
+     * Records the demo at [url] and returns the mp4 produced, downloading it into the demo cache and provisioning the
+     * installation when either is missing, so a URL alone is enough on a fresh machine.
+     *
+     * The two passes and the mux run inside a recording workspace; the finished mp4 is moved out to the output
+     * directory before the workspace closes, and its diagnostics survive a throw. One recording per installation runs
+     * at a time.
+     *
+     * @throws IllegalStateException when the demo cannot be fetched or resolved, or when a pass fails the recording,
+     * which a failed sound pass always does.
+     */
+    fun record(url: String): Path = TODO()
+
+    /**
+     * Records the demo file at [demo] and returns the mp4 produced, provisioning the installation when it is missing.
+     *
+     * The primitive [record] calls with the demo it fetched; the two passes and the mux run inside a recording
+     * workspace, and the finished mp4 is moved out to the output directory before the workspace closes.
+     *
+     * @throws IllegalStateException when the demo cannot be resolved, or when a pass fails the recording, which a
+     * failed sound pass always does.
+     */
+    fun record(demo: Path): Path = TODO()
 
     companion object {
         private const val STAGED_DEMO_PREFIX = "ut-"

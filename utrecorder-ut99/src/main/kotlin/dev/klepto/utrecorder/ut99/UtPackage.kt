@@ -117,6 +117,17 @@ class UtPackage private constructor(
         fun read(path: Path): UtPackage = UtPackage(path.nameWithoutExtension, path) { readGuid(path) }
 
         /**
+         * Overwrites the GUID of the package held at [path] with [guid], writing it where the header carries it.
+         *
+         * @throws IllegalArgumentException if [guid] is not 32 hexadecimal characters.
+         * @throws IllegalStateException if [path] holds no Unreal package.
+         */
+        fun setGuid(
+            path: Path,
+            guid: String,
+        ): Unit = TODO()
+
+        /**
          * Returns the packages held directly in [directory]: its regular files whose extension is one of [extensions],
          * compared ignoring case. Empty when [directory] does not exist.
          */
