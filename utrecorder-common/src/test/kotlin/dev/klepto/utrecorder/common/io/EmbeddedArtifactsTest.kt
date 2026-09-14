@@ -14,10 +14,10 @@ import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 import kotlin.random.Random
 
-private const val NAMESPACE = "artifacts"
-
 class EmbeddedArtifactsTest :
     FunSpec({
+        val artifactsNamespace = "artifacts"
+
         val root = createTempDirectory("utrecorder-embedded-artifacts-test")
 
         afterSpec { root.toFile().deleteRecursively() }
@@ -26,7 +26,7 @@ class EmbeddedArtifactsTest :
 
         fun writeIndex(
             classpathRoot: Path,
-            namespace: String = NAMESPACE,
+            namespace: String = artifactsNamespace,
             content: String,
         ) = (classpathRoot / namespace).apply { createDirectories() }.let { (it / EmbeddedArtifacts.INDEX).writeText(content) }
 
@@ -34,7 +34,7 @@ class EmbeddedArtifactsTest :
             classpathRoot: Path,
             name: String,
             bytes: ByteArray,
-            namespace: String = NAMESPACE,
+            namespace: String = artifactsNamespace,
         ) {
             val path = classpathRoot / namespace / name
             path.parent?.createDirectories()
@@ -47,7 +47,7 @@ class EmbeddedArtifactsTest :
             val cp = classpathRoot("order")
             writeIndex(cp, content = "b.txt\n  a.txt  \n\nc.txt\n")
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
 
             artifacts.names shouldBe listOf("b.txt", "a.txt", "c.txt")
         }
@@ -58,7 +58,7 @@ class EmbeddedArtifactsTest :
             writeIndex(cpA, content = "a.txt\nb.txt")
             writeIndex(cpB, content = "b.txt\nc.txt")
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cpA, cpB))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cpA, cpB))
 
             artifacts.names shouldBe listOf("a.txt", "b.txt", "c.txt")
         }
@@ -66,7 +66,7 @@ class EmbeddedArtifactsTest :
         test("is empty for a class loader with no such index") {
             val cp = classpathRoot("empty")
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
 
             artifacts.names shouldBe emptyList()
         }
@@ -74,7 +74,7 @@ class EmbeddedArtifactsTest :
         test("computes names once and caches it for the life of the instance") {
             val cp = classpathRoot("cached")
             writeIndex(cp, content = "a.txt")
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
             val first = artifacts.names
 
             writeIndex(cp, content = "a.txt\nb.txt")
@@ -87,20 +87,20 @@ class EmbeddedArtifactsTest :
             val bytes = Random(22).nextBytes(4096)
             writeArtifact(cp, "blob.bin", bytes)
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
 
             artifacts.read("blob.bin") shouldBe bytes
         }
 
         test("fails with the resource path when the artifact is missing") {
             val cp = classpathRoot("missing")
-            (cp / NAMESPACE).createDirectories()
+            (cp / artifactsNamespace).createDirectories()
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
 
             val error = shouldThrow<IllegalStateException> { artifacts.read("ghost.bin") }
 
-            error.message shouldBe "Embedded artifact not found at $NAMESPACE/ghost.bin"
+            error.message shouldBe "Embedded artifact not found at $artifactsNamespace/ghost.bin"
         }
 
         test("creates the target directory, writes every artifact in index order, and overwrites files already there") {
@@ -111,7 +111,7 @@ class EmbeddedArtifactsTest :
             val target = (root / "extract-target").apply { createDirectories() }
             (target / "a.txt").writeText("stale")
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
             val written = artifacts.extractTo(target)
 
             written shouldBe listOf(target / "a.txt", target / "b.txt")
@@ -125,7 +125,7 @@ class EmbeddedArtifactsTest :
             writeArtifact(cp, "a.txt", "content".toByteArray())
             val target = root / "does-not-exist-yet" / "nested"
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
             artifacts.extractTo(target)
 
             target.shouldExist()
@@ -138,7 +138,7 @@ class EmbeddedArtifactsTest :
             writeArtifact(cp, "sub/thing.u", "nested content".toByteArray())
             val target = root / "extract-nested-target"
 
-            val artifacts = EmbeddedArtifacts(NAMESPACE, loaderOf(cp))
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
             val written = artifacts.extractTo(target)
 
             written shouldBe listOf(target / "sub" / "thing.u")

@@ -14,7 +14,7 @@ import javax.inject.Inject
  *
  * Use [Source] to discover the toolchain of the machine the build runs on.
  *
- * @property kind Which compiler this is, which decides the shape of the command line.
+ * @property kind The compiler family, which decides the shape of the command line.
  * @property command The compiler to invoke, or the environment script that puts it on the path for [Kind.MSVC].
  */
 data class NativeToolchain(
@@ -39,20 +39,13 @@ data class NativeToolchain(
     }
 
     companion object {
-        /**
-         * The `gcc` command, which is expected to be on the path.
-         */
         private const val GCC = "gcc"
-
-        /**
-         * The MinGW command targeting 32-bit Windows, which is expected to be on the path.
-         */
         private const val MINGW = "i686-w64-mingw32-gcc"
     }
 
     /**
-     * Discovers the C toolchain for a platform, or nothing when the machine holds none. On Windows MinGW is preferred
-     * when it is on the path, and the Visual Studio environment script is the fallback.
+     * Discovery of the C toolchain for a platform, obtaining nothing when the machine holds none. On Windows MinGW on the
+     * path comes first and the Visual Studio environment script second.
      */
     abstract class Source : ValueSource<NativeToolchain, Source.Parameters> {
         /**
@@ -73,48 +66,69 @@ data class NativeToolchain(
 
         override fun obtain(): NativeToolchain? {
             val platform = NativePlatform.valueOf(parameters.platform.get())
-            if (!platform.isWindows) {
-                return when {
-                    runs(GCC) -> NativeToolchain(Kind.GCC, GCC)
-                    else -> null
-                }
+            return gcc(platform) ?: mingw(platform) ?: msvc(platform)
+        }
+
+        private fun gcc(platform: NativePlatform): NativeToolchain? =
+            when {
+                platform.isWindows -> null
+                runsCatching(GCC).getOrDefault(false) -> NativeToolchain(Kind.GCC, GCC)
+                else -> null
             }
-            if (runs(MINGW)) return NativeToolchain(Kind.MINGW, MINGW)
-            val tools = visualStudioTools() ?: return null
-            return NativeToolchain(Kind.MSVC, tools.absolutePath)
-        }
+
+        private fun mingw(platform: NativePlatform): NativeToolchain? =
+            when {
+                !platform.isWindows -> null
+                runsCatching(MINGW).getOrDefault(false) -> NativeToolchain(Kind.MINGW, MINGW)
+                else -> null
+            }
+
+        private fun msvc(platform: NativePlatform): NativeToolchain? =
+            when {
+                !platform.isWindows -> null
+                else -> visualStudioToolsCatching().getOrNull()?.let { NativeToolchain(Kind.MSVC, it.absolutePath) }
+            }
 
         /**
-         * Returns whether the given [tool] is on the path and answers `--version`.
+         * Returns whether the given [tool] answers `--version` with exit code `0`, or the failure that kept it from
+         * running.
          */
-        private fun runs(tool: String): Boolean =
+        private fun runsCatching(tool: String): Result<Boolean> = runCatching { execute(listOf(tool, "--version")) == 0 }
+
+        /**
+         * Returns the Visual Studio environment script, `null` when no installation holds one, or the failure that kept
+         * `vswhere` from running.
+         */
+        private fun visualStudioToolsCatching(): Result<File?> =
             runCatching {
-                execute(listOf(tool, "--version")) == 0
-            }.getOrDefault(false)
+                val vswhere = vswhere() ?: return@runCatching null
+                val output = ByteArrayOutputStream()
+                val arguments = listOf(vswhere.absolutePath, "-latest", "-products", "*", "-property", "installationPath")
+                if (execute(arguments, output) != 0) return@runCatching null
+
+                val installation = firstLine(output) ?: return@runCatching null
+                File(installation, "Common7/Tools/VsDevCmd.bat").takeIf { it.exists() }
+            }
 
         /**
-         * Returns the Visual Studio environment script, or `null` if no installation holds one.
+         * Returns the Visual Studio locator, or `null` when it is not installed.
          */
-        private fun visualStudioTools(): File? {
-            val programFiles = System.getenv("ProgramFiles(x86)") ?: return null
-            val vswhere = File(programFiles, "Microsoft Visual Studio/Installer/vswhere.exe")
-            if (!vswhere.exists()) return null
+        private fun vswhere(): File? =
+            System
+                .getenv("ProgramFiles(x86)")
+                ?.let { File(it, "Microsoft Visual Studio/Installer/vswhere.exe") }
+                ?.takeIf { it.exists() }
 
-            val output = ByteArrayOutputStream()
-            val arguments = listOf(vswhere.absolutePath, "-latest", "-products", "*", "-property", "installationPath")
-            val status = runCatching { execute(arguments, output) }.getOrNull()
-            if (status != 0) return null
-
-            val installation =
-                output
-                    .toByteArray()
-                    .decodeToString()
-                    .lineSequence()
-                    .map { it.trim() }
-                    .firstOrNull { it.isNotEmpty() } ?: return null
-
-            return File(installation, "Common7/Tools/VsDevCmd.bat").takeIf { it.exists() }
-        }
+        /**
+         * Returns the first non-blank line of [output], trimmed, or `null` when it holds none.
+         */
+        private fun firstLine(output: ByteArrayOutputStream): String? =
+            output
+                .toByteArray()
+                .decodeToString()
+                .lineSequence()
+                .map { it.trim() }
+                .firstOrNull { it.isNotEmpty() }
 
         /**
          * Runs the given [command], writing everything it prints into [output], and returns its exit code.

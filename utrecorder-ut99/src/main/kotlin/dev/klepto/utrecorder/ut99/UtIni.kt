@@ -1,14 +1,14 @@
 package dev.klepto.utrecorder.ut99
 
 import java.nio.file.Path
-import kotlin.io.path.createDirectories
+import kotlin.io.path.createParentDirectories
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 /**
- * An Unreal Tournament configuration file held as its original lines, edited in place and written back. Comments,
- * blank lines and the order of the original file are preserved, and keys that appear more than once within a section
- * are kept as separate entries.
+ * An Unreal Tournament configuration file, edited in place and written back with its original lines preserved.
+ *
+ * A key that appears more than once within a section is kept as separate entries.
  *
  * Use [read] to read one from disk.
  *
@@ -91,11 +91,7 @@ class UtIni(
     /**
      * Writes the configuration to the given [path] and returns it.
      */
-    fun write(path: Path): Path =
-        path.also {
-            it.parent?.createDirectories()
-            it.writeText(toString(), CHARSET)
-        }
+    fun write(path: Path): Path = path.createParentDirectories().also { it.writeText(toString(), UtPlatform.CHARSET) }
 
     /**
      * Returns the contents of the configuration file.
@@ -155,12 +151,6 @@ class UtIni(
 
     companion object {
         /**
-         * The charset Unreal Tournament reads and writes its text files in. Maps every byte to a single character, so
-         * that a file survives a read and a write untouched.
-         */
-        val CHARSET = Charsets.ISO_8859_1
-
-        /**
          * The prefix of a comment line.
          */
         private const val COMMENT = ";"
@@ -168,6 +158,6 @@ class UtIni(
         /**
          * Reads the configuration file at the given [path].
          */
-        fun read(path: Path): UtIni = UtIni(path.readText(CHARSET))
+        fun read(path: Path): UtIni = UtIni(path.readText(UtPlatform.CHARSET))
     }
 }

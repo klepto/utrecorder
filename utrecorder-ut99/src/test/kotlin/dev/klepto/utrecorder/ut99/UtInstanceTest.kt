@@ -2,73 +2,146 @@ package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.readTextOrEmpty
-import dev.klepto.utrecorder.common.os.OS
+import dev.klepto.utrecorder.common.os.OperatingSystem
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.deleteIfExists
 import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.io.path.writeText
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.seconds
 
-/**
- * Tests for [UtInstance] against a fake installation.
- *
- * The `instance` and `executable` contexts never start a process: they read the inert [UtInstance.executable] built
- * off the run's own paths, and the fake installation keeps a placeholder game executable, an empty regular file at
- * `System/<UT_PLATFORM.gameExecutable>`, only because [UtInstallation]'s init block checks that the path exists. It
- * is never executed there.
- *
- * The `start`, `await`, `drain` and `isRunning` contexts start a process for real, but never the game: every one of
- * them overrides the program a run starts to the [Shell] running [WINDOWS_SCRIPT] or [LINUX_SCRIPT], written once per
- * spec under [root] rather than under an installation's `System` directory, so the byte-identical-installation
- * assertions elsewhere keep working. The instance still appends the game executable copy path and the game
- * arguments after the shell's own wrapper arguments, so the script sees the copy path as its first argument and
- * ignores it. The game executable copy itself is never run: it is a placeholder the shell never touches.
- */
 class UtInstanceTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utinstance-test")
-        val shell =
-            when (UT_PLATFORM) {
+        val testEnvVar = "UTINSTANCE_TEST_VAR"
+        val sleepVar = "UTINSTANCE_SLEEP"
+        val shortTimeout = 1.seconds
+        val longTimeout = 6.seconds
+
+        val windowsScript =
+            """
+            @echo off
+            setlocal enabledelayedexpansion
+            echo start-marker
+            set "CWD=%CD%"
+            set "LOG_NAME="
+            set "INI_PATH="
+            set "ARGS_FILE=%TEMP%\utinstance-args-%RANDOM%-%RANDOM%.tmp"
+            type nul > "%ARGS_FILE%"
+            set "REMAINING=%*"
+            :collect
+            if not defined REMAINING goto :afterCollect
+            set "TOKEN="
+            set "NEWREM="
+            for /f "tokens=1,* delims= " %%A in ("!REMAINING!") do (
+              set "TOKEN=%%A"
+              set "NEWREM=%%B"
+            )
+            echo(!TOKEN!>>"%ARGS_FILE%"
+            if "!TOKEN:~0,5!"=="-log=" set "LOG_NAME=!TOKEN:~5!"
+            if "!TOKEN:~0,5!"=="-ini=" set "INI_PATH=!TOKEN:~5!"
+            set "REMAINING=%NEWREM%"
+            goto :collect
+            :afterCollect
+            if defined LOG_NAME (
+              > "%CWD%\%LOG_NAME%" (
+                echo cwd=%CWD%
+                for /f "usebackq delims=" %%L in ("%ARGS_FILE%") do echo arg=%%L
+                echo env=!LD_LIBRARY_PATH!
+                echo envtest=!$testEnvVar!
+              )
+            )
+            del "%ARGS_FILE%" >nul 2>&1
+            if defined $sleepVar ping -n %$sleepVar% 127.0.0.1 >nul
+            set "EXIT_CODE=0"
+            set "GOT_CODE="
+            if defined INI_PATH (
+              for /f "usebackq delims=" %%L in ("%INI_PATH%") do (
+                if not defined GOT_CODE (
+                  set "EXIT_CODE=%%L"
+                  set "GOT_CODE=1"
+                )
+              )
+            )
+            exit /b %EXIT_CODE%
+            """.trimIndent()
+
+        val linuxScript =
+            """
+            #!/bin/sh
+            echo start-marker
+            CWD=${'$'}(pwd)
+            LOG_NAME=""
+            INI_PATH=""
+            for arg in "${'$'}@"; do
+              case "${'$'}arg" in
+                -log=*) LOG_NAME="${'$'}{arg#-log=}" ;;
+                -ini=*) INI_PATH="${'$'}{arg#-ini=}" ;;
+              esac
+            done
+            if [ -n "${'$'}LOG_NAME" ]; then
+              {
+                echo "cwd=${'$'}CWD"
+                for arg in "${'$'}@"; do echo "arg=${'$'}arg"; done
+                echo "env=${'$'}LD_LIBRARY_PATH"
+                echo "envtest=${'$'}$testEnvVar"
+              } > "${'$'}CWD/${'$'}LOG_NAME"
+            fi
+            if [ -n "${'$'}$sleepVar" ]; then sleep "${'$'}$sleepVar"; fi
+            EXIT_CODE=0
+            if [ -n "${'$'}INI_PATH" ] && [ -f "${'$'}INI_PATH" ]; then
+              EXIT_CODE=${'$'}(head -n 1 "${'$'}INI_PATH")
+            fi
+            exit "${'$'}{EXIT_CODE:-0}"
+            """.trimIndent()
+
+        data class Shell(
+            val executable: Path,
+            val arguments: List<String>,
+            val sleepSeconds: String,
+        )
+
+        fun writeScript(
+            name: String,
+            script: String,
+        ): String = (root / name).also { it.writeText(script) }.toString()
+
+        fun writeShell(): Shell =
+            when (UtPlatform.current()) {
                 UtPlatform.WINDOWS -> {
-                    val scriptPath = root / "runner.cmd"
-                    scriptPath.writeText(WINDOWS_SCRIPT)
                     Shell(
                         executable = Path.of(System.getenv("ComSpec") ?: """C:\Windows\System32\cmd.exe"""),
-                        arguments = listOf("/c", scriptPath.toString()),
-                        script = WINDOWS_SCRIPT,
-                        sleepSeconds = WINDOWS_SLEEP_SECONDS,
+                        arguments = listOf("/c", writeScript("runner.cmd", windowsScript)),
+                        sleepSeconds = "3",
                     )
                 }
 
                 UtPlatform.LINUX -> {
-                    val scriptPath = root / "runner.sh"
-                    scriptPath.writeText(LINUX_SCRIPT)
                     Shell(
                         executable = Path.of("/bin/sh"),
-                        arguments = listOf(scriptPath.toString()),
-                        script = LINUX_SCRIPT,
-                        sleepSeconds = LINUX_SLEEP_SECONDS,
+                        arguments = listOf(writeScript("runner.sh", linuxScript)),
+                        sleepSeconds = "2",
                     )
                 }
             }
 
+        val shell = writeShell()
+
         afterSpec { root.toFile().deleteRecursively() }
 
-        /**
-         * Writes a fake installation under `<root>/<name>/System`, holding a placeholder game executable and a game
-         * and user configuration. The game configuration begins with [exitCode] as its first line, which a fake run
-         * reads back and exits with, followed by [gameIni]; the user configuration holds [userIni] as is.
-         */
         fun createFakeInstall(
             name: String,
             exitCode: Int = 0,
@@ -85,16 +158,13 @@ class UtInstanceTest :
                     else -> "$exitCode\n$gameIni"
                 }
 
-            (systemDirectory / UT_PLATFORM.gameExecutable).writeText("")
+            (systemDirectory / UtPlatform.current().gameExecutable).writeText("")
             (systemDirectory / "UnrealTournament.ini").writeText(gameIniContent)
             (systemDirectory / "User.ini").writeText(userIni)
 
-            return UtInstallation(installRoot, Workspace(directory = root / "tasks"))
+            return UtInstallation(installRoot, Workspace(root / "tasks", keep = false, retention = 7.days))
         }
 
-        /**
-         * Returns every regular file under [directory], keyed by its path relative to it and mapped to its bytes.
-         */
         fun snapshot(directory: Path): Map<String, ByteArray> =
             directory
                 .toFile()
@@ -102,13 +172,10 @@ class UtInstanceTest :
                 .filter { it.isFile }
                 .associate { directory.relativize(it.toPath()).toString() to it.readBytes() }
 
-        /**
-         * Returns an unstarted run of [installation], overridden to start [shell] rather than the game.
-         */
         fun scriptInstance(
             installation: UtInstallation,
             name: String,
-            configure: UtInstanceBuilder.() -> Unit = {},
+            configure: UtInstance.Builder.() -> Unit = {},
         ): UtInstance =
             installation.instance(name) {
                 executable = shell.executable
@@ -116,27 +183,10 @@ class UtInstanceTest :
                 configure()
             }
 
-        /**
-         * Configures an instance to sleep for [Shell.sleepSeconds] once its fake run has written its log, using
-         * [SLEEP_VAR], so a test can make a run outlive its timeout.
-         */
-        val sleepingConfig: UtInstanceBuilder.() -> Unit = { environment[SLEEP_VAR] = shell.sleepSeconds }
+        val sleepingConfig: UtInstance.Builder.() -> Unit = { environment[sleepVar] = shell.sleepSeconds }
 
-        /**
-         * Returns the `arg=` lines a fake run wrote to its log, one per argument the shell received. The first is
-         * always the game executable copy path, since the shell runs in front of the game rather than in its place.
-         */
-        fun argLines(result: UtInstanceResult): List<String> = result.log.filter { it.startsWith("arg=") }
+        fun gameArgLines(result: UtInstanceResult): List<String> = result.log.filter { it.startsWith("arg=") }.drop(1)
 
-        /**
-         * Returns [argLines] with the leading game executable copy path dropped, so what remains lines up with
-         * [UtInstance.executable]'s own argument list.
-         */
-        fun gameArgLines(result: UtInstanceResult): List<String> = argLines(result).drop(1)
-
-        /**
-         * Returns [gameArgLines] with the `arg=` prefix stripped off each line.
-         */
         fun strippedGameArgLines(result: UtInstanceResult): List<String> = gameArgLines(result).map { it.removePrefix("arg=") }
 
         val installation = createFakeInstall("install")
@@ -159,7 +209,7 @@ class UtInstanceTest :
             test("names the run's paths ut-<id> plus the platform suffix, .ini, .user.ini, .exec.txt and .log") {
                 val instance = installation.instance("named-paths") { exec = listOf("line") }
 
-                instance.executablePath.name shouldBe "ut-${instance.id}${UT_PLATFORM.executableSuffix}"
+                instance.executablePath.name shouldBe "ut-${instance.id}${UtPlatform.current().operatingSystem.executableSuffix}"
                 instance.gameIniPath.name shouldBe "ut-${instance.id}.ini"
                 instance.userIniPath.name shouldBe "ut-${instance.id}.user.ini"
                 instance.execPath.name shouldBe "ut-${instance.id}.exec.txt"
@@ -256,7 +306,7 @@ class UtInstanceTest :
                         "-userini=${withExec.userIniPath.absolutePathString()}",
                         "-EXEC=${withExec.execPath.absolutePathString()}",
                         "-log=${withExec.logPath.name}",
-                    ) + UT_PLATFORM.homeArguments
+                    ) + UtPlatform.current().homeArguments
                 withoutExec.executable.arguments.none { it.startsWith("-EXEC=") } shouldBe true
             }
 
@@ -270,7 +320,7 @@ class UtInstanceTest :
                         "-ini=${instance.gameIniPath.absolutePathString()}",
                         "-userini=${instance.userIniPath.absolutePathString()}",
                         "-log=${instance.logPath.name}",
-                    ) + UT_PLATFORM.homeArguments
+                    ) + UtPlatform.current().homeArguments
             }
 
             test("runs in the installation's system directory") {
@@ -291,7 +341,7 @@ class UtInstanceTest :
             test("sets the platform's library path variable to the system directory when the platform has one") {
                 val instance = installation.instance("library-path")
 
-                val variable = OS.libraryPathVariable
+                val variable = OperatingSystem.current().libraryPathVariable
                 if (variable != null) {
                     instance.executable.environment[variable] shouldBe "${installation.systemDirectory.toAbsolutePath()}"
                 } else {
@@ -310,7 +360,7 @@ class UtInstanceTest :
                 instance.executablePath.exists() shouldBe true
                 instance.gameIniPath.exists() shouldBe true
                 instance.userIniPath.exists() shouldBe true
-                instance.executablePath.name shouldBe "ut-${instance.id}${UT_PLATFORM.executableSuffix}"
+                instance.executablePath.name shouldBe "ut-${instance.id}${UtPlatform.current().operatingSystem.executableSuffix}"
                 instance.gameIniPath.name shouldBe "ut-${instance.id}.ini"
                 instance.userIniPath.name shouldBe "ut-${instance.id}.user.ini"
 
@@ -343,43 +393,11 @@ class UtInstanceTest :
                         "-ini=${instance.gameIniPath.absolutePathString()}",
                         "-userini=${instance.userIniPath.absolutePathString()}",
                         "-log=${instance.logPath.name}",
-                    ) + UT_PLATFORM.homeArguments
+                    ) + UtPlatform.current().homeArguments
 
                 val cwdLine = result.log.first()
                 Path.of(cwdLine.removePrefix("cwd=")).toRealPath() shouldBe okInstallation.systemDirectory.toRealPath()
                 gameArgLines(result) shouldBe expectedArguments.map { "arg=$it" }
-            }
-
-            test("puts the map first in the game arguments") {
-                val instance = scriptInstance(okInstallation, "map-first") { map = "DM-Deck16" }.start()
-
-                val result = instance.await()
-
-                gameArgLines(result).first() shouldBe "arg=DM-Deck16"
-            }
-
-            test("adds -nosound when sound is disabled") {
-                val instance = scriptInstance(okInstallation, "no-sound") { sound = false }.start()
-
-                val result = instance.await()
-
-                strippedGameArgLines(result).take(3) shouldBe listOf("-nosound", "-nojoy", "-fullscreen")
-            }
-
-            test("swaps -fullscreen for -windowed when windowed is enabled") {
-                val instance = scriptInstance(okInstallation, "windowed") { windowed = true }.start()
-
-                val result = instance.await()
-
-                strippedGameArgLines(result).take(2) shouldBe listOf("-nojoy", "-windowed")
-            }
-
-            test("drops -nojoy when joystick is enabled") {
-                val instance = scriptInstance(okInstallation, "joystick") { joystick = true }.start()
-
-                val result = instance.await()
-
-                strippedGameArgLines(result).take(1) shouldBe listOf("-fullscreen")
             }
 
             test("writes the exec lines as the run's own exec file, passes it as -EXEC and returns it in the result") {
@@ -418,7 +436,7 @@ class UtInstanceTest :
             test("passes environment variables set on the builder to the process") {
                 val instance =
                     scriptInstance(okInstallation, "environment") {
-                        environment[TEST_ENV_VAR] = "hello-world"
+                        environment[testEnvVar] = "hello-world"
                     }.start()
 
                 val result = instance.await()
@@ -435,8 +453,8 @@ class UtInstanceTest :
                         gameIni = "[Engine.Engine]\nInstallerKey=InstallerValue\n",
                         userIni = "[Engine.Engine]\nInstallerUserKey=InstallerUserValue\n",
                     )
-                val gameIniBefore = iniEditInstallation.gameIniPath.readTextOrEmpty(UtIni.CHARSET)
-                val userIniBefore = iniEditInstallation.userIniPath.readTextOrEmpty(UtIni.CHARSET)
+                val gameIniBefore = iniEditInstallation.gameIniPath.readTextOrEmpty(UtPlatform.CHARSET)
+                val userIniBefore = iniEditInstallation.userIniPath.readTextOrEmpty(UtPlatform.CHARSET)
 
                 val instance =
                     scriptInstance(iniEditInstallation, "ini-edits") {
@@ -450,8 +468,8 @@ class UtInstanceTest :
                 result.gameIni shouldContain "BuilderKey=BuilderValue"
                 result.userIni shouldContain "InstallerUserKey=InstallerUserValue"
                 result.userIni shouldContain "BuilderUserKey=BuilderUserValue"
-                iniEditInstallation.gameIniPath.readTextOrEmpty(UtIni.CHARSET) shouldBe gameIniBefore
-                iniEditInstallation.userIniPath.readTextOrEmpty(UtIni.CHARSET) shouldBe userIniBefore
+                iniEditInstallation.gameIniPath.readTextOrEmpty(UtPlatform.CHARSET) shouldBe gameIniBefore
+                iniEditInstallation.userIniPath.readTextOrEmpty(UtPlatform.CHARSET) shouldBe userIniBefore
             }
 
             test("sets the platform's library path variable to the System directory, unset when the platform has none") {
@@ -460,7 +478,7 @@ class UtInstanceTest :
                 val result = instance.await()
 
                 val envLine = result.log.first { it.startsWith("env=") }
-                if (OS.libraryPathVariable != null) {
+                if (OperatingSystem.current().libraryPathVariable != null) {
                     Path.of(envLine.removePrefix("env=")).toRealPath() shouldBe okInstallation.systemDirectory.toRealPath()
                 } else {
                     envLine shouldBe "env="
@@ -534,10 +552,26 @@ class UtInstanceTest :
                 (first === second) shouldBe true
             }
 
+            test("throws the failure of deleting an executable copy held open, and throws it again from a second await")
+                .config(enabledIf = { OperatingSystem.current() == OperatingSystem.WINDOWS }) {
+                    val instance = scriptInstance(okInstallation, "held-executable").start()
+                    val stream = FileOutputStream(instance.executablePath.toFile(), true)
+
+                    try {
+                        val first = shouldThrow<IOException> { instance.await() }
+                        val second = shouldThrow<IOException> { instance.await() }
+
+                        (first === second) shouldBe true
+                    } finally {
+                        stream.close()
+                        instance.executablePath.deleteIfExists()
+                    }
+                }
+
             test("returns a result rather than throwing when a run outlives its timeout, still carrying the inis") {
                 val instance = scriptInstance(okInstallation, "timeout-result", sleepingConfig).start()
 
-                val result = instance.await(SHORT_TIMEOUT)
+                val result = instance.await(shortTimeout)
 
                 result.log.isNotEmpty() shouldBe true
                 result.gameIni shouldBe "0"
@@ -549,7 +583,7 @@ class UtInstanceTest :
                 val before = snapshot(okInstallation.systemDirectory)
                 val instance = scriptInstance(okInstallation, "timeout-cleanup", sleepingConfig).start()
 
-                instance.await(SHORT_TIMEOUT)
+                instance.await(shortTimeout)
 
                 val after = snapshot(okInstallation.systemDirectory)
                 after shouldBe before
@@ -568,7 +602,7 @@ class UtInstanceTest :
                 instance.start()
                 instance.isRunning shouldBe true
 
-                instance.await(LONG_TIMEOUT)
+                instance.await(longTimeout)
                 instance.isRunning shouldBe false
             }
         }
@@ -581,7 +615,7 @@ class UtInstanceTest :
                 val received = mutableListOf<String>()
 
                 instance.drain(received::add)
-                instance.await(LONG_TIMEOUT)
+                instance.await(longTimeout)
 
                 received.any { it.contains("start-marker") } shouldBe true
             }
@@ -593,139 +627,3 @@ class UtInstanceTest :
             }
         }
     })
-
-/**
- * The name of the environment variable a fake run echoes into its log, so a test can observe the environment the
- * process was started with.
- */
-private const val TEST_ENV_VAR = "UTINSTANCE_TEST_VAR"
-
-/**
- * The name of the environment variable that makes a fake run sleep after writing its log, so a test can make a run
- * outlive its timeout.
- */
-private const val SLEEP_VAR = "UTINSTANCE_SLEEP"
-
-/**
- * How long a run made to outlive its timeout sleeps for on Windows, expressed in pings (each roughly a second apart)
- * for `ping -n`, since Windows' shell has no plain sleep command.
- */
-private const val WINDOWS_SLEEP_SECONDS = "3"
-
-/**
- * How long a run made to outlive its timeout sleeps for on Linux, expressed in whole seconds for `sleep`.
- */
-private const val LINUX_SLEEP_SECONDS = "2"
-
-/**
- * The timeout a sleeping run is awaited with when the test wants it killed, short enough that the run is always
- * still going when it is reached. Not to be confused with [UtInstance]'s own `KILL_TIMEOUT`, the grace period a kill
- * is given to report its exit code.
- */
-private val SHORT_TIMEOUT = 1.seconds
-
-/**
- * The timeout a sleeping run is awaited with when the test wants it to finish on its own instead of being killed.
- */
-private val LONG_TIMEOUT = 6.seconds
-
-/**
- * The OS shell a script instance starts in place of the game.
- *
- * @property executable The program a script instance starts.
- * @property arguments The arguments the program takes ahead of the game executable copy path.
- * @property script The body of the script the shell runs, either [WINDOWS_SCRIPT] or [LINUX_SCRIPT].
- * @property sleepSeconds How long a run made to outlive its timeout sleeps for, in the unit the platform's sleep
- * command takes: whole seconds for `sleep` on a POSIX shell, and pings (each roughly a second apart) for `ping -n`
- * on Windows.
- */
-private data class Shell(
-    val executable: Path,
-    val arguments: List<String>,
-    val script: String,
-    val sleepSeconds: String,
-)
-
-/**
- * The fake run for Windows, started through `cmd /c`. Batch splits `%1`-style parameters on `=` even when quoted, so
- * arguments are walked with a `for /f "delims= "` loop over `%*` instead, which leaves `=` inside a token alone.
- */
-private val WINDOWS_SCRIPT =
-    """
-    @echo off
-    setlocal enabledelayedexpansion
-    echo start-marker
-    set "CWD=%CD%"
-    set "LOG_NAME="
-    set "INI_PATH="
-    set "ARGS_FILE=%TEMP%\utinstance-args-%RANDOM%-%RANDOM%.tmp"
-    type nul > "%ARGS_FILE%"
-    set "REMAINING=%*"
-    :collect
-    if not defined REMAINING goto :afterCollect
-    set "TOKEN="
-    set "NEWREM="
-    for /f "tokens=1,* delims= " %%A in ("!REMAINING!") do (
-      set "TOKEN=%%A"
-      set "NEWREM=%%B"
-    )
-    echo(!TOKEN!>>"%ARGS_FILE%"
-    if "!TOKEN:~0,5!"=="-log=" set "LOG_NAME=!TOKEN:~5!"
-    if "!TOKEN:~0,5!"=="-ini=" set "INI_PATH=!TOKEN:~5!"
-    set "REMAINING=%NEWREM%"
-    goto :collect
-    :afterCollect
-    if defined LOG_NAME (
-      > "%CWD%\%LOG_NAME%" (
-        echo cwd=%CWD%
-        for /f "usebackq delims=" %%L in ("%ARGS_FILE%") do echo arg=%%L
-        echo env=!LD_LIBRARY_PATH!
-        echo envtest=!$TEST_ENV_VAR!
-      )
-    )
-    del "%ARGS_FILE%" >nul 2>&1
-    if defined $SLEEP_VAR ping -n %$SLEEP_VAR% 127.0.0.1 >nul
-    set "EXIT_CODE=0"
-    set "GOT_CODE="
-    if defined INI_PATH (
-      for /f "usebackq delims=" %%L in ("%INI_PATH%") do (
-        if not defined GOT_CODE (
-          set "EXIT_CODE=%%L"
-          set "GOT_CODE=1"
-        )
-      )
-    )
-    exit /b %EXIT_CODE%
-    """.trimIndent()
-
-/**
- * The fake run for a POSIX shell, started through `/bin/sh`.
- */
-private val LINUX_SCRIPT =
-    """
-    #!/bin/sh
-    echo start-marker
-    CWD=${'$'}(pwd)
-    LOG_NAME=""
-    INI_PATH=""
-    for arg in "${'$'}@"; do
-      case "${'$'}arg" in
-        -log=*) LOG_NAME="${'$'}{arg#-log=}" ;;
-        -ini=*) INI_PATH="${'$'}{arg#-ini=}" ;;
-      esac
-    done
-    if [ -n "${'$'}LOG_NAME" ]; then
-      {
-        echo "cwd=${'$'}CWD"
-        for arg in "${'$'}@"; do echo "arg=${'$'}arg"; done
-        echo "env=${'$'}LD_LIBRARY_PATH"
-        echo "envtest=${'$'}$TEST_ENV_VAR"
-      } > "${'$'}CWD/${'$'}LOG_NAME"
-    fi
-    if [ -n "${'$'}$SLEEP_VAR" ]; then sleep "${'$'}$SLEEP_VAR"; fi
-    EXIT_CODE=0
-    if [ -n "${'$'}INI_PATH" ] && [ -f "${'$'}INI_PATH" ]; then
-      EXIT_CODE=${'$'}(head -n 1 "${'$'}INI_PATH")
-    fi
-    exit "${'$'}{EXIT_CODE:-0}"
-    """.trimIndent()

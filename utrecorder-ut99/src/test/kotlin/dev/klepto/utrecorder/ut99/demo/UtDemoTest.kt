@@ -4,256 +4,161 @@ import dev.klepto.utrecorder.ut99.UtPackage
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.comparables.shouldBeLessThanOrEqualTo
 import io.kotest.matchers.shouldBe
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-// Synthetic demo builders. They write the exact inverse of a reference demo reader, which defines what a correct parser
-// accepts: little-endian record headers, a bit stream packet (LSB first per byte) of bunches terminated by a single
-// set bit, and control-channel payloads made of compact-index-length FStrings.
-
-private const val MAX_PACKET_ID = 16384
-private const val MAX_CHANNEL = 1023
-private const val MAX_PACKET_BYTES = 512
-private const val CONTROL_CHANNEL = 0
-
-private class DemoBitWriter {
-    private val bits = mutableListOf<Int>()
-
-    fun bit(value: Int) {
-        bits += value
-    }
-
-    fun int(
-        value: Int,
-        max: Int,
-    ) {
-        var built = 0
-        var mask = 1
-        while (built + mask < max && mask != 0) {
-            val set = value and mask != 0
-            bit(if (set) 1 else 0)
-            if (set) built = built or mask
-            mask = mask shl 1
-        }
-    }
-
-    fun payloadBits(
-        payload: ByteArray,
-        count: Int,
-    ) {
-        for (index in 0 until count) {
-            val byteValue = payload[index shr 3].toInt()
-            bit((byteValue shr (index and 7)) and 1)
-        }
-    }
-
-    fun toByteArray(): ByteArray {
-        val bytes = ByteArray((bits.size + 7) / 8)
-        for (index in bits.indices) {
-            if (bits[index] == 1) {
-                bytes[index shr 3] = (bytes[index shr 3].toInt() or (1 shl (index and 7))).toByte()
-            }
-        }
-        return bytes
-    }
-}
-
-private fun DemoBitWriter.bunch(
-    channel: Int,
-    payload: ByteArray,
-) {
-    bit(0) // not an ack
-    bit(0) // control
-    bit(0) // reliable
-    int(channel, MAX_CHANNEL)
-    val bitCount = payload.size * 8
-    int(bitCount, MAX_PACKET_BYTES * 8)
-    payloadBits(payload, bitCount)
-}
-
-private fun demoCompactIndex(value: Int): ByteArray {
-    val bytes = mutableListOf<Int>()
-    var remaining = value ushr 6
-    var first = value and 0x3F
-    if (remaining != 0) first = first or 0x40
-    bytes += first
-    while (remaining != 0) {
-        var chunk = remaining and 0x7F
-        remaining = remaining ushr 7
-        if (remaining != 0) chunk = chunk or 0x80
-        bytes += chunk
-    }
-    return ByteArray(bytes.size) { bytes[it].toByte() }
-}
-
-private fun demoFString(text: String): ByteArray {
-    val content = text.toByteArray(Charsets.ISO_8859_1) + byteArrayOf(0)
-    return demoCompactIndex(content.size) + content
-}
-
-private fun demoRawPacket(bunches: List<Pair<Int, ByteArray>>): ByteArray {
-    val writer = DemoBitWriter()
-    writer.int(0, MAX_PACKET_ID)
-    for ((channel, payload) in bunches) {
-        writer.bunch(channel, payload)
-    }
-    writer.bit(1) // terminating bit
-    return writer.toByteArray()
-}
-
-private fun demoPacket(bunches: List<Pair<Int, List<String>>>): ByteArray =
-    demoRawPacket(
-        bunches.map { (channel, lines) ->
-            channel to lines.fold(ByteArray(0)) { acc, line -> acc + demoFString(line) }
-        },
-    )
-
-// Copies a payload's bits forward by a count, leaving the bits before it clear, so a framed string starts off a byte
-// boundary the way the real demo's messages do.
-private fun demoShiftedPayload(
-    shift: Int,
-    payload: ByteArray,
-): ByteArray {
-    val bytes = ByteArray((shift + payload.size * 8 + 7) / 8)
-    for (index in 0 until payload.size * 8) {
-        if ((payload[index shr 3].toInt() shr (index and 7)) and 1 == 1) {
-            val target = index + shift
-            bytes[target shr 3] = (bytes[target shr 3].toInt() or (1 shl (target and 7))).toByte()
-        }
-    }
-    return bytes
-}
-
-private fun demoTimeFields(time: Float): Pair<Int, Int> {
-    val bits = time.toRawBits()
-    val low = bits and 0x7FFFFF
-    val high = (bits ushr 23) shl 20
-    return low to high
-}
-
-private fun demoRecordOf(
-    frame: Int,
-    time: Float,
-    packet: ByteArray,
-): ByteArray {
-    val (low, high) = demoTimeFields(time)
-    val buffer = ByteBuffer.allocate(16 + packet.size).order(ByteOrder.LITTLE_ENDIAN)
-    buffer.putInt(frame)
-    buffer.putInt(low)
-    buffer.putInt(high)
-    buffer.putInt(packet.size)
-    buffer.put(packet)
-    return buffer.array()
-}
-
-private fun demoRecord(
-    frame: Int,
-    time: Float,
-    bunches: List<Pair<Int, List<String>>>,
-): ByteArray = demoRecordOf(frame, time, demoPacket(bunches))
-
-private fun demoRawRecord(
-    frame: Int,
-    time: Float,
-    bunches: List<Pair<Int, ByteArray>>,
-): ByteArray = demoRecordOf(frame, time, demoRawPacket(bunches))
-
-private fun demoControlRecord(
-    frame: Int,
-    time: Float,
-    lines: List<String>,
-): ByteArray = demoRecord(frame, time, listOf(CONTROL_CHANNEL to lines))
-
-private fun demoTruncatedHeader(
-    frame: Int,
-    time: Float,
-    claimedByteCount: Int,
-): ByteArray {
-    val (low, high) = demoTimeFields(time)
-    val buffer = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
-    buffer.putInt(frame)
-    buffer.putInt(low)
-    buffer.putInt(high)
-    buffer.putInt(claimedByteCount)
-    return buffer.array()
-}
-
-private fun demoBytes(vararg records: ByteArray): ByteArray {
-    val output = ByteArrayOutputStream()
-    records.forEach { output.write(it) }
-    return output.toByteArray()
-}
-
-// Bunny Track line builders. The mods compose these strings server-side: UTBT_BTMod_v17 broadcasts the finished in and
-// capped! lines to everyone, and BTPog sends its two markers to the owning client alone, which is why the real demo
-// carries them on channels of their own rather than on the control channel.
-private const val GAME_CHANNEL = 1
-private const val MARKER_CHANNEL = 298
-
-private class CapLine(
-    val time: Float,
-    val channel: Int,
-    val text: String,
-)
-
-private fun btSpawn(
-    time: Float,
-    id: String,
-) = CapLine(time, MARKER_CHANNEL, "BTPOG_SPAWN_MARKER:$id")
-
-private fun btCapMarker(
-    time: Float,
-    id: String,
-) = CapLine(time, MARKER_CHANNEL, "BTPOG_CAP_MARKER:$id")
-
-private fun btFinished(
-    time: Float,
-    name: String,
-    reported: String,
-    place: String,
-) = CapLine(time, GAME_CHANNEL, "[UTBT] $name finished in $reported ($place)")
-
-private fun btCapped(
-    time: Float,
-    vararg names: String,
-) = CapLine(time, GAME_CHANNEL, names.joinToString(" and ") + " capped! Red team scores!")
-
-// A demo of cap lines: a control record naming the map, then one record per line. Every record time is an exact binary
-// fraction, so no case turns on whether the reader rounds or truncates its milliseconds.
-private fun demoCapBytes(
-    vararg lines: CapLine,
-    shift: Int = 0,
-): ByteArray =
-    demoBytes(
-        demoControlRecord(frame = 0, time = 0f, lines = listOf("WELCOME LEVEL=TestMap LONE=0")),
-        *lines
-            .mapIndexed { index, line ->
-                demoRawRecord(
-                    frame = index + 1,
-                    time = line.time,
-                    bunches = listOf(line.channel to demoShiftedPayload(shift, demoFString(line.text))),
-                )
-            }.toTypedArray(),
-    )
-
 class UtDemoTest :
     FunSpec({
+        fun bitsOf(bytes: ByteArray): List<Int> = List(bytes.size * Byte.SIZE_BITS) { (bytes[it / 8].toInt() shr (it % 8)) and 1 }
+
+        fun bytesOf(bits: List<Int>): ByteArray =
+            ByteArray((bits.size + 7) / 8).also { bytes ->
+                bits.forEachIndexed { index, bit -> bytes[index / 8] = (bytes[index / 8].toInt() or (bit shl (index % 8))).toByte() }
+            }
+
+        fun MutableList<Int>.int(
+            value: Int,
+            max: Int,
+        ) {
+            var written = 0
+            var mask = 1
+            while (written + mask < max && mask != 0) {
+                val bit = if (value and mask != 0) 1 else 0
+                this += bit
+                written = written or (mask * bit)
+                mask = mask shl 1
+            }
+        }
+
+        fun MutableList<Int>.packetId(id: Int) = int(id, 16384)
+
+        fun MutableList<Int>.ack(id: Int) {
+            this += 1
+            packetId(id)
+        }
+
+        fun MutableList<Int>.bunch(
+            channel: Int,
+            payload: ByteArray,
+            open: Boolean = false,
+            close: Boolean = false,
+            reliable: Boolean = false,
+        ) {
+            this += 0
+            this += if (open || close) 1 else 0
+            if (open || close) {
+                this += if (open) 1 else 0
+                this += if (close) 1 else 0
+            }
+            this += if (reliable) 1 else 0
+            int(channel, 1023)
+            if (reliable) int(517, 1024)
+            if (reliable || open) int(5, 8)
+            int(payload.size * 8, 512 * 8)
+            this += bitsOf(payload)
+        }
+
+        fun packet(bunches: MutableList<Int>.() -> Unit): ByteArray =
+            bytesOf(
+                buildList {
+                    packetId(0)
+                    bunches()
+                    add(1)
+                },
+            )
+
+        fun compactIndex(value: Int): ByteArray {
+            val groups = generateSequence(value ushr 6) { it ushr 7 }.takeWhile { it != 0 }.map { it and 0x7F }.toList()
+            val first = (value and 0x3F) or (if (groups.isEmpty()) 0 else 0x40)
+            val rest = groups.mapIndexed { index, group -> if (index < groups.lastIndex) group or 0x80 else group }
+            return (listOf(first) + rest).map { it.toByte() }.toByteArray()
+        }
+
+        fun strings(vararg lines: String): ByteArray =
+            lines.fold(ByteArray(0)) { bytes, line ->
+                val content = line.toByteArray(Charsets.ISO_8859_1) + byteArrayOf(0)
+                bytes + compactIndex(content.size) + content
+            }
+
+        fun header(
+            time: Float,
+            count: Int,
+        ): ByteArray {
+            val bits = time.toRawBits()
+            return ByteBuffer
+                .allocate(16)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt(0)
+                .putInt(bits and 0x7FFFFF)
+                .putInt((bits ushr 23) shl 20)
+                .putInt(count)
+                .array()
+        }
+
+        fun record(
+            time: Float,
+            packet: ByteArray,
+        ): ByteArray = header(time, packet.size) + packet
+
+        fun controlRecord(
+            time: Float,
+            vararg lines: String,
+        ): ByteArray = record(time, packet { bunch(0, strings(*lines)) })
+
+        fun demo(vararg records: ByteArray): ByteArray = records.fold(ByteArray(0)) { bytes, record -> bytes + record }
+
+        class CapLine(
+            val time: Float,
+            val channel: Int,
+            val text: String,
+        )
+
+        fun btSpawn(
+            time: Float,
+            id: String,
+        ) = CapLine(time, 298, "BTPOG_SPAWN_MARKER:$id")
+
+        fun btCapMarker(
+            time: Float,
+            id: String,
+        ) = CapLine(time, 298, "BTPOG_CAP_MARKER:$id")
+
+        fun btFinished(
+            time: Float,
+            name: String,
+            reported: String,
+            place: String,
+        ) = CapLine(time, 1, "[UTBT] $name finished in $reported ($place)")
+
+        fun btCapped(
+            time: Float,
+            vararg names: String,
+        ) = CapLine(time, 1, names.joinToString(" and ") + " capped! Red team scores!")
+
+        fun capRecord(
+            line: CapLine,
+            shift: Int,
+        ): ByteArray {
+            val payload = bytesOf(List(shift) { 0 } + bitsOf(strings(line.text)))
+            return record(line.time, packet { bunch(line.channel, payload) })
+        }
+
+        fun capDemo(
+            vararg lines: CapLine,
+            shift: Int = 0,
+        ): ByteArray = demo(controlRecord(0f, "WELCOME LEVEL=TestMap LONE=0"), *lines.map { capRecord(it, shift) }.toTypedArray())
+
         context("real demo") {
             val resource = requireNotNull(UtDemoTest::class.java.getResource("/demo.dem"))
             val path = Path.of(resource.toURI())
 
-            // Real demo, map: the sample demo.dem opens CTF-BT-II-CoZyliciouS, the level its WELCOME line names.
             test("map") {
                 UtDemo.read(path).map shouldBe "CTF-BT-II-CoZyliciouS"
             }
 
-            // Real demo, packages: the sample demo.dem reads to exactly the packages its USES lines name, in the order the
-            // demo names them. Stock packages such as Core and Engine are included, and so are the packages the client loaded
-            // out of its cache. The GUIDs are asserted on their own because a package compares on its name alone.
             test("packages") {
                 val expected =
                     listOf(
@@ -315,23 +220,16 @@ class UtDemoTest :
                 packages.map { it.guid } shouldBe expected.map { it.guid }
             }
 
-            // Real demo, map package: the level package is the first USES line a demo carries, so the map is the first entry of
-            // the packages, and nothing has to fetch it separately.
             test("map is the first package") {
                 val demo = UtDemo.read(path)
 
                 demo.packages.first().name shouldBe demo.map
             }
 
-            // Real demo, duration: the sample demo.dem lasts 78.3621 s, the time of its last record, within a small tolerance.
             test("duration") {
                 (UtDemo.read(path).duration - 78.3621.seconds).absoluteValue shouldBeLessThanOrEqualTo 1.milliseconds
             }
 
-            // Real demo, cap: the sample demo.dem reads to the cap its BTPog markers and its UTBT broadcast lines
-            // report together - capper fierd_1, id 2ZNKJEI2Y1K05AENS6UM827L, a run time of 74907 ms and a demo time of
-            // 77634 ms. kleps is not the capper: the 1:13.987 kleps is reported to have finished in is 0.92 s from the
-            // marker gap, which is what the tolerance exists to reject.
             test("cap") {
                 val cap = requireNotNull(UtDemo.read(path).cap)
 
@@ -342,31 +240,55 @@ class UtDemoTest :
             }
         }
 
+        context("bunches") {
+            test("acknowledgements around a control bunch") {
+                val bytes =
+                    record(
+                        1f,
+                        packet {
+                            ack(3)
+                            bunch(0, strings("WELCOME LEVEL=TestMap LONE=0", "USES PKG=Weapon"))
+                            ack(4)
+                        },
+                    )
+
+                UtDemoRecord.read(bytes).single().controlLines() shouldBe listOf("WELCOME LEVEL=TestMap LONE=0", "USES PKG=Weapon")
+            }
+
+            test("open bunch") {
+                val bytes = record(1f, packet { bunch(0, strings("WELCOME LEVEL=TestMap LONE=0"), open = true) })
+
+                UtDemoRecord.read(bytes).single().controlLines() shouldBe listOf("WELCOME LEVEL=TestMap LONE=0")
+            }
+
+            test("reliable bunch") {
+                val bytes = record(1f, packet { bunch(0, strings("WELCOME LEVEL=TestMap LONE=0"), reliable = true) })
+
+                UtDemoRecord.read(bytes).single().controlLines() shouldBe listOf("WELCOME LEVEL=TestMap LONE=0")
+            }
+
+            test("closing bunch") {
+                val bytes = record(1f, packet { bunch(0, strings("WELCOME LEVEL=TestMap LONE=0"), close = true) })
+
+                UtDemoRecord.read(bytes).single().controlLines() shouldBe listOf("WELCOME LEVEL=TestMap LONE=0")
+            }
+        }
+
         context("malformed demo") {
-            // Malformed demo, cut off: a demo cut off in the middle of a record keeps the map and the packages of the records
-            // before the cut, and takes its duration from the last whole record.
             test("cut off") {
-                val first =
-                    demoControlRecord(
-                        frame = 0,
-                        time = 1.5f,
-                        lines =
-                            listOf(
-                                "WELCOME LEVEL=TestMap LONE=0",
-                                "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=First FLAGS=1 SIZE=100 GEN=1 FNAME=First.u",
-                            ),
+                val bytes =
+                    demo(
+                        controlRecord(
+                            1.5f,
+                            "WELCOME LEVEL=TestMap LONE=0",
+                            "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=First FLAGS=1 SIZE=100 GEN=1 FNAME=First.u",
+                        ),
+                        controlRecord(
+                            5.25f,
+                            "USES GUID=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB PKG=Second FLAGS=1 SIZE=100 GEN=1 FNAME=Second.u",
+                        ),
+                        header(9f, 50),
                     )
-                val second =
-                    demoControlRecord(
-                        frame = 1,
-                        time = 5.25f,
-                        lines =
-                            listOf(
-                                "USES GUID=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB PKG=Second FLAGS=1 SIZE=100 GEN=1 FNAME=Second.u",
-                            ),
-                    )
-                val cutOff = demoTruncatedHeader(frame = 2, time = 9f, claimedByteCount = 50)
-                val bytes = demoBytes(first, second, cutOff)
 
                 val demo = UtDemo.read(bytes)
 
@@ -381,21 +303,13 @@ class UtDemoTest :
         }
 
         context("package rules") {
-            // Package rules, repeated name: a package named twice, the two names differing only in case, appears once, as its
-            // first entry.
             test("repeated name") {
                 val bytes =
-                    demoBytes(
-                        demoControlRecord(
-                            frame = 0,
-                            time = 1f,
-                            lines =
-                                listOf(
-                                    "WELCOME LEVEL=TestMap LONE=0",
-                                    "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=Weapon FLAGS=1 SIZE=100 GEN=1 FNAME=Weapon.u",
-                                    "USES GUID=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB PKG=weapon FLAGS=1 SIZE=100 GEN=1 FNAME=weapon.u",
-                                ),
-                        ),
+                    controlRecord(
+                        1f,
+                        "WELCOME LEVEL=TestMap LONE=0",
+                        "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=Weapon FLAGS=1 SIZE=100 GEN=1 FNAME=Weapon.u",
+                        "USES GUID=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB PKG=weapon FLAGS=1 SIZE=100 GEN=1 FNAME=weapon.u",
                     )
 
                 val packages = UtDemo.read(bytes).packages
@@ -404,21 +318,9 @@ class UtDemoTest :
                 packages.single().guid shouldBe "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             }
 
-            // Package rules, no GUID: a USES line carrying no GUID field gives a package all the same, with an empty GUID, so
-            // that a package the demo recorded no version of asks for any version of it.
             test("no GUID") {
                 val bytes =
-                    demoBytes(
-                        demoControlRecord(
-                            frame = 0,
-                            time = 1f,
-                            lines =
-                                listOf(
-                                    "WELCOME LEVEL=TestMap LONE=0",
-                                    "USES PKG=Weapon FLAGS=1 SIZE=100 GEN=1 FNAME=Weapon.u",
-                                ),
-                        ),
-                    )
+                    controlRecord(1f, "WELCOME LEVEL=TestMap LONE=0", "USES PKG=Weapon FLAGS=1 SIZE=100 GEN=1 FNAME=Weapon.u")
 
                 val packages = UtDemo.read(bytes).packages
 
@@ -426,23 +328,14 @@ class UtDemoTest :
                 packages.single().guid shouldBe ""
             }
 
-            // Package rules, other channel: a USES line carried on a channel other than the control channel is not read as a
-            // package.
             test("other channel") {
                 val bytes =
-                    demoBytes(
-                        demoRecord(
-                            frame = 0,
-                            time = 1f,
-                            bunches =
-                                listOf(
-                                    CONTROL_CHANNEL to listOf("WELCOME LEVEL=TestMap LONE=0"),
-                                    1 to
-                                        listOf(
-                                            "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=Weapon FLAGS=1 SIZE=100 GEN=1 FNAME=Weapon.u",
-                                        ),
-                                ),
-                        ),
+                    record(
+                        1f,
+                        packet {
+                            bunch(0, strings("WELCOME LEVEL=TestMap LONE=0"))
+                            bunch(1, strings("USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=Weapon FLAGS=1 SIZE=100 GEN=1 FNAME=Weapon.u"))
+                        },
                     )
 
                 UtDemo.read(bytes).packages shouldBe emptyList()
@@ -450,20 +343,12 @@ class UtDemoTest :
         }
 
         context("cap evidence") {
-            // Cap evidence, no cap: a demo whose records carry nothing but control lines reads normally - the map and
-            // the packages are read as before, and the cap is null.
             test("no cap") {
                 val bytes =
-                    demoBytes(
-                        demoControlRecord(
-                            frame = 0,
-                            time = 1f,
-                            lines =
-                                listOf(
-                                    "WELCOME LEVEL=TestMap LONE=0",
-                                    "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=First FLAGS=1 SIZE=100 GEN=1 FNAME=First.u",
-                                ),
-                        ),
+                    controlRecord(
+                        1f,
+                        "WELCOME LEVEL=TestMap LONE=0",
+                        "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PKG=First FLAGS=1 SIZE=100 GEN=1 FNAME=First.u",
                     )
 
                 val demo = UtDemo.read(bytes)
@@ -473,31 +358,23 @@ class UtDemoTest :
                 demo.cap shouldBe null
             }
 
-            // Cap evidence, markers only: a demo carrying a spawn marker and a cap marker of the same id, and no
-            // broadcast line, yields a cap all the same - the id and the demo time come from the cap marker, the run
-            // time is the gap between the two markers, and the capper is null because nothing names anybody.
             test("markers only") {
-                val bytes = demoCapBytes(btSpawn(2.5f, "CAPID1"), btCapMarker(77f, "CAPID1"))
+                val bytes = capDemo(btSpawn(2.5f, "CAPID1"), btCapMarker(77f, "CAPID1"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = null, id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap evidence, messages only: a demo carrying the finished in and capped! lines and no marker yields a
-            // cap - the capper and the run time come from the text, the demo time comes from the record the capped!
-            // line arrives in, and the id is null.
             test("messages only") {
-                val bytes = demoCapBytes(btFinished(77f, "kleps", "1:14.500", "1/1"), btCapped(77f, "kleps"))
+                val bytes = capDemo(btFinished(77f, "kleps", "1:14.500", "1/1"), btCapped(77f, "kleps"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = "kleps", id = null, runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap evidence, cap marker alone with a reported time: a cap marker with no spawn marker of its id still
-            // yields a cap, with its id and its demo time, and a run time taken from the message that reports one.
             test("cap marker alone with a reported time") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btCapMarker(77f, "CAPID1"),
                         btFinished(77f, "kleps", "1:14.500", "1/1"),
                         btCapped(77f, "kleps"),
@@ -507,39 +384,36 @@ class UtDemoTest :
                     UtDemoCap(capper = "kleps", id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap evidence, cap marker alone with no reported time: the same demo without its finished in line yields
-            // a cap with a null run time, because there is neither a gap to measure nor a time to read.
             test("cap marker alone with no reported time") {
-                val bytes = demoCapBytes(btCapMarker(77f, "CAPID1"), btCapped(77f, "kleps"))
+                val bytes = capDemo(btCapMarker(77f, "CAPID1"), btCapped(77f, "kleps"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = "kleps", id = "CAPID1", runTime = null, demoTime = 77.seconds)
             }
 
-            // Cap evidence, spawn marker alone: a demo that starts a run and never caps it carries a spawn marker and
-            // nothing else, and reads with a null cap.
             test("spawn marker alone") {
-                UtDemo.read(demoCapBytes(btSpawn(2.5f, "CAPID1"))).cap shouldBe null
+                UtDemo.read(capDemo(btSpawn(2.5f, "CAPID1"))).cap shouldBe null
             }
 
-            // Cap evidence, mismatched marker ids: a cap marker whose id differs from the spawn marker's does not pair
-            // with it. The cap carries the cap marker's own id and no gap, so the run time is not measured from a
-            // spawn that belongs to another run.
             test("mismatched marker ids") {
-                val bytes =
-                    demoCapBytes(btSpawn(2.5f, "CAPID1"), btCapMarker(77f, "CAPID2"), btCapped(77f, "kleps"))
+                val bytes = capDemo(btSpawn(2.5f, "CAPID1"), btCapMarker(77f, "CAPID2"), btCapped(77f, "kleps"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = "kleps", id = "CAPID2", runTime = null, demoTime = 77.seconds)
             }
+
+            test("demo time below a millisecond") {
+                val demo = UtDemo.read(capDemo(btCapMarker(0.0625f, "CAPID1")))
+
+                demo.cap shouldBe UtDemoCap(capper = null, id = "CAPID1", runTime = null, demoTime = 62.5.milliseconds)
+                demo.duration shouldBe 62.5.milliseconds
+            }
         }
 
         context("cap capper") {
-            // Cap capper, reported time inside the tolerance: a team run whose only reported time is 40 ms from the
-            // marker gap gives the player that time belongs to as the capper.
             test("reported time inside the tolerance") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btFinished(77f, "kleps", "1:13.000", "1/2"),
                         btFinished(77f, "fierd_1", "1:14.540", "2/2"),
@@ -551,11 +425,9 @@ class UtDemoTest :
                     UtDemoCap(capper = "fierd_1", id = "CAPID1", runTime = 74.54.seconds, demoTime = 77.seconds)
             }
 
-            // Cap capper, reported time outside the tolerance: the same team run with its reported time 60 ms from the
-            // gap leaves the capper null, and the cap still carries its id and its times.
             test("reported time outside the tolerance") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btFinished(77f, "kleps", "1:13.000", "1/2"),
                         btFinished(77f, "fierd_1", "1:14.560", "2/2"),
@@ -567,11 +439,9 @@ class UtDemoTest :
                     UtDemoCap(capper = null, id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap capper, closest time wins: a team run whose two reported times are 10 ms and 30 ms from the gap
-            // gives the 10 ms player as the capper.
             test("closest time wins") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btFinished(77f, "kleps", "1:14.530", "1/2"),
                         btFinished(77f, "fierd_1", "1:14.510", "2/2"),
@@ -583,11 +453,9 @@ class UtDemoTest :
                     UtDemoCap(capper = "fierd_1", id = "CAPID1", runTime = 74.51.seconds, demoTime = 77.seconds)
             }
 
-            // Cap capper, exact tie: a team run whose two reported times are the same distance either side of the gap
-            // leaves the capper null.
             test("exact tie") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btFinished(77f, "kleps", "1:14.480", "1/2"),
                         btFinished(77f, "fierd_1", "1:14.520", "2/2"),
@@ -599,25 +467,15 @@ class UtDemoTest :
                     UtDemoCap(capper = null, id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap capper, one name: a capped! line naming exactly one player gives that player as the capper when no
-            // line reports a time, because a solo run leaves one candidate and nothing to guess between.
             test("one name") {
-                val bytes =
-                    demoCapBytes(btSpawn(2.5f, "CAPID1"), btCapped(77f, "kleps"), btCapMarker(77f, "CAPID1"))
+                val bytes = capDemo(btSpawn(2.5f, "CAPID1"), btCapped(77f, "kleps"), btCapMarker(77f, "CAPID1"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = "kleps", id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap capper, no reported time: a capped! line naming two players, with no finished in line anywhere in
-            // the demo, gives a cap with a null capper.
             test("no reported time") {
-                val bytes =
-                    demoCapBytes(
-                        btSpawn(2.5f, "CAPID1"),
-                        btCapped(77f, "kleps", "fierd_1"),
-                        btCapMarker(77f, "CAPID1"),
-                    )
+                val bytes = capDemo(btSpawn(2.5f, "CAPID1"), btCapped(77f, "kleps", "fierd_1"), btCapMarker(77f, "CAPID1"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = null, id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
@@ -625,11 +483,9 @@ class UtDemoTest :
         }
 
         context("cap selection") {
-            // Cap selection, first cap: a demo carrying a whole cap and then a second whole cap, of another id and
-            // another name, reads to the first - what follows a cap is the next round starting.
             test("first cap") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btCapped(77f, "kleps"),
                         btCapMarker(77f, "CAPID1"),
@@ -642,11 +498,9 @@ class UtDemoTest :
                     UtDemoCap(capper = "kleps", id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap selection, repeated evidence: a demo carrying the same cap marker and the same capped! line twice,
-            // in two records at two different times, reads to the earlier time.
             test("repeated evidence") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btCapMarker(77f, "CAPID1"),
                         btCapped(77f, "kleps"),
@@ -658,11 +512,8 @@ class UtDemoTest :
                     UtDemoCap(capper = "kleps", id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap selection, marker before broadcast: a demo whose cap marker arrives a second before its capped! line
-            // takes its demo time from the marker, not from the broadcast that follows it.
             test("marker before broadcast") {
-                val bytes =
-                    demoCapBytes(btSpawn(2.5f, "CAPID1"), btCapMarker(77f, "CAPID1"), btCapped(78f, "kleps"))
+                val bytes = capDemo(btSpawn(2.5f, "CAPID1"), btCapMarker(77f, "CAPID1"), btCapped(78f, "kleps"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = "kleps", id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
@@ -670,11 +521,9 @@ class UtDemoTest :
         }
 
         context("cap text") {
-            // Cap text, bit offset: a demo whose cap lines sit at a bit offset inside their bunch, rather than on a
-            // byte boundary, reads to the same cap as one whose lines are byte aligned.
             test("bit offset") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btCapped(77f, "kleps"),
                         btCapMarker(77f, "CAPID1"),
@@ -685,36 +534,29 @@ class UtDemoTest :
                     UtDemoCap(capper = "kleps", id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap text, length check: a demo carrying a cap-shaped run of printable text whose preceding compact-index
-            // byte is not its own length reads with a null cap, so no cap is invented out of raw data.
             test("length check") {
                 val text = "kleps and fierd_1 capped! Red team scores!"
                 val payload = byteArrayOf(0) + text.toByteArray(Charsets.ISO_8859_1) + byteArrayOf(0)
                 val bytes =
-                    demoBytes(
-                        demoControlRecord(frame = 0, time = 0f, lines = listOf("WELCOME LEVEL=TestMap LONE=0")),
-                        demoRawRecord(frame = 1, time = 77f, bunches = listOf(GAME_CHANNEL to payload)),
+                    demo(
+                        controlRecord(0f, "WELCOME LEVEL=TestMap LONE=0"),
+                        record(77f, packet { bunch(1, payload) }),
                     )
 
                 UtDemo.read(bytes).cap shouldBe null
             }
 
-            // Cap text, name encoding: a capper whose name carries a byte above 0x7F yields a cap, and the capper
-            // reads back with that character intact.
             test("name encoding") {
-                val name = "fi\u00E9rd_1"
-                val bytes =
-                    demoCapBytes(btSpawn(2.5f, "CAPID1"), btCapped(77f, name), btCapMarker(77f, "CAPID1"))
+                val name = "fiérd_1"
+                val bytes = capDemo(btSpawn(2.5f, "CAPID1"), btCapped(77f, name), btCapMarker(77f, "CAPID1"))
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = name, id = "CAPID1", runTime = 74.5.seconds, demoTime = 77.seconds)
             }
 
-            // Cap text, seconds only time format: a run under a minute reports its time as SS.mmm rather than
-            // M:SS.mmm, and the run time reads back from it.
             test("seconds only time format") {
                 val bytes =
-                    demoCapBytes(
+                    capDemo(
                         btSpawn(2.5f, "CAPID1"),
                         btFinished(57f, "kleps", "53.000", "1/2"),
                         btFinished(57f, "fierd_1", "54.500", "2/2"),

@@ -9,17 +9,20 @@ import kotlin.io.path.exists
  * A materialized Unreal Tournament installation, reached through the directories, the executable and the compiler it
  * holds.
  *
+ * Use [UtInstaller] to materialize one, [instance] to run it, and [compiler] to compile against it.
+ *
  * @property directory The root of the installation.
  * @property workspace The workspace anything the installation runs uses for its tasks.
+ * @throws IllegalStateException if [directory] or the game executable it holds does not exist.
  */
 class UtInstallation(
     val directory: Path,
     private val workspace: Workspace = Workspace.DEFAULT,
 ) {
     /**
-     * The UT installation platform.
+     * The platform the installation runs on.
      */
-    val platform = UT_PLATFORM
+    val platform = UtPlatform.current()
 
     /**
      * The directory holding the executables, the configuration and the compiled packages.
@@ -27,7 +30,7 @@ class UtInstallation(
     val systemDirectory = directory[UtDirectory.System]
 
     /**
-     * The UT installation executable. Sits in the system directory, next to the compiler, not at the root.
+     * The game executable.
      */
     val executablePath = systemDirectory[platform.gameExecutable]
 
@@ -42,11 +45,14 @@ class UtInstallation(
     val userIniPath = systemDirectory[USER_INI]
 
     /**
-     * The UT compiler utility.
+     * The default configuration the compiler seeds a compile from.
      */
-    val compiler by lazy {
-        UtCompiler(systemDirectory[platform.compilerExecutable], workspace)
-    }
+    val defaultIniPath: Path = systemDirectory[DEFAULT_INI]
+
+    /**
+     * The UCC utility of this installation.
+     */
+    val compiler: UtCompiler by lazy { UtCompiler(this, workspace) }
 
     init {
         check(directory.exists()) { "UT installation directory not found at $directory" }
@@ -59,16 +65,15 @@ class UtInstallation(
      */
     fun instance(
         name: String,
-        configure: UtInstanceBuilder.() -> Unit = {},
-    ): UtInstance = UtInstanceBuilder(this, name).apply(configure).build()
+        configure: UtInstance.Builder.() -> Unit = {},
+    ): UtInstance = UtInstance.Builder(this, name).apply(configure).build()
 
     /**
-     * Returns the packages [directory] holds: every regular file directly in it whose extension is the one the
-     * directory declares, compared ignoring case. A directory that is not there, and one that declares no extension,
-     * hold no packages. The GUID of each is read only when it is asked for.
+     * Returns the packages [packageDirectory] of this installation holds, matched by the extension it declares. Empty
+     * for a directory that does not exist or declares no extension.
      */
-    fun packages(directory: UtDirectory): List<UtPackage> =
-        directory.extension?.let { packagesIn(this.directory[directory], it) } ?: emptyList()
+    fun packages(packageDirectory: UtDirectory): List<UtPackage> =
+        UtPackage.list(directory[packageDirectory], setOfNotNull(packageDirectory.extension))
 
     companion object {
         /**
@@ -80,5 +85,10 @@ class UtInstallation(
          * The name of the user configuration of an installation.
          */
         private const val USER_INI = "User.ini"
+
+        /**
+         * The name of the default configuration of an installation.
+         */
+        private const val DEFAULT_INI = "Default.ini"
     }
 }

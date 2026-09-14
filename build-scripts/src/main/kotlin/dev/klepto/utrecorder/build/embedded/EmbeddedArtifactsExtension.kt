@@ -4,8 +4,7 @@ import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.provider.Property
 
 /**
- * The name the index of a namespace takes. Mirrors `EmbeddedArtifacts.INDEX`, which the build cannot reach - the
- * module holding it is built by this build, not by the build that runs these plugins.
+ * The file name the index of a namespace takes. Mirrors `EmbeddedArtifacts.INDEX` in `utrecorder-common`.
  */
 const val EMBEDDED_ARTIFACT_INDEX = "index"
 

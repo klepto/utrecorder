@@ -1,5 +1,5 @@
-import dev.klepto.utrecorder.build.createFromLayout
 import dev.klepto.utrecorder.build.embedded.EmbeddedArtifactsExtension
+import dev.klepto.utrecorder.build.registerLayoutTasks
 import dev.klepto.utrecorder.build.uscript.CompileUscriptTask
 import dev.klepto.utrecorder.build.uscript.UCC_SERVICE
 import dev.klepto.utrecorder.build.uscript.UccService
@@ -8,18 +8,13 @@ import org.gradle.api.attributes.Bundling
 import org.gradle.api.attributes.Category
 import org.gradle.api.attributes.LibraryElements
 import org.gradle.api.attributes.Usage
-import org.gradle.language.base.plugins.LifecycleBasePlugin
 
 plugins {
     `java-library`
     id("utrecorder.embedded-artifacts")
 }
 
-/**
- * The project holding the compiler this plugin forks. Named by path rather than taken as a dependency, because the
- * build that compiles this plugin cannot see the build that holds the project.
- */
-val compilerProject = ":utrecorder-ut99"
+val COMPILER_PROJECT = ":utrecorder-ut99"
 
 val embeddedArtifacts = extensions.getByType<EmbeddedArtifactsExtension>()
 embeddedArtifacts.namespace.convention("unrealscript")
@@ -51,7 +46,7 @@ val unrealScriptCompilerClasspath =
     }
 
 dependencies {
-    unrealScriptCompiler.name(project(compilerProject))
+    unrealScriptCompiler.name(project(COMPILER_PROJECT))
 }
 
 // The version the compiler defaults to is compiled into the jar, so the classpath already invalidates on a bump. An
@@ -61,40 +56,26 @@ val patchVersionOverride =
         .systemProperty("utrecorder.patch_version")
         .orElse(providers.environmentVariable("UTRECORDER_PATCH_VERSION"))
 
-tasks.register("compileUscript") {
-    group = LifecycleBasePlugin.BUILD_GROUP
-    description = "Compiles every UnrealScript package of this module."
+registerLayoutTasks(
+    elements = unrealScript.packages,
+    sourceDirectory = unrealScript.sourceDirectory.get(),
+    taskName = "compileUscript",
+    description = "Compiles every UnrealScript package of this module.",
+    taskType = CompileUscriptTask::class,
+    outputDirectory = { it.outputDirectory },
+) { uscriptPackage ->
+    description = "Compiles the ${uscriptPackage.name} UnrealScript package into ${uscriptPackage.name}.u."
 
-    dependsOn(tasks.withType<CompileUscriptTask>())
-}
+    sources = uscriptPackage.sources.convention(unrealScript.sourceDirectory.dir(uscriptPackage.name))
+    packageName = uscriptPackage.name
+    editPackages = uscriptPackage.editPackages
+    patchVersion = patchVersionOverride
 
-unrealScript.packages.createFromLayout(unrealScript.sourceDirectory.get())
+    usesService(uccService)
+    compilerClasspath.from(unrealScriptCompilerClasspath)
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    homeDirectory = unrealScript.homeDirectory
 
-// A task property shadows an enclosing local of the same name, so the locals a task is configured from are named
-// apart from the properties they feed. Sharing a name self-assigns the property and fails as a circular reference.
-unrealScript.packages.all {
-    val uscriptPackage = name
-    val uscriptSources = sources.convention(unrealScript.sourceDirectory.dir(uscriptPackage))
-    val uscriptEditPackages = editPackages
-
-    val compileTask =
-        tasks.register<CompileUscriptTask>("compileUscript${uscriptPackage.replaceFirstChar(Char::uppercaseChar)}") {
-            group = LifecycleBasePlugin.BUILD_GROUP
-            description = "Compiles the $uscriptPackage UnrealScript package into $uscriptPackage.u."
-
-            sources = uscriptSources
-            packageName = uscriptPackage
-            editPackages = uscriptEditPackages
-            patchVersion = patchVersionOverride
-
-            usesService(uccService)
-            compilerClasspath.from(unrealScriptCompilerClasspath)
-            javaLauncher = javaToolchains.launcherFor(java.toolchain)
-            homeDirectory = unrealScript.homeDirectory
-
-            outputDirectory = layout.buildDirectory.dir("uscript/$uscriptPackage")
-            logDirectory = layout.buildDirectory.dir("uscript-logs/$uscriptPackage")
-        }
-
-    embeddedArtifacts.artifacts.from(compileTask.flatMap { it.outputDirectory })
+    outputDirectory = layout.buildDirectory.dir("uscript/${uscriptPackage.name}")
+    logDirectory = layout.buildDirectory.dir("uscript-logs/${uscriptPackage.name}")
 }

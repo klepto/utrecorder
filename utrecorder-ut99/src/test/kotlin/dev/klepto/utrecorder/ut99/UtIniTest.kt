@@ -201,7 +201,7 @@ class UtIniTest :
 
                 path.readBytes() shouldBe text.toByteArray(Charsets.ISO_8859_1)
                 UtIni.read(path).toString() shouldBe text
-                path.readText(Charsets.ISO_8859_1) shouldBe text
+                path.readText(UtPlatform.CHARSET) shouldBe text
             }
         }
     })

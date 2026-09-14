@@ -1,29 +1,47 @@
 package dev.klepto.utrecorder.ut99
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import java.io.IOException
+import java.nio.file.Path
+import kotlin.io.path.createDirectories
 import kotlin.io.path.createParentDirectories
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.deleteExisting
 import kotlin.io.path.div
+import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 
-/**
- * Tests for [UtPackage] and the packages [packagesIn] lists.
- *
- * The package files the tests read are written by [writePackage].
- */
 class UtPackageTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utpackage-test")
 
         afterSpec { root.toFile().deleteRecursively() }
 
+        val guid = "123456789ABCDEF0876543210BADF00D"
+        val otherGuid = "11111111222222223333333344444444"
+        val guidHeaderBytes = listOf(0x78, 0x56, 0x34, 0x12, 0xF0, 0xDE, 0xBC, 0x9A, 0x21, 0x43, 0x65, 0x87, 0x0D, 0xF0, 0xAD, 0x0B)
+        val otherGuidHeaderBytes = listOf(0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22, 0x33, 0x33, 0x33, 0x33, 0x44, 0x44, 0x44, 0x44)
+
+        fun writePackage(
+            path: Path,
+            guidBytes: List<Int> = guidHeaderBytes,
+        ): Path {
+            val header = ByteArray(64)
+            listOf(0xC1, 0x83, 0x2A, 0x9E, 0x44, 0x00, 0x00, 0x00).forEachIndexed { index, value -> header[index] = value.toByte() }
+            guidBytes.forEachIndexed { index, value -> header[36 + index] = value.toByte() }
+            path.createParentDirectories()
+            path.writeBytes(header)
+            return path
+        }
+
         test("named gives a package with that name and GUID, and a null path") {
-            val required = UtPackage.named("Engine", GUID)
+            val required = UtPackage.named("Engine", guid)
 
             required.name shouldBe "Engine"
-            required.guid shouldBe GUID
+            required.guid shouldBe guid
             required.path shouldBe null
         }
 
@@ -39,7 +57,7 @@ class UtPackageTest :
         test("read on a package file gives the GUID its header holds") {
             val path = writePackage(root / "read-guid" / "Engine.u")
 
-            UtPackage.read(path).guid shouldBe GUID
+            UtPackage.read(path).guid shouldBe guid
         }
 
         test("read on a file that is not a package gives an empty GUID") {
@@ -59,18 +77,26 @@ class UtPackageTest :
             held.path shouldBe path
         }
 
-        test("satisfies is true when the names differ only by case and the GUIDs differ only by case") {
-            val held = UtPackage.named("engine", GUID.lowercase())
+        test("guid of a package whose file was deleted after it was read throws IOException") {
+            val path = writePackage(root / "read-deleted" / "Engine.u")
+            val held = UtPackage.read(path)
+            path.deleteExisting()
 
-            held.satisfies(UtPackage.named("Engine", GUID)) shouldBe true
+            shouldThrow<IOException> { held.guid }
+        }
+
+        test("satisfies is true when the names differ only by case and the GUIDs differ only by case") {
+            val held = UtPackage.named("engine", guid.lowercase())
+
+            held.satisfies(UtPackage.named("Engine", guid)) shouldBe true
         }
 
         test("satisfies is false when the names differ") {
-            UtPackage.named("Engine", GUID).satisfies(UtPackage.named("Core", GUID)) shouldBe false
+            UtPackage.named("Engine", guid).satisfies(UtPackage.named("Core", guid)) shouldBe false
         }
 
         test("satisfies is false when the names match and the GUIDs differ") {
-            UtPackage.named("Engine", GUID).satisfies(UtPackage.named("Engine", OTHER_GUID)) shouldBe false
+            UtPackage.named("Engine", guid).satisfies(UtPackage.named("Engine", otherGuid)) shouldBe false
         }
 
         test("satisfies is true for any package of that name when the required package carries an empty GUID") {
@@ -79,18 +105,18 @@ class UtPackageTest :
 
             held.satisfies(UtPackage.named("Engine", "")) shouldBe true
 
-            writePackage(path, OTHER_GUID_HEADER_BYTES)
-            held.guid shouldBe OTHER_GUID
+            writePackage(path, otherGuidHeaderBytes)
+            held.guid shouldBe otherGuid
         }
 
         test("packages of the same name and path are equal and share a hash code even when their GUIDs differ") {
             val path = writePackage(root / "equals-guid" / "Engine.u")
             val first = UtPackage.read(path)
-            first.guid shouldBe GUID
+            first.guid shouldBe guid
 
-            writePackage(path, OTHER_GUID_HEADER_BYTES)
+            writePackage(path, otherGuidHeaderBytes)
             val second = UtPackage.read(path)
-            second.guid shouldBe OTHER_GUID
+            second.guid shouldBe otherGuid
 
             first shouldBe second
             first.hashCode() shouldBe second.hashCode()
@@ -104,8 +130,8 @@ class UtPackageTest :
             first shouldBe second
             first.hashCode() shouldBe second.hashCode()
 
-            writePackage(path, OTHER_GUID_HEADER_BYTES)
-            first.guid shouldBe OTHER_GUID
+            writePackage(path, otherGuidHeaderBytes)
+            first.guid shouldBe otherGuid
         }
 
         test("packages of the same name at different paths are not equal") {
@@ -119,19 +145,22 @@ class UtPackageTest :
             val path = writePackage(root / "to-string" / "Engine.u")
 
             UtPackage.read(path).toString() shouldBe "Engine[12345678] at $path"
-            UtPackage.named("Engine", GUID).toString() shouldBe "Engine[12345678]"
+            UtPackage.named("Engine", guid).toString() shouldBe "Engine[12345678]"
         }
 
-        test("packagesIn with no extension lists every package extension of one directory and skips everything else") {
-            val directory = root / "packages-in"
-            val packageNames = listOf("Engine.u", "CTF-BT-II.unr", "Skins.utx", "Ambient.uax", "Track.umx")
-            packageNames.forEach { writePackage(directory / it) }
-            (directory / "Notes.txt").writeText("not a package")
-            (directory / "Engine.uz").writeText("a compressed package is not one")
-            (directory / "Cache" / "Engine.u").let { writePackage(it) }
+        test("list lists the regular files directly in a directory whose extension is in the set, ignoring case") {
+            val directory = root / "list"
+            directory.createDirectories()
+            listOf("Engine.u", "BTPog.U", "CTF-BT-II.unr", "Skins.utx", "Notes.txt").forEach { (directory / it).writeText("") }
+            (directory / "Cache.u").createDirectories()
+            (directory / "Cache.u" / "Nested.u").writeText("")
 
-            val found = packagesIn(directory)
+            val found = UtPackage.list(directory, setOf("u", "unr"))
 
-            found.map { it.path?.fileName.toString() }.toSet() shouldBe packageNames.toSet()
+            found.map { "${it.path?.fileName}" }.toSet() shouldBe setOf("Engine.u", "BTPog.U", "CTF-BT-II.unr")
+        }
+
+        test("list of a directory that does not exist is empty") {
+            UtPackage.list(root / "list-missing", setOf("u")) shouldBe emptyList()
         }
     })

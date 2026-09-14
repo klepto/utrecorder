@@ -2,65 +2,54 @@ package dev.klepto.utrecorder.common.io
 
 import dev.klepto.utrecorder.common.log.logger
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.onDownload
-import io.ktor.client.request.head
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.contentLength
-import io.ktor.http.isSuccess
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.copyAndClose
 import io.ktor.utils.io.streams.asByteWriteChannel
 import java.io.IOException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
-import kotlin.io.path.createDirectories
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.exists
 import kotlin.io.path.fileSize
 import kotlin.io.path.outputStream
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.minutes
-import kotlin.time.Duration.Companion.seconds
+
+/**
+ * A callback receiving download progress: the bytes [received] so far and the [total] size, `-1` when unknown.
+ */
+typealias DownloadListener = (received: Long, total: Long) -> Unit
 
 /**
  * A file fetched over HTTP, verified against a hash and written out only once it is complete.
  *
- * Use [download] to fetch it.
+ * Construct one per URL, then call [download] to write the file to a path.
  *
  * @property url The URL of the file to download.
- * @param hash The hash of the file to download.
- * @property algorithm The hash algorithm name to use for checking the downloaded file (e.g. "md5", "sha-256")
+ * @property hash The expected hash of the file, compared case-insensitively, or `null` to skip verification.
+ * @property algorithm The hash algorithm name to use for checking the downloaded file (e.g. "md5", "sha-256").
  * @property timeout The maximum time to wait between reads before the connection is considered stalled.
  */
 class Downloader(
     private val url: String,
-    hash: String? = null,
+    private val hash: String? = null,
     private val algorithm: String = "md5",
-    private val timeout: Duration = SOCKET_TIMEOUT,
+    private val timeout: Duration = HTTP_SOCKET_TIMEOUT,
 ) {
-    /**
-     * Normalized hash value for comparison.
-     */
     private val normalizedHash: String? = hash?.lowercase()
 
     /**
-     * Starts the download. This method blocks until the download is complete or failure is reached.
-     * Supports progress reporting via [listener] callback.
-     *
-     * @param outputPath Path to the output file.
-     * @param listener Callback invoked on download progress. The first argument is the number of bytes received so
-     * far. The second argument is the total size of the file, `-1` if unknown.
+     * Fetch of the file into [outputPath], blocking until it completes. A file already at [outputPath] that matches
+     * the hash, or the size the server reports when there is no hash, is kept and reported to [listener] as complete.
      *
      * @throws HashMismatchException if the downloaded file hash does not match the expected value.
      */
     fun download(
         outputPath: Path,
-        listener: ((Long, Long) -> Unit)? = null,
+        listener: DownloadListener? = null,
     ) {
         if (isUpToDate(outputPath)) {
             reportDownloaded(outputPath, listener)
@@ -79,20 +68,11 @@ class Downloader(
     }
 
     /**
-     * Returns `true` when the URL this downloader fetches answers a request. A failure of any kind — a refused
-     * connection, a timeout, a status other than success — is `false`.
-     */
-    fun exists(): Boolean =
-        runCatching {
-            createHttpClient().useBlocking { head(url).status.isSuccess() }
-        }.getOrDefault(false)
-
-    /**
      * Reports the file already held by [outputPath] to [listener] as a download that is complete.
      */
     private fun reportDownloaded(
         outputPath: Path,
-        listener: ((Long, Long) -> Unit)?,
+        listener: DownloadListener?,
     ) {
         log.debug { "File $outputPath was already downloaded" }
         val size = outputPath.fileSize()
@@ -104,11 +84,11 @@ class Downloader(
      */
     private fun fetch(
         target: Path,
-        listener: ((Long, Long) -> Unit)?,
+        listener: DownloadListener?,
     ) {
         target.outputStream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
             val channel = output.asByteWriteChannel()
-            createHttpClient().useBlocking { copyTo(channel, listener) }
+            useHttpClient(timeout) { copyTo(channel, listener) }
         }
     }
 
@@ -117,7 +97,7 @@ class Downloader(
      */
     private suspend fun HttpClient.copyTo(
         channel: ByteWriteChannel,
-        listener: ((Long, Long) -> Unit)?,
+        listener: DownloadListener?,
     ) = prepareGet(url) {
         listener?.apply { onDownload { received, total -> this(received, total ?: -1) } }
     }.execute { response: HttpResponse ->
@@ -137,10 +117,8 @@ class Downloader(
     }
 
     /**
-     * Returns `true` when [outputPath] already holds the file this downloader would fetch.
-     *
-     * A configured hash is authoritative. Without one the local size is compared against the size the server reports,
-     * which catches the truncated and half-written files.
+     * Returns `true` when [outputPath] already holds the file this downloader would fetch: its hash matches, or without
+     * a hash, its size matches the size the server reports.
      */
     private fun isUpToDate(outputPath: Path): Boolean {
         if (!outputPath.exists()) return false
@@ -151,48 +129,20 @@ class Downloader(
     }
 
     /**
-     * Returns the file size reported in the HTTP headers, or `null` when it's not available.
+     * The size the server reports for the file, or `null` when it reports none or cannot be asked.
      */
-    private fun remoteSize(): Long? =
-        runCatching {
-            createHttpClient().useBlocking {
-                head(url).contentLength()
-            }
-        }.getOrNull()?.takeIf { it >= 0 }
-
-    /**
-     * Creates a new HTTP client instance.
-     */
-    private fun createHttpClient() =
-        HttpClient(CIO) {
-            expectSuccess = true
-            install(HttpTimeout) {
-                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-                connectTimeoutMillis = CONNECT_TIMEOUT.inWholeMilliseconds
-                socketTimeoutMillis = timeout.inWholeMilliseconds
-            }
-        }
+    private fun remoteSize(): Long? = headCatching(url, timeout).getOrNull()?.takeIf { it >= 0 }
 
     companion object {
-        /**
-         * The time a read may stall before the connection is considered dead.
-         */
-        private val SOCKET_TIMEOUT = 1.minutes
-
-        /**
-         * The time a connection attempt is given before it fails.
-         */
-        private val CONNECT_TIMEOUT = 30.seconds
-
-        /**
-         * Logger for this class.
-         */
         private val log = logger<Downloader>()
     }
 }
 
 /**
- * Thrown when the [url] download file [actual] hash does not match the [expected] hash value.
+ * Failure of [Downloader.download] when the file fetched from a URL does not hash to the expected value.
+ *
+ * @property expected The hash the downloader was given.
+ * @property actual The hash of the file it fetched.
  */
 class HashMismatchException(
     url: String,

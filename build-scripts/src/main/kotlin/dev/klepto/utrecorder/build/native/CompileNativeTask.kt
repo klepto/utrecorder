@@ -41,7 +41,7 @@ abstract class CompileNativeTask : DefaultTask() {
     abstract val binaryName: Property<String>
 
     /**
-     * What the sources compile to.
+     * The kind of binary the sources compile to.
      */
     @get:Input
     abstract val binaryType: Property<NativeBinaryType>
@@ -205,9 +205,6 @@ abstract class CompileNativeTask : DefaultTask() {
         }
 
     companion object {
-        /**
-         * The name the compiler output of a run is written under.
-         */
         private const val COMPILE_LOG = "compile.log"
     }
 }

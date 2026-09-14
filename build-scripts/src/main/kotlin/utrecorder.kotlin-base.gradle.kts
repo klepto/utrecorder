@@ -12,10 +12,7 @@ plugins {
     id("dev.detekt")
 }
 
-/**
- * Name pattern of the tests that run against real external dependencies.
- */
-val integrationTestPattern = "*IntegrationTest"
+val INTEGRATION_TEST_PATTERN = "*IntegrationTest"
 
 kotlin {
     jvmToolchain(javaVersion)
@@ -45,7 +42,7 @@ tasks.withType<Test>().configureEach {
 }
 
 tasks.test {
-    filter.excludeTestsMatching(integrationTestPattern)
+    filter.excludeTestsMatching(INTEGRATION_TEST_PATTERN)
 }
 
 val testSourceSet = the<JavaPluginExtension>().sourceSets["test"]
@@ -57,7 +54,7 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = testSourceSet.output.classesDirs
     classpath = testSourceSet.runtimeClasspath
 
-    filter.includeTestsMatching(integrationTestPattern)
+    filter.includeTestsMatching(INTEGRATION_TEST_PATTERN)
     filter.isFailOnNoMatchingTests = false
     outputs.upToDateWhen { false }
     testLogging.showStandardStreams = true

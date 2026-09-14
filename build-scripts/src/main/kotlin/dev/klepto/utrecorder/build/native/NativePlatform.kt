@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.build.native
 
 /**
- * The kind of binary a native unit compiles to. The compiler flags and the file name both follow from it.
+ * The kind of binary a native unit compiles to.
  */
 enum class NativeBinaryType {
     SHARED_LIBRARY,
@@ -27,7 +27,7 @@ enum class NativePlatform(
     ;
 
     /**
-     * Whether this platform is Windows, which decides the toolchain and the compiler flags.
+     * `true` for [WINDOWS_X86].
      */
     val isWindows: Boolean get() = this == WINDOWS_X86
 

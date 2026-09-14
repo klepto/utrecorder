@@ -1,27 +1,33 @@
 package dev.klepto.utrecorder.common.config
 
+import kotlin.time.Duration
+
 /**
- * A reader of configuration values, backed by the system properties and by the environment.
+ * A reader of configuration values, backed by a lookup of properties and a lookup of environment variables.
  *
- * Use [DEFAULT] for the source the current process reads from.
+ * Use [DEFAULT] for the source that reads the system properties and the environment of the current process.
  *
  * @property prefix The prefix every key is read under.
+ * @property properties The lookup of property values by name.
+ * @property environment The lookup of environment variable values by name.
  */
 class PropertySource(
     private val prefix: String = APPLICATION_PREFIX,
+    private val properties: (String) -> String? = System::getProperty,
+    private val environment: (String) -> String? = System::getenv,
 ) {
     /**
-     * Returns the value of the given [key], or `null` if neither the system properties nor the environment hold one.
+     * The value of the given [key], or `null` if neither the properties nor the environment hold one.
      *
-     * A dotted [key] reads from an underscored environment variable, since a dot is not a legal character in an
-     * environment variable name on every platform.
+     * The key is read as the property `<prefix>.<key>`, then as the environment variable `<PREFIX>_<KEY>` with every
+     * dot replaced by an underscore. An empty value reads as missing.
      */
     operator fun get(key: String): String? =
-        property("$prefix.$key")
-            ?: environment("${prefix.uppercase()}_${key.uppercase().replace('.', '_')}")
+        systemProperty("$prefix.$key")
+            ?: environmentVariable("${prefix.uppercase()}_${key.uppercase().replace('.', '_')}")
 
     /**
-     * Returns the value of the given [key] read by [mapper], or `null` if it holds none.
+     * The value of the given [key] read by [mapper], or `null` if it holds none.
      */
     fun <T> get(
         key: String,
@@ -29,8 +35,7 @@ class PropertySource(
     ): T? = get(key)?.let(mapper)
 
     /**
-     * Returns the comma-separated values of the given [key], trimmed and without the empty ones, or `null` if it holds
-     * none.
+     * The comma-separated values of the given [key], trimmed and without the empty ones, or `null` if it holds none.
      */
     fun list(key: String): List<String>? =
         get(key)
@@ -40,16 +45,21 @@ class PropertySource(
             ?.takeIf { it.isNotEmpty() }
 
     /**
-     * Returns the value of the given system property [name], or `null` if it holds none. Unprefixed, for the
-     * properties the JVM defines rather than this application.
+     * The duration the given [key] holds in the format [Duration.parse] reads, or `null` if it holds none.
+     *
+     * @throws IllegalArgumentException if the value is not a duration.
      */
-    fun property(name: String): String? = System.getProperty(name)?.takeIf { it.isNotEmpty() }
+    fun duration(key: String): Duration? = get(key, Duration::parse)
 
     /**
-     * Returns the value of the given environment [variable], or `null` if it holds none. Unprefixed, for the variables
-     * the operating system defines rather than this application.
+     * The value of the unprefixed property [name], or `null` if it holds none.
      */
-    fun environment(variable: String): String? = System.getenv(variable)?.takeIf { it.isNotEmpty() }
+    fun systemProperty(name: String): String? = properties(name)?.takeIf { it.isNotEmpty() }
+
+    /**
+     * The value of the unprefixed environment [variable], or `null` if it holds none.
+     */
+    fun environmentVariable(variable: String): String? = environment(variable)?.takeIf { it.isNotEmpty() }
 
     companion object {
         /**

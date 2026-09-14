@@ -17,8 +17,3 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
-
-# Playback.kt holds the playback description together with the builder behind it, rather than the single class
-# the filename rule expects — the same concept-file layout as Marks.kt, which only passes by holding two classes.
-[Playback.kt]
-ktlint_standard_filename = disabled

@@ -11,8 +11,10 @@ complexity:
     allowedDepth: 3
 
 exceptions:
+  # A caught exception is rethrown or wrapped, whatever its variable is named.
   SwallowedException:
     active: true
+    allowedExceptionNameRegex: ''
   TooGenericExceptionCaught:
     active: true
 

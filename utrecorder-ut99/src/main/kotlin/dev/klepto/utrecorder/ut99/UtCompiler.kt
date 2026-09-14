@@ -1,17 +1,16 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.deleteRecursivelyCatching
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
+import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableResult
-import dev.klepto.utrecorder.common.process.executable
 import java.nio.file.Path
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.absolutePathString
-import kotlin.io.path.copyTo
 import kotlin.io.path.copyToRecursively
-import kotlin.io.path.createDirectories
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.exists
@@ -21,43 +20,40 @@ import kotlin.io.path.writeText
 /**
  * The UCC utility of an installation, compiling UnrealScript packages and decompressing `.uz` archives.
  *
- * @property executablePath Path to the UT compiler executable.
+ * Use [UtInstallation.compiler] for the compiler of an installation.
+ *
+ * @property installation The installation the compiler belongs to.
  * @property workspace The workspace a compile runs its task in.
+ * @throws IllegalStateException if [installation] holds no compiler executable.
  */
 class UtCompiler(
-    private val executablePath: Path,
+    private val installation: UtInstallation,
     private val workspace: Workspace = Workspace.DEFAULT,
 ) {
+    /**
+     * The directory holding the compiler executable, where the compiler reads and writes packages.
+     */
+    private val directory: Path = installation.systemDirectory
+
+    /**
+     * The path of the compiler executable.
+     */
+    private val executablePath: Path = directory[installation.platform.compilerExecutable]
+
     init {
         check(executablePath.exists()) { "UT compiler executable not found at $executablePath" }
     }
 
     /**
-     * The directory where the compiler executable is located.
-     */
-    private val directory: Path = executablePath.toAbsolutePath().parent
-
-    /**
-     * The root directory of the UT installation the compiler belongs to. Package sources are resolved against it.
-     */
-    private val rootDirectory: Path = directory.parent
-
-    /**
-     * The compiler executable configured with the necessary environment variables.
-     */
-    private val executable =
-        executable(executablePath.toAbsolutePath()) {
-            workingDirectory = directory
-            prependLibraryPath(directory)
-        }
-
-    /**
      * Runs the compiler with the given [arguments] and returns the result without inspecting its exit code.
      */
     private fun run(vararg arguments: String): ExecutableResult =
-        executable
-            .copy(arguments = arguments.toList() + UT_PLATFORM.homeArguments)
-            .startAndAwait()
+        Executable
+            .build(executablePath.toAbsolutePath()) {
+                workingDirectory = directory
+                prependLibraryPath(directory)
+                this.arguments += arguments.toList() + installation.platform.homeArguments
+            }.startAndAwait()
 
     /**
      * Extracts the `.uz` archive into given [outputPath]. If [outputPath] is not specified, the archive will be
@@ -82,13 +78,11 @@ class UtCompiler(
     /**
      * Compiles the UnrealScript package rooted at [sourcesPath] and copies the resulting package to [outputPath].
      *
-     * The name of [sourcesPath] is the package name, and the directory is expected to hold the `Classes` directory the
-     * compiler reads the sources from. The compiler only resolves packages that sit next to the `System` directory, so
-     * the sources are staged into the installation for the duration of the run and removed afterwards.
+     * The name of [sourcesPath] is the package name, and the directory holds the `Classes` directory the compiler reads
+     * the sources from. The configuration is the default configuration of the installation with [configure] applied on
+     * top of it and the `EditPackages` entry of the compiled package appended last.
      *
-     * The configuration is seeded with the installation defaults, [configure] is applied on top of it so that the
-     * caller can append the packages this one depends on, and the `EditPackages` entry of the compiled package is
-     * appended last. `EditPackages` is ordered, so a package only ever compiles against entries that precede it.
+     * @throws IllegalStateException if [sourcesPath] is not a directory, or if the compiler fails.
      */
     @OptIn(ExperimentalPathApi::class)
     fun make(
@@ -100,7 +94,7 @@ class UtCompiler(
 
         val packageName = sourcesPath.fileName.toString()
         val packageFileName = "$packageName.u"
-        val stagedPath = rootDirectory[packageName]
+        val stagedPath = installation.directory[packageName]
         val producedPath = directory[packageFileName]
 
         return workspace.task("ucc") { taskDirectory ->
@@ -126,16 +120,15 @@ class UtCompiler(
             check(producedPath.exists()) { "UCC failed to compile $packageName, see ${taskDirectory[MAKE_LOG]}" }
             producedPath.move(taskDirectory[packageFileName])
 
-            outputPath.parent?.createDirectories()
-            taskDirectory[packageFileName].copyTo(outputPath, overwrite = true)
+            taskDirectory[packageFileName].copy(outputPath, overwrite = true)
         }
     }
 
     /**
-     * Reads the installation configuration the compiler defaults to.
+     * Reads the default configuration of the installation.
      */
     private fun defaultConfig(): UtIni {
-        val defaultPath = directory[DEFAULT_INI]
+        val defaultPath = installation.defaultIniPath
         check(defaultPath.exists()) { "UT default configuration not found at $defaultPath" }
         return UtIni.read(defaultPath)
     }
@@ -150,11 +143,6 @@ class UtCompiler(
          * The configuration key holding a package the compiler builds.
          */
         const val EDIT_PACKAGES = "EditPackages"
-
-        /**
-         * The name of the installation configuration the compiler defaults to.
-         */
-        private const val DEFAULT_INI = "Default.ini"
 
         /**
          * The name the compiler configuration of a run is written under.

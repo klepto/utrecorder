@@ -1,68 +1,70 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.PropertySource
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 
-/**
- * Tests for [UtConfig.fromProperties] and the directories and system properties it reads.
- */
 class UtConfigTest :
     FunSpec({
         val home = createTempDirectory("utrecorder-utconfig-test")
         val directories = Directories(home)
-        val property = SystemProperties()
 
         afterSpec { home.toFile().deleteRecursively() }
-        afterTest { property.clear() }
+
+        fun properties(vararg properties: Pair<String, String>) =
+            PropertySource(properties = mapOf(*properties)::get, environment = { null })
 
         test("fromProperties derives gameDirectory from the installs directory of the given directories") {
-            UtConfig.fromProperties(directories = directories).gameDirectory shouldBe directories.installs / "ut99"
-        }
-
-        test("fromProperties derives packagesDirectory and cacheDirectory from the given directories") {
-            val config = UtConfig.fromProperties(directories = directories)
-
-            config.packagesDirectory shouldBe directories.packages
-            config.cacheDirectory shouldBe directories.cache
+            UtConfig.fromProperties(properties(), directories).gameDirectory shouldBe directories.installs / "ut99"
         }
 
         test("fromProperties honours iso_url and iso_md5") {
-            property("utrecorder.iso_url", "https://example.test/ut.iso")
-            property("utrecorder.iso_md5", "deadbeef")
+            val properties =
+                properties(
+                    "utrecorder.iso_url" to "https://example.test/ut.iso",
+                    "utrecorder.iso_md5" to "deadbeef",
+                )
 
-            val config = UtConfig.fromProperties(directories = directories)
+            val config = UtConfig.fromProperties(properties, directories)
             config.isoUrl shouldBe "https://example.test/ut.iso"
             config.isoMd5 shouldBe "deadbeef"
         }
 
         test("fromProperties honours patch_url and patch_version") {
-            property("utrecorder.patch_url", "https://example.test/patches")
-            property("utrecorder.patch_version", "999z")
+            val properties =
+                properties(
+                    "utrecorder.patch_url" to "https://example.test/patches",
+                    "utrecorder.patch_version" to "999z",
+                )
 
-            val config = UtConfig.fromProperties(directories = directories)
+            val config = UtConfig.fromProperties(properties, directories)
             config.patchUrl shouldBe "https://example.test/patches"
             config.patchVersion shouldBe "999z"
         }
 
         test("patchFileName follows OldUnreal's naming convention for the current platform") {
-            val config = UtConfig.fromProperties(directories = directories)
-            val platformSuffix = if (UT_PLATFORM == UtPlatform.WINDOWS) "Windows-x86.zip" else "Linux-x86.tar.bz2"
+            val config = UtConfig.fromProperties(properties(), directories)
+            val platformSuffix =
+                when (UtPlatform.current()) {
+                    UtPlatform.WINDOWS -> "Windows-x86.zip"
+                    UtPlatform.LINUX -> "Linux-x86.tar.bz2"
+                }
 
-            config.patchFileName shouldBe "OldUnreal-UTPatch${config.patchVersion}-$platformSuffix"
+            config.patchFileName shouldBe "OldUnreal-UTPatch469e-$platformSuffix"
         }
 
         test("fromProperties reads redirect_urls as a comma-separated list") {
-            property("utrecorder.redirect_urls", " http://one.test , http://two.test ")
+            val properties = properties("utrecorder.redirect_urls" to " http://one.test , http://two.test ")
 
-            val config = UtConfig.fromProperties(directories = directories)
+            val config = UtConfig.fromProperties(properties, directories)
             config.redirectUrls shouldBe listOf("http://one.test", "http://two.test")
         }
 
         test("redirectUrls defaults to the two redirects when redirect_urls is unset") {
-            val config = UtConfig.fromProperties(directories = directories)
+            val config = UtConfig.fromProperties(properties(), directories)
 
             config.redirectUrls shouldBe listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com")
         }

@@ -1,162 +1,204 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.process.Executable
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import java.nio.file.Path
+import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.exists
+import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.writeText
+import kotlin.time.Duration.Companion.days
 
-/**
- * Tests for [UtCompiler.make] against a fake UCC executable, since a real compile is out of scope for a unit test.
- */
 class UtCompilerTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utcompiler-test")
-        val sourcesRoot = root / "sources"
-        val tasksDirectory = root / "tasks"
+        val platform = UtPlatform.current()
+        val compilerName =
+            when (platform) {
+                UtPlatform.WINDOWS -> "UCC.exe"
+                UtPlatform.LINUX -> "ucc-bin"
+            }
 
         afterSpec { root.toFile().deleteRecursively() }
 
-        /**
-         * Writes a fake UCC executable under `<installRoot>/System` that emits some output, and either touches
-         * `<package>.u` next to itself and exits successfully, or exits with a failure code without producing anything.
-         */
-        fun createFakeInstall(
-            name: String,
-            succeed: Boolean,
-        ): Path {
-            val systemDirectory = root / name / "System"
-            systemDirectory.createDirectories()
-            (systemDirectory / "Default.ini").writeText(
-                "[Editor.EditorEngine]\nEditPackages=Core",
-            )
+        val fakeCompilerScript =
+            """
+            #!/bin/sh
+            DIRECTORY=${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)
+            echo "FAKE UCC: compiling"
+            if [ -f "${'$'}DIRECTORY/ucc.fail" ]; then
+                echo "FAKE UCC: simulated failure"
+                exit 3
+            fi
+            for ARGUMENT in "${'$'}@"; do
+                case "${'$'}ARGUMENT" in
+                    -packages=*) touch "${'$'}DIRECTORY/${'$'}{ARGUMENT#-packages=}.u" ;;
+                esac
+            done
+            exit 0
+            """.trimIndent()
 
-            val windows = UT_PLATFORM == UtPlatform.WINDOWS
-            val scriptPath = systemDirectory / if (windows) "UCC.bat" else "ucc-bin"
-            val script =
-                if (windows) {
-                    if (succeed) {
-                        """
-                        @echo off
-                        echo FAKE UCC: compiling
-                        set PKG=%~5
-                        type nul > "%~dp0%PKG%.u"
-                        exit /b 0
-                        """.trimIndent()
-                    } else {
-                        """
-                        @echo off
-                        echo FAKE UCC: simulated failure
-                        exit /b 3
-                        """.trimIndent()
+        val fakeCompilerSource =
+            """
+            using System;
+            using System.IO;
+
+            class FakeUcc
+            {
+                static int Main(string[] arguments)
+                {
+                    string directory = AppDomain.CurrentDomain.BaseDirectory;
+                    Console.WriteLine("FAKE UCC: compiling");
+                    if (File.Exists(Path.Combine(directory, "ucc.fail")))
+                    {
+                        Console.WriteLine("FAKE UCC: simulated failure");
+                        return 3;
                     }
-                } else {
-                    if (succeed) {
-                        """
-                        #!/bin/sh
-                        echo "FAKE UCC: compiling"
-                        PKGARG=${'$'}4
-                        PKG=${'$'}{PKGARG#-packages=}
-                        DIR=$(cd "$(dirname "${'$'}0")" && pwd)
-                        touch "${'$'}DIR/${'$'}PKG.u"
-                        exit 0
-                        """.trimIndent()
-                    } else {
-                        """
-                        #!/bin/sh
-                        echo "FAKE UCC: simulated failure"
-                        exit 3
-                        """.trimIndent()
+
+                    foreach (string argument in arguments)
+                    {
+                        if (argument.StartsWith("-packages="))
+                        {
+                            File.WriteAllText(Path.Combine(directory, argument.Substring(10) + ".u"), "");
+                        }
                     }
+                    return 0;
                 }
-            scriptPath.writeText(script)
-            if (!windows) scriptPath.toFile().setExecutable(true)
-            return scriptPath
+            }
+            """.trimIndent()
+
+        fun csharpCompiler(): Path {
+            val frameworks = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "Microsoft.NET")
+            val candidates = listOf("Framework64", "Framework").map { frameworks / it / "v4.0.30319" / "csc.exe" }
+            return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
         }
 
-        val okScript = createFakeInstall("ok-install", succeed = true)
-        val failScript = createFakeInstall("fail-install", succeed = false)
+        fun fakeCompiler(directory: Path): Path {
+            directory.createDirectories()
+            val binary = directory / compilerName
+            if (platform != UtPlatform.WINDOWS) {
+                binary.writeText(fakeCompilerScript)
+                return binary
+            }
+
+            val source = directory / "FakeUcc.cs"
+            source.writeText(fakeCompilerSource)
+            Executable
+                .build(csharpCompiler()) {
+                    arguments += listOf("-nologo", "-target:exe", "-out:$binary", "$source")
+                }.startAndAwait()
+                .orThrow()
+            return binary
+        }
+
+        val fakeCompiler by lazy { fakeCompiler(root / "fake-ucc") }
+
+        fun installation(
+            name: String,
+            keep: Boolean = false,
+            compiler: Boolean = true,
+            fails: Boolean = false,
+        ): UtInstallation {
+            val systemDirectory = root / name / "System"
+            systemDirectory.createDirectories()
+            (systemDirectory / platform.gameExecutable).writeText("")
+            (systemDirectory / "Default.ini").writeText("[Editor.EditorEngine]\nEditPackages=Core")
+            if (compiler) {
+                val target = fakeCompiler.copyTo(systemDirectory / compilerName)
+                target.toFile().setExecutable(true)
+            }
+            if (fails) {
+                (systemDirectory / "ucc.fail").writeText("")
+            }
+            return UtInstallation(root / name, Workspace(root / "$name-tasks", keep = keep, retention = 7.days))
+        }
+
+        fun sources(packageName: String): Path {
+            val sourcesPath = root / "sources" / packageName
+            (sourcesPath / "Classes").createDirectories()
+            (sourcesPath / "Classes" / "$packageName.uc").writeText("class $packageName extends Object;")
+            return sourcesPath
+        }
+
+        fun taskDirectories(name: String): List<Path> =
+            (root / "$name-tasks").takeIf { it.exists() }?.listDirectoryEntries("ucc-*") ?: emptyList()
+
+        test("throws naming the missing path when the installation holds no compiler executable") {
+            val installation = installation("no-compiler", compiler = false)
+
+            val exception = shouldThrow<IllegalStateException> { UtCompiler(installation) }
+
+            exception.message shouldContain "${root / "no-compiler" / "System" / compilerName}"
+        }
 
         context("make") {
             test("creates a task directory holding make.ini and make.log") {
-                val compiler = UtCompiler(okScript, Workspace(directory = tasksDirectory, keep = true))
-                val sourcesPath = createSources(sourcesRoot, "PackageOne")
-                val before = taskDirectories(tasksDirectory)
+                val compiler = installation("task-files", keep = true).compiler
 
-                compiler.make(sourcesPath, root / "out" / "PackageOne.u")
+                compiler.make(sources("PackageOne"), root / "out" / "PackageOne.u")
 
-                val taskDirectory = (taskDirectories(tasksDirectory) - before).single()
+                val taskDirectory = taskDirectories("task-files").single()
                 (taskDirectory / "make.ini").exists() shouldBe true
                 (taskDirectory / "make.log").exists() shouldBe true
             }
 
             test("make.ini is Default.ini plus EditPackages, with the configure block applied on top") {
-                val compiler = UtCompiler(okScript, Workspace(directory = tasksDirectory, keep = true))
-                val sourcesPath = createSources(sourcesRoot, "PackageTwo")
-                val before = taskDirectories(tasksDirectory)
+                val compiler = installation("make-ini", keep = true).compiler
 
-                compiler.make(sourcesPath, root / "out" / "PackageTwo.u") {
+                compiler.make(sources("PackageTwo"), root / "out" / "PackageTwo.u") {
                     this["Editor.EditorEngine", "UseSound"] = "False"
                 }
 
-                val taskDirectory = (taskDirectories(tasksDirectory) - before).single()
-                val ini = UtIni.read(taskDirectory / "make.ini")
-
+                val ini = UtIni.read(taskDirectories("make-ini").single() / "make.ini")
                 ini["Editor.EditorEngine", "EditPackages"] shouldBe listOf("Core", "PackageTwo")
                 ini["Editor.EditorEngine", "UseSound"] shouldBe listOf("False")
             }
 
             test("copies the compiled package to outputPath and keeps a copy in the task directory") {
-                val compiler = UtCompiler(okScript, Workspace(directory = tasksDirectory, keep = true))
-                val sourcesPath = createSources(sourcesRoot, "PackageThree")
+                val compiler = installation("output", keep = true).compiler
                 val outputPath = root / "out" / "PackageThree.u"
-                val before = taskDirectories(tasksDirectory)
 
-                val result = compiler.make(sourcesPath, outputPath)
+                val result = compiler.make(sources("PackageThree"), outputPath)
 
-                val taskDirectory = (taskDirectories(tasksDirectory) - before).single()
                 result shouldBe outputPath
                 outputPath.exists() shouldBe true
-                (taskDirectory / "PackageThree.u").exists() shouldBe true
+                (taskDirectories("output").single() / "PackageThree.u").exists() shouldBe true
             }
 
             test("removes the staged package sources from the installation root after a successful run") {
-                val compiler = UtCompiler(okScript, Workspace(directory = tasksDirectory))
-                val sourcesPath = createSources(sourcesRoot, "PackageFour")
+                val compiler = installation("staged").compiler
 
-                compiler.make(sourcesPath, root / "out" / "PackageFour.u")
+                compiler.make(sources("PackageFour"), root / "out" / "PackageFour.u")
 
-                (okScript.parent.parent / "PackageFour").exists() shouldBe false
+                (root / "staged" / "PackageFour").exists() shouldBe false
             }
 
             test("leaves no task directory behind after a successful run when keep is off") {
-                val compiler = UtCompiler(okScript, Workspace(directory = tasksDirectory))
-                val sourcesPath = createSources(sourcesRoot, "PackageSix")
-                val before = taskDirectories(tasksDirectory)
+                val compiler = installation("no-keep").compiler
 
-                compiler.make(sourcesPath, root / "out" / "PackageSix.u")
+                compiler.make(sources("PackageSix"), root / "out" / "PackageSix.u")
 
-                (taskDirectories(tasksDirectory) - before) shouldBe emptySet()
+                taskDirectories("no-keep") shouldBe emptyList()
             }
 
             test("keeps the task directory of a failed run with make.log written, and throws") {
-                val compiler = UtCompiler(failScript, Workspace(directory = tasksDirectory))
-                val sourcesPath = createSources(sourcesRoot, "PackageFive")
-                val before = taskDirectories(tasksDirectory)
+                val compiler = installation("failure", fails = true).compiler
 
                 shouldThrow<IllegalStateException> {
-                    compiler.make(sourcesPath, root / "out" / "PackageFive.u")
+                    compiler.make(sources("PackageFive"), root / "out" / "PackageFive.u")
                 }
 
-                val taskDirectory = (taskDirectories(tasksDirectory) - before).single()
+                val taskDirectory = taskDirectories("failure").single()
                 (taskDirectory / "make.log").exists() shouldBe true
                 (taskDirectory / "PackageFive.u").exists() shouldBe false
-                (failScript.parent.parent / "PackageFive").exists() shouldBe false
+                (root / "failure" / "PackageFive").exists() shouldBe false
             }
         }
     })

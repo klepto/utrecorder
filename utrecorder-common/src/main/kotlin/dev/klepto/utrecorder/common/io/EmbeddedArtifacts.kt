@@ -3,18 +3,15 @@ package dev.klepto.utrecorder.common.io
 import java.net.URL
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
+import kotlin.io.path.createParentDirectories
 import kotlin.io.path.writeBytes
 
 /**
- * Reads the build outputs a module embeds in its jar under a [namespace] directory, so that a module built by an
- * external toolchain - the UnrealScript compiler, a C compiler - can hand its outputs to the modules that consume it
- * through the classpath rather than through the filesystem.
+ * Build outputs a module carries in its jar under a [namespace] directory, beside an [INDEX] file naming them one per
+ * line.
  *
- * A namespace holds an [INDEX] file naming the artifacts beside it, one per line. The index is what makes the contents
- * enumerable: a classpath cannot be listed, so without it a consumer would have to know every file name up front.
- *
- * Artifacts that differ per platform are published as classifier variants of the same module rather than as separate
- * entries here, so a namespace always holds exactly the artifacts of the platform the consumer resolved.
+ * Construct one per namespace, then list the artifacts through [names], read one through [read], or write them all to
+ * disk through [extractTo]. The index name matches `EmbeddedArtifactsExtension` in `build-scripts`.
  *
  * @property namespace The directory the artifacts sit in, both in the jar and in the index resource path.
  * @property classLoader The class loader the artifacts are read from.
@@ -24,14 +21,11 @@ class EmbeddedArtifacts(
     private val classLoader: ClassLoader = EmbeddedArtifacts::class.java.classLoader,
 ) {
     /**
-     * The names of the artifacts this namespace holds, in the order the index lists them. Every index on the classpath
-     * contributes, so a namespace assembled from more than one module reads as one.
+     * The names of the artifacts this namespace holds across every index on the classpath, in index order and without
+     * duplicates.
      */
     val names: List<String> by lazy { readNames() }
 
-    /**
-     * Reads the artifact names from every index this namespace holds on the classpath.
-     */
     private fun readNames(): List<String> =
         classLoader
             .getResources("$namespace/$INDEX")
@@ -42,9 +36,6 @@ class EmbeddedArtifacts(
             .distinct()
             .toList()
 
-    /**
-     * Reads the lines of the index at the given [url].
-     */
     private fun readIndex(url: URL): Sequence<String> =
         url
             .openStream()
@@ -53,7 +44,9 @@ class EmbeddedArtifacts(
             .lineSequence()
 
     /**
-     * Reads the artifact of the given [name].
+     * The bytes of the artifact called [name] in this namespace.
+     *
+     * @throws IllegalStateException if the classpath holds no such artifact.
      */
     fun read(name: String): ByteArray {
         val path = "$namespace/$name"
@@ -68,16 +61,13 @@ class EmbeddedArtifacts(
     fun extractTo(directory: Path): List<Path> {
         directory.createDirectories()
         return names.map { name ->
-            directory[name].also { path ->
-                path.parent?.createDirectories()
-                path.writeBytes(read(name))
-            }
+            directory[name].also { path -> path.createParentDirectories().writeBytes(read(name)) }
         }
     }
 
     companion object {
         /**
-         * The name of the file naming the artifacts of a namespace.
+         * The file name of the index naming the artifacts of a namespace.
          */
         const val INDEX = "index"
     }

@@ -18,7 +18,7 @@ abstract class NativeBinary : Named {
     abstract val sources: DirectoryProperty
 
     /**
-     * What the sources compile to. Defaults to [NativeBinaryType.SHARED_LIBRARY], which is what a hook is.
+     * The kind of binary the sources compile to. Defaults to [NativeBinaryType.SHARED_LIBRARY].
      */
     abstract val type: Property<NativeBinaryType>
 

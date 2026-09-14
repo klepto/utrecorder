@@ -7,8 +7,7 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * A source of ids that read as the date and time the id was handed out at, such as `2026-09-08-1450-49`, and that no
- * two calls share.
+ * A source of unique ids written as a date and time, such as `2026-09-08-1450-49`.
  *
  * Hold one per set of ids that has to stay apart, and read from it with [next]. Ids are unique within one source, not
  * across sources. Two ids taken within one second are one second apart, so an id can read a moment ahead of the clock
@@ -30,8 +29,7 @@ class TimestampId(
     fun next(): String = format(nextSecond())
 
     /**
-     * Returns the Unix time in seconds of the next id: the current Unix time in seconds, advanced past the id handed
-     * out last when the clock has not moved since, so that two ids taken within one second stay apart.
+     * The Unix time in seconds of the next id: the current one, or one past the id handed out last if that is later.
      */
     private fun nextSecond(): Long = lastSecond.updateAndGet { previous -> maxOf(previous + 1, clock.instant().epochSecond) }
 

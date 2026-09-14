@@ -3,12 +3,14 @@ package dev.klepto.utrecorder.ut99
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.Workspace
-import dev.klepto.utrecorder.common.process.executable
+import dev.klepto.utrecorder.common.process.Executable
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Path
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
@@ -18,37 +20,24 @@ import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
+import kotlin.io.path.readText
+import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
+import kotlin.time.Duration.Companion.days
 
-/**
- * The name of the file that makes the fake compiler fail.
- */
-private const val COMPILER_FAILURE_MARKER = "ucc.fail"
-
-/**
- * The directory the C# compiler of the .NET framework sits in, under the Windows directory.
- */
-private const val CSHARP_COMPILER_DIRECTORY = "Microsoft.NET"
-
-/**
- * The framework version the fake compiler is built with.
- */
-private const val CSHARP_COMPILER_VERSION = "v4.0.30319"
-
-/**
- * Tests for [UtPackageInstaller] against a fake installation, a local HTTP server standing in for a redirect and a
- * fake UCC executable standing in for the decompressor. [UtPackageInstallerIntegrationTest] covers the real ones.
- */
 class UtPackageInstallerTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utpackageinstaller-test")
+        val platform = UtPlatform.current()
+        val guid = "123456789ABCDEF0876543210BADF00D"
+        val otherGuid = "11111111222222223333333344444444"
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         val served = mutableMapOf<String, ByteArray>()
         val requests = mutableListOf<String>()
 
         server.createContext("/") { exchange ->
-            requests += "${exchange.requestMethod} ${exchange.requestURI.path}"
-            val body = served[exchange.requestURI.path]
+            requests += "${exchange.requestMethod} ${exchange.requestURI.rawPath}"
+            val body = served[exchange.requestURI.rawPath]
             try {
                 when {
                     body == null -> {
@@ -83,100 +72,190 @@ class UtPackageInstallerTest :
 
         val address = "http://${server.address.hostString}:${server.address.port}"
         val redirects = listOf("$address/first", "$address/second")
-        val compilerTemplate by lazy { fakeCompiler(root / "compiler") }
 
-        fun fixture(name: String) = Fixture(root / name)
+        val fakeCompilerScript =
+            """
+            #!/bin/sh
+            DIRECTORY=${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)
+            if [ -f "${'$'}DIRECTORY/ucc.fail" ]; then
+                echo "FAKE UCC: simulated failure"
+                exit 3
+            fi
+            NAME=${'$'}(basename "${'$'}2" .uz)
+            cp "${'$'}2" "${'$'}DIRECTORY/${'$'}NAME"
+            echo "FAKE UCC: decompressed ${'$'}NAME"
+            exit 0
+            """.trimIndent()
 
-        fun redirectFixture(
+        val fakeCompilerSource =
+            """
+            using System;
+            using System.IO;
+
+            class FakeUcc
+            {
+                static int Main(string[] arguments)
+                {
+                    string directory = AppDomain.CurrentDomain.BaseDirectory;
+                    if (File.Exists(Path.Combine(directory, "ucc.fail")))
+                    {
+                        Console.WriteLine("FAKE UCC: simulated failure");
+                        return 3;
+                    }
+
+                    string name = Path.GetFileName(arguments[1]);
+                    if (name.EndsWith(".uz", StringComparison.OrdinalIgnoreCase))
+                    {
+                        name = name.Substring(0, name.Length - 3);
+                    }
+
+                    File.Copy(arguments[1], Path.Combine(directory, name), true);
+                    Console.WriteLine("FAKE UCC: decompressed " + name);
+                    return 0;
+                }
+            }
+            """.trimIndent()
+
+        fun csharpCompiler(): Path {
+            val frameworks = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "Microsoft.NET")
+            val candidates = listOf("Framework64", "Framework").map { frameworks / it / "v4.0.30319" / "csc.exe" }
+            return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
+        }
+
+        fun fakeCompiler(directory: Path): Path {
+            directory.createDirectories()
+            val binary = directory / platform.compilerExecutable
+            if (platform != UtPlatform.WINDOWS) {
+                binary.writeText(fakeCompilerScript)
+                return binary
+            }
+
+            val source = directory / "FakeUcc.cs"
+            source.writeText(fakeCompilerSource)
+            Executable
+                .build(csharpCompiler()) {
+                    arguments += listOf("-nologo", "-target:exe", "-out:$binary", "$source")
+                }.startAndAwait()
+                .orThrow()
+            return binary
+        }
+
+        val fakeCompiler by lazy { fakeCompiler(root / "fake-ucc") }
+
+        fun packagesDirectory(name: String): Path = Directories(root / name).packages
+
+        fun installation(
             name: String,
             compilerFails: Boolean = false,
-        ) = Fixture(root / name, redirects).apply { installCompiler(compilerTemplate, compilerFails) }
-
-        fun serve(
-            path: String,
-            bytes: ByteArray = packageBytes(),
-        ) {
-            served[path] = bytes
+        ): UtInstallation {
+            val systemDirectory = root / name / "install" / UtDirectory.System.name
+            systemDirectory.createDirectories()
+            packagesDirectory(name).createDirectories()
+            (systemDirectory / platform.gameExecutable).writeText("")
+            fakeCompiler.copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
+            if (compilerFails) {
+                (systemDirectory / "ucc.fail").writeText("")
+            }
+            return UtInstallation(root / name / "install", Workspace(root / name / "tasks", keep = false, retention = 7.days))
         }
 
-        context("redirectUrl") {
-            test("builds the base, the name, the extension and .uz into one URL") {
-                redirectUrl("http://redirect.test/files", "BTPog", "u") shouldBe "http://redirect.test/files/BTPog.u.uz"
-            }
-
-            test("URL-encodes a name holding a space or a plus, writing the space as %20") {
-                redirectUrl("http://redirect.test/files", "CTF-BT +Fun", "unr") shouldBe
-                    "http://redirect.test/files/CTF-BT%20%2BFun.unr.uz"
-            }
+        fun installer(
+            installation: UtInstallation,
+            vararg packages: UtPackage,
+        ): UtPackageInstaller {
+            val home = installation.directory.parent
+            val config = UtConfig(directories = Directories(home), gameDirectory = installation.directory, redirectUrls = redirects)
+            return UtPackageInstaller(packages.toList(), installation, config)
         }
+
+        fun installationPath(
+            installation: UtInstallation,
+            directory: UtDirectory,
+            fileName: String,
+        ): Path = installation.directory / directory.name / fileName
+
+        fun emptyFile(path: Path): Path = path.createParentDirectories().also { it.writeText("") }
+
+        fun packageBytes(guid: String): ByteArray {
+            val header = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN)
+            header.putInt(0x9E2A83C1.toInt()).putShort(68)
+            guid.chunked(8).forEachIndexed { index, word -> header.putInt(36 + index * 4, word.toLong(16).toInt()) }
+            return header.array()
+        }
+
+        fun writePackage(
+            path: Path,
+            guid: String,
+        ): Path = path.createParentDirectories().also { it.writeBytes(packageBytes(guid)) }
 
         context("install from a local source") {
-            test("does not fetch a package the installation already holds at the named GUID") {
-                val fixture = fixture("installation-holds")
-                writePackage(fixture.installation.systemDirectory / "Engine.u")
-                val installer = fixture.installer(UtPackage.named("Engine", GUID))
+            test("does not fetch a package the installation already holds") {
+                val installation = installation("installation-holds")
+                emptyFile(installation.systemDirectory / "Engine.u")
+                val installer = installer(installation, UtPackage.named("Engine", ""))
 
                 installer.install()
 
                 installer.installed shouldBe emptyList()
-                (fixture.packagesDirectory / "Engine.u").exists() shouldBe false
+                (packagesDirectory("installation-holds") / "Engine.u").exists() shouldBe false
             }
 
             test("copies a package the packages directory holds into the directory its extension maps to") {
-                val fixture = fixture("packages-directory-holds")
-                writePackage(fixture.packagesDirectory / "CTF-BT-Test.unr")
-                val installer = fixture.installer(UtPackage.named("CTF-BT-Test", GUID))
+                val installation = installation("packages-directory-holds")
+                emptyFile(packagesDirectory("packages-directory-holds") / "CTF-BT-Test.unr")
+                val installer = installer(installation, UtPackage.named("CTF-BT-Test", ""))
 
                 installer.install()
 
-                val target = fixture.installationPath(UtDirectory.Maps, "CTF-BT-Test.unr")
+                val target = installationPath(installation, UtDirectory.Maps, "CTF-BT-Test.unr")
                 target.exists() shouldBe true
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 
             test("matches a name the packages directory holds in another case") {
-                val fixture = fixture("packages-directory-case")
-                writePackage(fixture.packagesDirectory / "btpog.u")
-                val installer = fixture.installer(UtPackage.named("BTPog", GUID))
+                val installation = installation("packages-directory-case")
+                emptyFile(packagesDirectory("packages-directory-case") / "btpog.u")
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
 
-                fixture.installationPath(UtDirectory.System, "btpog.u").exists() shouldBe true
+                installationPath(installation, UtDirectory.System, "btpog.u").exists() shouldBe true
                 installer.installed.map { it.name } shouldBe listOf("btpog")
             }
 
             test("overwrites a package the installation holds under the same name at a different GUID") {
-                val fixture = fixture("overwrites-other-guid")
-                writePackage(fixture.installation.systemDirectory / "Engine.u", OTHER_GUID_HEADER_BYTES)
-                writePackage(fixture.packagesDirectory / "Engine.u", GUID_HEADER_BYTES)
-                val installer = fixture.installer(UtPackage.named("Engine", GUID))
+                val installation = installation("overwrites-other-guid")
+                writePackage(installation.systemDirectory / "Engine.u", otherGuid)
+                writePackage(packagesDirectory("overwrites-other-guid") / "Engine.u", guid)
+                val installer = installer(installation, UtPackage.named("Engine", guid))
 
                 installer.install()
 
-                val target = fixture.installationPath(UtDirectory.System, "Engine.u")
-                UtPackage.read(target).guid shouldBe GUID
+                val target = installationPath(installation, UtDirectory.System, "Engine.u")
+                UtPackage.read(target).guid shouldBe "123456789ABCDEF0876543210BADF00D"
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 
             test("satisfies a demo entry that carries no GUID with any file of that name") {
-                val fixture = redirectFixture("empty-guid-local")
-                writePackage(fixture.packagesDirectory / "BTPog.u", OTHER_GUID_HEADER_BYTES)
-                val installer = fixture.installer(UtPackage.named("BTPog", ""))
+                val installation = installation("empty-guid-local")
+                emptyFile(packagesDirectory("empty-guid-local") / "BTPog.u")
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
 
-                fixture.installationPath(UtDirectory.System, "BTPog.u").exists() shouldBe true
+                installationPath(installation, UtDirectory.System, "BTPog.u").exists() shouldBe true
                 requests shouldBe emptyList()
             }
 
             test("holds the packages it fetched in the order it fetched them") {
-                val fixture = fixture("fetch-order")
-                writePackage(fixture.packagesDirectory / "BTPog.u")
-                writePackage(fixture.packagesDirectory / "CTF-BT-Test.unr")
+                val installation = installation("fetch-order")
+                emptyFile(packagesDirectory("fetch-order") / "BTPog.u")
+                emptyFile(packagesDirectory("fetch-order") / "CTF-BT-Test.unr")
                 val installer =
-                    fixture.installer(
-                        UtPackage.named("CTF-BT-Test", GUID),
-                        UtPackage.named("BTPog", GUID),
+                    installer(
+                        installation,
+                        UtPackage.named("CTF-BT-Test", ""),
+                        UtPackage.named("BTPog", ""),
                     )
 
                 installer.install()
@@ -185,9 +264,9 @@ class UtPackageInstallerTest :
             }
 
             test("holds nothing before an install, and nothing after an install that found every package in place") {
-                val fixture = fixture("nothing-fetched")
-                writePackage(fixture.installation.systemDirectory / "Engine.u")
-                val installer = fixture.installer(UtPackage.named("Engine", GUID))
+                val installation = installation("nothing-fetched")
+                emptyFile(installation.systemDirectory / "Engine.u")
+                val installer = installer(installation, UtPackage.named("Engine", ""))
 
                 installer.installed shouldBe emptyList()
                 installer.install()
@@ -197,22 +276,32 @@ class UtPackageInstallerTest :
 
         context("install from a redirect") {
             test("fetches a package no local source holds, decompresses it and copies it into the installation") {
-                val fixture = redirectFixture("fetch-from-redirect")
-                serve("/first/BTPog.u.uz")
-                val installer = fixture.installer(UtPackage.named("BTPog", GUID))
+                val installation = installation("fetch-from-redirect")
+                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
 
-                val target = fixture.installationPath(UtDirectory.System, "BTPog.u")
-                UtPackage.read(fixture.packagesDirectory / "BTPog.u").guid shouldBe GUID
-                UtPackage.read(target).guid shouldBe GUID
+                val target = installationPath(installation, UtDirectory.System, "BTPog.u")
+                (packagesDirectory("fetch-from-redirect") / "BTPog.u").readText() shouldBe "BTPog"
+                target.readText() shouldBe "BTPog"
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 
+            test("fetches a package named CTF-BT +Fun from a redirect that serves it only at its encoded name") {
+                val installation = installation("encoded-name")
+                served["/first/CTF-BT%20%2BFun.unr.uz"] = "CTF-BT +Fun".toByteArray()
+                val installer = installer(installation, UtPackage.named("CTF-BT +Fun", ""))
+
+                installer.install()
+
+                installationPath(installation, UtDirectory.Maps, "CTF-BT +Fun.unr").readText() shouldBe "CTF-BT +Fun"
+            }
+
             test("tries the redirects in the configured order, and uses the second when the first serves nothing") {
-                val fixture = redirectFixture("second-redirect")
-                serve("/second/BTPog.u.uz")
-                val installer = fixture.installer(UtPackage.named("BTPog", GUID))
+                val installation = installation("second-redirect")
+                served["/second/BTPog.u.uz"] = "BTPog".toByteArray()
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
 
@@ -220,10 +309,10 @@ class UtPackageInstallerTest :
                 requests.last() shouldBe "GET /second/BTPog.u.uz"
             }
 
-            test("probes every package extension in UtDirectory.packages order and takes the first hit") {
-                val fixture = redirectFixture("extension-order")
-                serve("/first/CTF-BT-Test.unr.uz")
-                val installer = fixture.installer(UtPackage.named("CTF-BT-Test", GUID))
+            test("probes every package extension in UtDirectory.PACKAGE_EXTENSIONS order and takes the first hit") {
+                val installation = installation("extension-order")
+                served["/first/CTF-BT-Test.unr.uz"] = "CTF-BT-Test".toByteArray()
+                val installer = installer(installation, UtPackage.named("CTF-BT-Test", ""))
 
                 installer.install()
 
@@ -233,115 +322,120 @@ class UtPackageInstallerTest :
                         "HEAD /first/CTF-BT-Test.unr.uz",
                         "GET /first/CTF-BT-Test.unr.uz",
                     )
-                fixture.installationPath(UtDirectory.Maps, "CTF-BT-Test.unr").exists() shouldBe true
+                installationPath(installation, UtDirectory.Maps, "CTF-BT-Test.unr").exists() shouldBe true
             }
 
             test("discards a local file of the right name at the wrong GUID and tries the next source") {
-                val fixture = redirectFixture("wrong-guid-locally")
-                writePackage(fixture.packagesDirectory / "BTPog.u", OTHER_GUID_HEADER_BYTES)
-                serve("/first/BTPog.u.uz", packageBytes(GUID_HEADER_BYTES))
-                val installer = fixture.installer(UtPackage.named("BTPog", GUID))
+                val installation = installation("wrong-guid-locally")
+                writePackage(packagesDirectory("wrong-guid-locally") / "BTPog.u", otherGuid)
+                served["/first/BTPog.u.uz"] = packageBytes(guid)
+                val installer = installer(installation, UtPackage.named("BTPog", guid))
 
                 installer.install()
 
                 requests.last() shouldBe "GET /first/BTPog.u.uz"
-                UtPackage.read(fixture.installationPath(UtDirectory.System, "BTPog.u")).guid shouldBe GUID
+                UtPackage.read(installationPath(installation, UtDirectory.System, "BTPog.u")).guid shouldBe
+                    "123456789ABCDEF0876543210BADF00D"
             }
 
             test("does not check the GUID of a package it fetched for a demo entry that carries none") {
-                val fixture = redirectFixture("empty-guid-fetched")
-                serve("/first/BTPog.u.uz", packageBytes(OTHER_GUID_HEADER_BYTES))
-                val installer = fixture.installer(UtPackage.named("BTPog", ""))
+                val installation = installation("empty-guid-fetched")
+                served["/first/BTPog.u.uz"] = packageBytes(otherGuid)
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
 
-                val target = fixture.installationPath(UtDirectory.System, "BTPog.u")
-                UtPackage.read(target).guid shouldBe OTHER_GUID
+                val target = installationPath(installation, UtDirectory.System, "BTPog.u")
+                UtPackage.read(target).guid shouldBe "11111111222222223333333344444444"
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 
             test("deletes the archive it fetched once it is decompressed") {
-                val fixture = redirectFixture("archive-deleted")
-                serve("/first/BTPog.u.uz")
-                val installer = fixture.installer(UtPackage.named("BTPog", GUID))
+                val installation = installation("archive-deleted")
+                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
 
-                fixture.packagesDirectory.listDirectoryEntries().map { it.name } shouldBe listOf("BTPog.u")
+                packagesDirectory("archive-deleted").listDirectoryEntries().map { it.name } shouldBe listOf("BTPog.u")
             }
 
             test("leaves nothing in the packages directory when the decompression fails") {
-                val fixture = redirectFixture("decompression-fails", compilerFails = true)
-                serve("/first/BTPog.u.uz")
-                val installer = fixture.installer(UtPackage.named("BTPog", GUID))
+                val installation = installation("decompression-fails", compilerFails = true)
+                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 shouldThrow<IllegalStateException> { installer.install() }
 
-                fixture.packagesDirectory.listDirectoryEntries() shouldBe emptyList()
+                packagesDirectory("decompression-fails").listDirectoryEntries() shouldBe emptyList()
                 installer.installed shouldBe emptyList()
             }
         }
 
         context("a package no source holds") {
             test("throws naming the package and every source that was tried") {
-                val fixture = redirectFixture("resolves-nowhere")
-                val installer = fixture.installer(UtPackage.named("BTPog", GUID))
+                val installation = installation("resolves-nowhere")
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 val exception = shouldThrow<UtPackageException> { installer.install() }
 
                 exception.packageName shouldBe "BTPog"
-                exception.sources shouldBe listOf("${fixture.gameDirectory}", "${fixture.packagesDirectory}") + redirects
+                exception.sources shouldBe
+                    listOf("${root / "resolves-nowhere" / "install"}", "${packagesDirectory("resolves-nowhere")}") + redirects
             }
 
             test("keeps what it already fetched, on disk and in installed, and fetches nothing after the failure") {
-                val fixture = redirectFixture("fails-partway")
-                writePackage(fixture.packagesDirectory / "Engine.u")
-                serve("/first/BTPog.u.uz")
+                val installation = installation("fails-partway")
+                emptyFile(packagesDirectory("fails-partway") / "Engine.u")
+                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
                 val installer =
-                    fixture.installer(
-                        UtPackage.named("Engine", GUID),
-                        UtPackage.named("Missing", GUID),
-                        UtPackage.named("BTPog", GUID),
+                    installer(
+                        installation,
+                        UtPackage.named("Engine", ""),
+                        UtPackage.named("Missing", ""),
+                        UtPackage.named("BTPog", ""),
                     )
 
                 shouldThrow<UtPackageException> { installer.install() }
 
                 installer.installed.map { it.name } shouldBe listOf("Engine")
-                fixture.installationPath(UtDirectory.System, "Engine.u").exists() shouldBe true
+                installationPath(installation, UtDirectory.System, "Engine.u").exists() shouldBe true
                 requests.none { it.contains("BTPog") } shouldBe true
             }
         }
 
         context("isInstalled") {
-            test("is true when the installation holds every named package at the named GUID") {
-                val fixture = fixture("is-installed-true")
-                writePackage(fixture.installationPath(UtDirectory.System, "Engine.u"))
-                writePackage(fixture.installationPath(UtDirectory.Maps, "CTF-BT-Test.unr"))
+            test("is true when the installation holds every named package") {
+                val installation = installation("is-installed-true")
+                emptyFile(installationPath(installation, UtDirectory.System, "Engine.u"))
+                emptyFile(installationPath(installation, UtDirectory.Maps, "CTF-BT-Test.unr"))
                 val installer =
-                    fixture.installer(
-                        UtPackage.named("Engine", GUID),
-                        UtPackage.named("CTF-BT-Test", GUID),
+                    installer(
+                        installation,
+                        UtPackage.named("Engine", ""),
+                        UtPackage.named("CTF-BT-Test", ""),
                     )
 
                 installer.isInstalled() shouldBe true
             }
 
             test("is false when a named package is missing") {
-                val fixture = fixture("is-installed-missing")
-                writePackage(fixture.installationPath(UtDirectory.System, "Engine.u"))
+                val installation = installation("is-installed-missing")
+                emptyFile(installationPath(installation, UtDirectory.System, "Engine.u"))
                 val installer =
-                    fixture.installer(
-                        UtPackage.named("Engine", GUID),
-                        UtPackage.named("BTPog", GUID),
+                    installer(
+                        installation,
+                        UtPackage.named("Engine", ""),
+                        UtPackage.named("BTPog", ""),
                     )
 
                 installer.isInstalled() shouldBe false
             }
 
             test("is false when a named package is present at a different GUID") {
-                val fixture = fixture("is-installed-other-guid")
-                writePackage(fixture.installationPath(UtDirectory.System, "Engine.u"), OTHER_GUID_HEADER_BYTES)
-                val installer = fixture.installer(UtPackage.named("Engine", GUID))
+                val installation = installation("is-installed-other-guid")
+                writePackage(installationPath(installation, UtDirectory.System, "Engine.u"), otherGuid)
+                val installer = installer(installation, UtPackage.named("Engine", guid))
 
                 installer.isInstalled() shouldBe false
             }
@@ -349,187 +443,31 @@ class UtPackageInstallerTest :
 
         context("uninstall") {
             test("deletes the packages this installer fetched and leaves the ones the installation already held") {
-                val fixture = fixture("uninstall-fetched")
-                writePackage(fixture.installation.systemDirectory / "Engine.u")
-                writePackage(fixture.packagesDirectory / "BTPog.u")
+                val installation = installation("uninstall-fetched")
+                emptyFile(installation.systemDirectory / "Engine.u")
+                emptyFile(packagesDirectory("uninstall-fetched") / "BTPog.u")
                 val installer =
-                    fixture.installer(
-                        UtPackage.named("Engine", GUID),
-                        UtPackage.named("BTPog", GUID),
+                    installer(
+                        installation,
+                        UtPackage.named("Engine", ""),
+                        UtPackage.named("BTPog", ""),
                     )
 
                 installer.install()
                 installer.uninstall()
 
-                fixture.installationPath(UtDirectory.System, "BTPog.u").exists() shouldBe false
-                fixture.installationPath(UtDirectory.System, "Engine.u").exists() shouldBe true
+                installationPath(installation, UtDirectory.System, "BTPog.u").exists() shouldBe false
+                installationPath(installation, UtDirectory.System, "Engine.u").exists() shouldBe true
             }
 
             test("deletes nothing when it runs before an install") {
-                val fixture = fixture("uninstall-before-install")
-                writePackage(fixture.installation.systemDirectory / "Engine.u")
-                val installer = fixture.installer(UtPackage.named("Engine", GUID))
+                val installation = installation("uninstall-before-install")
+                emptyFile(installation.systemDirectory / "Engine.u")
+                val installer = installer(installation, UtPackage.named("Engine", ""))
 
                 installer.uninstall()
 
-                fixture.installationPath(UtDirectory.System, "Engine.u").exists() shouldBe true
+                installationPath(installation, UtDirectory.System, "Engine.u").exists() shouldBe true
             }
         }
     })
-
-/**
- * A fake installation rooted at [home], holding the game executable [UtInstallation] checks for and nothing else, and
- * the configuration naming its packages directory and the [redirects] a package is fetched from.
- *
- * @property home The directory the installation, the packages directory and the task directories sit under.
- * @param redirects The base URLs the installer probes, in the order it probes them.
- */
-private class Fixture(
-    val home: Path,
-    redirects: List<String> = emptyList(),
-) {
-    /**
-     * The root of the fake installation.
-     */
-    val gameDirectory: Path = home / "install"
-
-    /**
-     * The configuration the installer runs against.
-     */
-    val config =
-        UtConfig(
-            directories = Directories(home),
-            gameDirectory = gameDirectory,
-            redirectUrls = redirects,
-        )
-
-    /**
-     * The directory a fetched package is decompressed into.
-     */
-    val packagesDirectory: Path = config.packagesDirectory
-
-    /**
-     * The installation the packages are provisioned into.
-     */
-    val installation: UtInstallation
-
-    init {
-        installationPath(UtDirectory.System, UT_PLATFORM.gameExecutable).createParentDirectories().writeText("")
-        packagesDirectory.createDirectories()
-        installation = UtInstallation(gameDirectory, Workspace(directory = home / "tasks"))
-    }
-
-    /**
-     * Returns the path a file named [fileName] takes in the [directory] of this installation.
-     */
-    fun installationPath(
-        directory: UtDirectory,
-        fileName: String,
-    ): Path = gameDirectory / directory.name / fileName
-
-    /**
-     * Puts a copy of the fake compiler [template] where this installation resolves its compiler, failing every run
-     * of it when [fails] is set.
-     */
-    fun installCompiler(
-        template: Path,
-        fails: Boolean = false,
-    ) {
-        val target = installationPath(UtDirectory.System, UT_PLATFORM.compilerExecutable)
-        template.copyTo(target, overwrite = true)
-        target.toFile().setExecutable(true)
-        if (fails) {
-            installationPath(UtDirectory.System, COMPILER_FAILURE_MARKER).writeText("")
-        }
-    }
-
-    /**
-     * Returns the installer of the given [packages] against this installation.
-     */
-    fun installer(vararg packages: UtPackage) = UtPackageInstaller(packages.toList(), installation, config)
-}
-
-/**
- * Builds the fake compiler under [directory] and returns it. Asked to decompress an archive, it copies the archive to
- * the file it is named after, next to itself, which is where UCC leaves what it decompressed. A file named
- * [COMPILER_FAILURE_MARKER] beside it makes it fail without producing anything.
- *
- * Windows starts a program by its content rather than by its name, and an installation resolves its compiler as
- * `UCC.exe`, so the fake has to be a real executable there. The C# compiler of the .NET framework, which a Windows
- * installation carries, builds one. A shell script under the compiler's name is enough everywhere else.
- */
-private fun fakeCompiler(directory: Path): Path {
-    directory.createDirectories()
-    val binary = directory / UT_PLATFORM.compilerExecutable
-    if (UT_PLATFORM != UtPlatform.WINDOWS) {
-        binary.writeText(FAKE_COMPILER_SCRIPT)
-        binary.toFile().setExecutable(true)
-        return binary
-    }
-
-    val source = directory / "FakeUcc.cs"
-    source.writeText(FAKE_COMPILER_SOURCE)
-    executable(csharpCompiler()) {
-        arguments += listOf("-nologo", "-target:exe", "-out:$binary", "$source")
-    }.startAndAwait().orThrow()
-    return binary
-}
-
-/**
- * Returns the C# compiler the fake compiler is built with.
- */
-private fun csharpCompiler(): Path {
-    val frameworks = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", CSHARP_COMPILER_DIRECTORY)
-    val candidates =
-        listOf("Framework64", "Framework").map { frameworks / it / CSHARP_COMPILER_VERSION / "csc.exe" }
-    return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
-}
-
-/**
- * The shell script the fake compiler is on every platform but Windows.
- */
-private val FAKE_COMPILER_SCRIPT =
-    """
-    #!/bin/sh
-    DIRECTORY=${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)
-    if [ -f "${'$'}DIRECTORY/$COMPILER_FAILURE_MARKER" ]; then
-        echo "FAKE UCC: simulated failure"
-        exit 3
-    fi
-    NAME=${'$'}(basename "${'$'}2" .uz)
-    cp "${'$'}2" "${'$'}DIRECTORY/${'$'}NAME"
-    echo "FAKE UCC: decompressed ${'$'}NAME"
-    exit 0
-    """.trimIndent()
-
-/**
- * The C# program the fake compiler is built from on Windows.
- */
-private val FAKE_COMPILER_SOURCE =
-    """
-    using System;
-    using System.IO;
-
-    class FakeUcc
-    {
-        static int Main(string[] arguments)
-        {
-            string directory = AppDomain.CurrentDomain.BaseDirectory;
-            if (File.Exists(Path.Combine(directory, "$COMPILER_FAILURE_MARKER")))
-            {
-                Console.WriteLine("FAKE UCC: simulated failure");
-                return 3;
-            }
-
-            string name = Path.GetFileName(arguments[1]);
-            if (name.EndsWith(".uz", StringComparison.OrdinalIgnoreCase))
-            {
-                name = name.Substring(0, name.Length - 3);
-            }
-
-            File.Copy(arguments[1], Path.Combine(directory, name), true);
-            Console.WriteLine("FAKE UCC: decompressed " + name);
-            return 0;
-        }
-    }
-    """.trimIndent()

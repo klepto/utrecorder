@@ -11,8 +11,8 @@ import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 
 /**
- * Writes the index naming the embedded artifacts of a module, one path per line, relative to the namespace directory
- * they sit in. The paths are sorted, so that the same set of artifacts always produces the same index.
+ * Task writing the index of the embedded artifacts of a module: one path per line, relative to the namespace directory,
+ * in sorted order.
  */
 @CacheableTask
 abstract class EmbeddedArtifactIndexTask : DefaultTask() {

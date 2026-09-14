@@ -10,71 +10,53 @@ import org.gradle.kotlin.dsl.getByType
 import java.util.Optional
 
 /**
- * The alias the Java toolchain version takes in the version catalogue.
- */
-private const val JAVA_VERSION_ALIAS = "java"
-
-/**
- * The alias the detekt tool version takes in the version catalogue.
- */
-private const val DETEKT_VERSION_ALIAS = "detekt"
-
-/**
- * The alias the ktlint tool version takes in the version catalogue.
- */
-private const val KTLINT_VERSION_ALIAS = "ktlint"
-
-/**
- * The version catalogue every module shares. Reached through the extension rather than through the generated
- * accessors, which a convention plugin does not get - they are generated for the build being configured, not for the
- * build the plugins are compiled in.
- */
-private val Project.libs: VersionCatalog
-    get() = extensions.getByType<VersionCatalogsExtension>().named("libs")
-
-/**
- * Returns the library the catalogue holds under [alias].
- */
-internal fun Project.lib(alias: String): Provider<MinimalExternalModuleDependency> =
-    libs.findLibrary(alias).orFail("library", alias)
-
-/**
- * Returns the bundle the catalogue holds under [alias].
- */
-internal fun Project.bundle(alias: String): Provider<ExternalModuleDependencyBundle> =
-    libs.findBundle(alias).orFail("bundle", alias)
-
-/**
- * The Java toolchain every module is compiled with, and every process the build forks runs on.
- *
- * Read from the version catalogue rather than written into each convention plugin, so that a bump is one edit and a
- * forked compiler can never end up on a different JVM than the module it was forked against.
- */
-internal val Project.javaVersion: Int
-    get() = libs.findVersion(JAVA_VERSION_ALIAS).orFail("version", JAVA_VERSION_ALIAS).requiredVersion.toInt()
-
-/**
- * The detekt tool version the static analysis runs.
- *
- * Pinned in the version catalogue rather than left to the Gradle plugin's own default, so that the plugin and the
- * analyzer it forks are always the same release.
- */
-internal val Project.detektVersion: String
-    get() = libs.findVersion(DETEKT_VERSION_ALIAS).orFail("version", DETEKT_VERSION_ALIAS).requiredVersion
-
-/**
- * The ktlint tool version the formatter runs.
- *
- * Pinned in the version catalogue rather than left to the Gradle plugin's own default, so that upgrading the plugin
- * never silently reformats the repository.
- */
-internal val Project.ktlintVersion: String
-    get() = libs.findVersion(KTLINT_VERSION_ALIAS).orFail("version", KTLINT_VERSION_ALIAS).requiredVersion
-
-/**
- * Returns the entry the catalogue holds, or fails naming the [kind] and [alias] that is missing from it.
+ * Returns the entry the catalogue holds, or throws [IllegalStateException] naming the [kind] and [alias] missing from it.
  */
 private fun <T> Optional<T>.orFail(
     kind: String,
     alias: String,
 ): T = orElseThrow { IllegalStateException("No $kind '$alias' in version catalog") }
+
+// Reached through the extension because a convention plugin gets no generated accessors: they are generated for the
+// build being configured, not for the build the plugins are compiled in.
+private val Project.libs: VersionCatalog
+    get() = extensions.getByType<VersionCatalogsExtension>().named("libs")
+
+/**
+ * Returns the library the `libs` version catalogue holds under [alias].
+ *
+ * @throws IllegalStateException if the catalogue holds no library under [alias].
+ */
+fun Project.lib(alias: String): Provider<MinimalExternalModuleDependency> = libs.findLibrary(alias).orFail("library", alias)
+
+/**
+ * Returns the bundle the `libs` version catalogue holds under [alias].
+ *
+ * @throws IllegalStateException if the catalogue holds no bundle under [alias].
+ */
+fun Project.bundle(alias: String): Provider<ExternalModuleDependencyBundle> = libs.findBundle(alias).orFail("bundle", alias)
+
+/**
+ * Returns the required version the `libs` version catalogue holds under [alias].
+ *
+ * @throws IllegalStateException if the catalogue holds no version under [alias].
+ */
+fun Project.catalogVersion(alias: String): String = libs.findVersion(alias).orFail("version", alias).requiredVersion
+
+/**
+ * The Java toolchain version every module compiles with and every forked process runs on.
+ */
+val Project.javaVersion: Int
+    get() = catalogVersion("java").toInt()
+
+/**
+ * The detekt release the static analysis runs.
+ */
+val Project.detektVersion: String
+    get() = catalogVersion("detekt")
+
+/**
+ * The ktlint release the formatter runs.
+ */
+val Project.ktlintVersion: String
+    get() = catalogVersion("ktlint")

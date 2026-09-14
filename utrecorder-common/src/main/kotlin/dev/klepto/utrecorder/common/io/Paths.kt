@@ -14,6 +14,7 @@ import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.PathWalkOption
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
+import kotlin.io.path.createParentDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.createTempFile
 import kotlin.io.path.deleteRecursively
@@ -24,19 +25,15 @@ import kotlin.io.path.moveTo
 import kotlin.io.path.readLines
 import kotlin.io.path.readText
 import kotlin.io.path.walk
+import kotlin.time.Duration
 
 /**
- * Returns a path obtained by resolving the given [name] on this path.
+ * This string as an absolute, normalized path, resolved against the working directory when relative.
  */
-operator fun Path.get(name: String): Path = resolve(name)
+fun String.toAbsolutePath(): Path = Paths.get(this).toAbsolutePath().normalize()
 
 /**
- * Returns a path obtained by resolving the given [name] on this path.
- */
-operator fun Path.get(name: PathName): Path = get(name.pathName)
-
-/**
- * A constant that names one path segment, so that a caller resolves it with [get] rather than repeating the literal.
+ * A constant naming one path segment, resolved on a path through [get].
  *
  * @property pathName The segment this constant resolves to.
  */
@@ -45,23 +42,26 @@ interface PathName {
 }
 
 /**
- * Returns this string as an absolute, normalized path.
+ * The child of this path called [name].
  */
-fun String.toAbsolutePath(): Path = Paths.get(this).toAbsolutePath().normalize()
+operator fun Path.get(name: String): Path = resolve(name)
 
 /**
- * Returns the home directory of the user this process runs as, read from [properties].
+ * The child of this path called by the segment [name] holds.
  */
-fun homeDirectory(properties: PropertySource = PropertySource.DEFAULT): Path =
-    checkNotNull(properties.property("user.home")) { "No user.home system property" }.toAbsolutePath()
+operator fun Path.get(name: PathName): Path = get(name.pathName)
 
 /**
- * Returns the directory this path sits in, creating it if it does not exist.
+ * The working directory of the process [properties] describe, read from `user.dir` as an absolute, normalized path.
+ *
+ * @throws IllegalStateException if [properties] holds no `user.dir`.
  */
-fun Path.createParentDirectory(): Path = toAbsolutePath().parent.apply { createDirectories() }
+fun workingDirectory(properties: PropertySource = PropertySource.DEFAULT): Path =
+    checkNotNull(properties.systemProperty("user.dir")) { "No user.dir system property" }.toAbsolutePath()
 
 /**
- * Creates a uniquely named directory under this directory, creating this directory first if it does not exist.
+ * A new, uniquely named directory under this directory, starting with [prefix]. This directory is created first when
+ * it does not exist.
  */
 fun Path.createTemporaryDirectory(prefix: String): Path {
     createDirectories()
@@ -69,47 +69,52 @@ fun Path.createTemporaryDirectory(prefix: String): Path {
 }
 
 /**
- * Creates a temporary file next to this path, named after it. The file a caller stages into and the file it becomes
- * sit on one filesystem, so that putting it in place is a rename rather than a copy.
+ * A new, uniquely named `.tmp` file in the directory of this path, named after it. The directory is created first when
+ * it does not exist.
  */
-fun Path.createTemporaryFile(): Path = createTempFile(createParentDirectory(), "$fileName-", ".tmp")
+fun Path.createTemporaryFile(): Path = createTempFile(toAbsolutePath().createParentDirectories().parent, "$fileName-", ".tmp")
 
 /**
- * Runs [block] against a staging directory created next to this path, and removes the directory once it returns or
- * throws. Nothing the block staged survives a failure.
+ * Runs [block] against a new staging directory in the directory of this path, removes the staging directory once the
+ * block returns or throws, and returns what the block returns.
+ *
+ * @throws IOException if the block returned but the staging directory cannot be removed. When the block throws, a
+ * failure to remove the staging directory is suppressed into what it threw.
  */
 fun <T> Path.stage(block: (Path) -> T): T {
-    val staging = createParentDirectory().createTemporaryDirectory("$fileName-")
-    try {
-        return block(staging)
-    } finally {
-        staging.deleteRecursivelyCatching()
+    val staging = toAbsolutePath().parent.createTemporaryDirectory("$fileName-")
+    val outcome = runCatching { block(staging) }
+    staging.deleteRecursivelyCatching().onFailure { failure ->
+        outcome.exceptionOrNull()?.addSuppressed(failure) ?: throw failure
     }
+    return outcome.getOrThrow()
 }
 
 /**
- * Copies the file to the given [target] path. Throws if this path holds no file, with the message [failureMessage]
- * returns.
+ * Copies the file at this path to [target], creating the parent directories of [target], and returns [target].
+ *
+ * @throws IllegalStateException with the message [failureMessage] returns, if this path holds nothing.
+ * @throws java.nio.file.FileAlreadyExistsException if [target] exists and [overwrite] is `false`.
  */
 fun Path.copy(
     target: Path,
+    overwrite: Boolean = false,
     failureMessage: () -> String = { "No file to copy at $this" },
-) {
+): Path {
     check(exists(), failureMessage)
-    copyTo(target)
+    return copyTo(target.createParentDirectories(), overwrite)
 }
 
 /**
- * Moves the file to the given [target] path, replacing whatever is already there.
+ * Moves the file at this path to [target], replacing whatever is already there.
  *
- * Directories are merged into [target] one file at a time, overwriting the files it already holds and leaving the
+ * A directory is merged into [target] one file at a time, overwriting the files [target] already holds and keeping the
  * ones this directory does not contain.
  */
 @OptIn(ExperimentalPathApi::class)
 fun Path.move(target: Path) {
     if (!isDirectory()) {
-        target.parent?.createDirectories()
-        moveFile(target)
+        moveFile(target.createParentDirectories())
         return
     }
 
@@ -120,8 +125,7 @@ fun Path.move(target: Path) {
             if (source.isDirectory()) {
                 destination.createDirectories()
             } else {
-                destination.parent?.createDirectories()
-                source.moveFile(destination)
+                source.moveFile(destination.createParentDirectories())
             }
         }
 
@@ -129,18 +133,30 @@ fun Path.move(target: Path) {
 }
 
 /**
- * Moves a single file, preferring an atomic rename and falling back to a replacing move when the filesystem doesn't
- * support atomic rename.
+ * Moves a single file by atomic rename, or by a replacing move on a filesystem without atomic rename.
  */
 private fun Path.moveFile(target: Path) =
     try {
         moveTo(target, StandardCopyOption.ATOMIC_MOVE)
-    } catch (_: AtomicMoveNotSupportedException) {
-        moveTo(target, StandardCopyOption.REPLACE_EXISTING)
+    } catch (unsupported: AtomicMoveNotSupportedException) {
+        moveFileReplacing(target, unsupported)
     }
 
 /**
- * Returns the lines of the file at this path decoded with [charset], or no lines if the file does not exist.
+ * Moves a single file by a replacing move, attaching [unsupported] to the failure if the move fails too.
+ */
+private fun Path.moveFileReplacing(
+    target: Path,
+    unsupported: AtomicMoveNotSupportedException,
+): Path =
+    try {
+        moveTo(target, StandardCopyOption.REPLACE_EXISTING)
+    } catch (failure: IOException) {
+        throw failure.apply { addSuppressed(unsupported) }
+    }
+
+/**
+ * The lines of the file at this path decoded with [charset], or no lines if the file does not exist.
  */
 fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<String> =
     when {
@@ -149,7 +165,7 @@ fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<String> =
     }
 
 /**
- * Returns the contents of the file at this path decoded with [charset], or an empty string if the file does not exist.
+ * The contents of the file at this path decoded with [charset], or an empty string if the file does not exist.
  */
 fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
     when {
@@ -158,7 +174,7 @@ fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
     }
 
 /**
- * Calculates the digest of the file using the given [algorithm] (e.g. "MD5", "SHA-256").
+ * The digest of the file at this path under [algorithm], such as `MD5` or `SHA-256`, as lowercase hexadecimal.
  */
 fun Path.digest(algorithm: String): String {
     val digest = MessageDigest.getInstance(algorithm)
@@ -169,20 +185,39 @@ fun Path.digest(algorithm: String): String {
 }
 
 /**
- * Converts the byte array to a hexadecimal string.
+ * This array as lowercase hexadecimal, two digits per byte.
  */
 private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
 /**
- * Removes this path and everything under it, and returns the outcome. A path a caller cannot remove — a directory
- * holding a file another process still has open, typically — is left in place, and the failure is the caller's to read.
+ * The outcome of removing this path and everything under it, tried up to [attempts] times with [delay] between
+ * attempts. A path that does not exist is a success, and when no attempt succeeds the failure is that of the last one.
+ * Only an [IOException] is held as a failure.
+ *
+ * @throws IllegalArgumentException if [attempts] is below 1.
  */
+fun Path.deleteRecursivelyCatching(
+    attempts: Int = 1,
+    delay: Duration = Duration.ZERO,
+): Result<Unit> {
+    require(attempts >= 1) { "Delete attempts must be at least 1, got $attempts" }
+    return (2..attempts).fold(deleteOnceCatching()) { outcome, _ ->
+        when {
+            outcome.isSuccess -> outcome
+            else -> deleteOnceCatching(after = delay)
+        }
+    }
+}
+
 @OptIn(ExperimentalPathApi::class)
-fun Path.deleteRecursivelyCatching(): Result<Unit> = catchingIo { deleteRecursively() }
+private fun Path.deleteOnceCatching(after: Duration = Duration.ZERO): Result<Unit> {
+    Thread.sleep(after.inWholeMilliseconds)
+    return catchingIo { deleteRecursively() }
+}
 
 /**
- * Runs [block] and returns its outcome, holding an [IOException] it throws as a failure. Every other failure is the
- * caller's, so it is left to propagate rather than turned into a result nothing reads.
+ * Runs [block] and returns its outcome, holding an [IOException] it throws as a failure and letting anything else
+ * propagate.
  */
 private inline fun <T> catchingIo(block: () -> T): Result<T> =
     try {

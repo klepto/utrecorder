@@ -4,5 +4,4 @@ plugins {
 
 dependencies {
     implementation(projects.utrecorderCommon)
-    implementation(libs.logback.classic)
 }

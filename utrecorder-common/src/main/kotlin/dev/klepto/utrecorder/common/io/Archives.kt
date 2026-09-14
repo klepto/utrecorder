@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.common.io
 
-import com.github.stephenc.javaisotools.loopfs.iso9660.Iso9660FileEntry
 import com.github.stephenc.javaisotools.loopfs.iso9660.Iso9660FileSystem
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
@@ -14,6 +13,7 @@ import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
+import kotlin.io.path.createParentDirectories
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.exists
 import kotlin.io.path.inputStream
@@ -23,6 +23,61 @@ import kotlin.io.path.outputStream
  * Tar entry mode bit marking the file as executable by its owner.
  */
 private const val OWNER_EXECUTE = 64
+
+/**
+ * The path the archive entry [name] extracts to under this directory, or `null` when the entry names the archive root
+ * or [filter] rejects it. [filter] receives the name without leading or trailing `/`.
+ */
+private fun Path.entryPath(
+    name: String,
+    filter: (String) -> Boolean,
+): Path? = name.trim('/').takeIf { it.isNotEmpty() && filter(it) }?.let { resolveEntry(it) }
+
+/**
+ * Resolves the archive entry [name] against this directory, rejecting entries that would escape it.
+ */
+private fun Path.resolveEntry(name: String): Path {
+    val root = toAbsolutePath().normalize()
+    val path = root.resolve(name.trim('/')).normalize()
+    require(path.startsWith(root)) { "Archive entry escapes the target directory: $name" }
+    return path
+}
+
+/**
+ * Creates this directory when the entry is a [directory], and otherwise writes the stream [open] returns to this file.
+ */
+private fun Path.writeEntry(
+    directory: Boolean,
+    open: () -> InputStream,
+) {
+    when {
+        directory -> createDirectories()
+        else -> open().use { it.writeTo(this) }
+    }
+}
+
+/**
+ * Writes the stream into [file], creating its parent directories.
+ */
+private fun InputStream.writeTo(file: Path) {
+    file
+        .createParentDirectories()
+        .outputStream()
+        .buffered()
+        .use { copyTo(it) }
+}
+
+/**
+ * Grants execute permission to the file. Does nothing on filesystems without POSIX permissions.
+ */
+private fun Path.markExecutable() {
+    val view = Files.getFileAttributeView(this, PosixFileAttributeView::class.java) ?: return
+    val permissions = view.readAttributes().permissions()
+    permissions += PosixFilePermission.OWNER_EXECUTE
+    permissions += PosixFilePermission.GROUP_EXECUTE
+    permissions += PosixFilePermission.OTHERS_EXECUTE
+    view.setPermissions(permissions)
+}
 
 /**
  * Extracts the archive into the given [target] directory or in place if [target] is not specified.
@@ -46,66 +101,37 @@ fun Path.extract(
     }
 }
 
-/**
- * Extracts an ISO 9660 disk image.
- */
 private fun Path.extractIso(
     target: Path,
     filter: (String) -> Boolean,
 ) = Iso9660FileSystem(toFile(), true).use { fileSystem ->
     for (entry in fileSystem) {
-        val name = entry.path.trim('/')
-        if (name.isEmpty() || !filter(name)) continue
-        fileSystem.extractEntry(entry, target.resolveEntry(name))
+        val file = target.entryPath(entry.path, filter) ?: continue
+        file.writeEntry(entry.isDirectory) { fileSystem.getInputStream(entry) }
     }
 }
 
-/**
- * Writes the given ISO [entry] to [file], creating the directory instead when the entry is one.
- */
-private fun Iso9660FileSystem.extractEntry(
-    entry: Iso9660FileEntry,
-    file: Path,
-) {
-    if (entry.isDirectory) {
-        file.createDirectories()
-        return
-    }
-    getInputStream(entry).use { it.writeTo(file) }
-}
-
-/**
- * Extracts a zip archive.
- */
 private fun Path.extractZip(
     target: Path,
     filter: (String) -> Boolean,
 ) = ZipFile.builder().setPath(this).get().use { zip ->
     for (entry in zip.entries) {
-        val name = entry.name.trim('/')
-        if (name.isEmpty() || !filter(name)) continue
-        zip.extractEntry(entry, target.resolveEntry(name))
+        val file = target.entryPath(entry.name, filter) ?: continue
+        zip.extractEntry(entry, file)
     }
 }
 
 /**
- * Writes the given zip [entry] to [file], creating the directory instead when the entry is one.
+ * Writes the given zip [entry] to [file], marking a file executable when the entry's mode says so.
  */
 private fun ZipFile.extractEntry(
     entry: ZipArchiveEntry,
     file: Path,
 ) {
-    if (entry.isDirectory) {
-        file.createDirectories()
-        return
-    }
-    getInputStream(entry).use { it.writeTo(file) }
-    if (entry.unixMode and OWNER_EXECUTE != 0) file.markExecutable()
+    file.writeEntry(entry.isDirectory) { getInputStream(entry) }
+    if (!entry.isDirectory && entry.unixMode and OWNER_EXECUTE != 0) file.markExecutable()
 }
 
-/**
- * Extracts a bzip2-compressed tar archive.
- */
 private fun Path.extractTarBzip2(
     target: Path,
     filter: (String) -> Boolean,
@@ -114,9 +140,8 @@ private fun Path.extractTarBzip2(
     TarArchiveInputStream(BZip2CompressorInputStream(inputStream().buffered(), true)).use { tar ->
         while (true) {
             val entry = tar.nextEntry ?: break
-            val name = entry.name.trim('/')
-            if (name.isEmpty() || !filter(name)) continue
-            tar.extractEntry(entry, target.resolveEntry(name), links)
+            val file = target.entryPath(entry.name, filter) ?: continue
+            tar.extractEntry(entry, file, links)
         }
     }
     links.forEach { (file, name) -> target.link(file, name) }
@@ -148,53 +173,34 @@ private fun TarArchiveInputStream.extractEntry(
 }
 
 /**
- * Links [file] to the archive entry named [name], relative to this extraction root. Falls back to copying the linked
- * file when the filesystem refuses symbolic links.
+ * Links [file] to the archive entry named [name], relative to this extraction root. Copies the linked file instead
+ * when the filesystem refuses symbolic links.
  */
 private fun Path.link(
     file: Path,
     name: String,
 ) {
-    file.parent?.createDirectories()
+    file.createParentDirectories()
     file.deleteIfExists()
-    runCatching { Files.createSymbolicLink(file, Path.of(name)) }.getOrElse {
-        val source =
-            when {
-                name.startsWith("/") -> resolveEntry(name.trimStart('/'))
-                else -> file.resolveSibling(name)
-            }
-        check(source.exists()) { "Cannot link $file to $name" }
-        source.copyTo(file, overwrite = true)
-        file.markExecutable()
-    }
+    runCatching { Files.createSymbolicLink(file, Path.of(name)) }
+        .onFailure { cause -> copyLinked(file, name, cause) }
 }
 
 /**
- * Resolves the archive entry [name] against this directory, rejecting entries that would escape it.
+ * Copies the file the link [name] points at to [file], throwing with the symbolic link's failure [cause] when the
+ * archive holds no such file.
  */
-private fun Path.resolveEntry(name: String): Path {
-    val root = toAbsolutePath().normalize()
-    val path = root.resolve(name).normalize()
-    require(path.startsWith(root)) { "Archive entry escapes the target directory: $name" }
-    return path
-}
-
-/**
- * Writes the stream into [file], creating its parent directories.
- */
-private fun InputStream.writeTo(file: Path) {
-    file.parent?.createDirectories()
-    file.outputStream().buffered().use { copyTo(it) }
-}
-
-/**
- * Grants execute permission to the file. Does nothing on filesystems without POSIX permissions.
- */
-private fun Path.markExecutable() {
-    val view = Files.getFileAttributeView(this, PosixFileAttributeView::class.java) ?: return
-    val permissions = view.readAttributes().permissions()
-    permissions += PosixFilePermission.OWNER_EXECUTE
-    permissions += PosixFilePermission.GROUP_EXECUTE
-    permissions += PosixFilePermission.OTHERS_EXECUTE
-    view.setPermissions(permissions)
+private fun Path.copyLinked(
+    file: Path,
+    name: String,
+    cause: Throwable,
+) {
+    val source =
+        when {
+            name.startsWith("/") -> resolveEntry(name)
+            else -> file.resolveSibling(name)
+        }
+    if (!source.exists()) throw IllegalStateException("Cannot link $file to $name", cause)
+    source.copyTo(file, overwrite = true)
+    file.markExecutable()
 }

@@ -2,7 +2,8 @@ package dev.klepto.utrecorder.common.config
 
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.toAbsolutePath
-import dev.klepto.utrecorder.common.os.OS
+import dev.klepto.utrecorder.common.io.workingDirectory
+import dev.klepto.utrecorder.common.os.OperatingSystem
 import java.nio.file.Path
 import kotlin.io.path.exists
 
@@ -73,7 +74,7 @@ data class Directories(
          * checkout this process runs from, then the one under the operating system data directory.
          */
         private fun resolveHome(properties: PropertySource): Path =
-            configuredHome(properties) ?: developmentHome() ?: systemHome(properties)
+            configuredHome(properties) ?: developmentHome(properties) ?: systemHome(properties)
 
         /**
          * Returns the home directory [properties] configures, or `null` if it configures none.
@@ -81,17 +82,18 @@ data class Directories(
         private fun configuredHome(properties: PropertySource): Path? = properties.get("home") { it.toAbsolutePath() }
 
         /**
-         * Returns the home directory held by the source checkout this process runs from, or `null` if it runs from
-         * none. The checkout is found by walking up from the working directory.
+         * Returns the home directory held by the source checkout containing the working directory [properties] names,
+         * or `null` if no checkout contains it.
          */
-        private fun developmentHome(): Path? =
-            generateSequence("".toAbsolutePath()) { it.parent }
+        private fun developmentHome(properties: PropertySource): Path? =
+            generateSequence(workingDirectory(properties)) { it.parent }
                 .firstOrNull { it[REPOSITORY_MARKER].exists() }
                 ?.get(DEVELOPMENT_DIRECTORY)
 
         /**
-         * Returns the home directory under the operating system data directory.
+         * Returns the home directory under the data directory of the operating system [properties] names.
          */
-        private fun systemHome(properties: PropertySource): Path = OS.dataDirectory(properties)[APPLICATION_DIRECTORY]
+        private fun systemHome(properties: PropertySource): Path =
+            OperatingSystem.current(properties).dataDirectory(properties)[APPLICATION_DIRECTORY]
     }
 }

@@ -3,9 +3,6 @@ package dev.klepto.utrecorder.ut99
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 
-/**
- * Tests for [UtDirectory.of] and the package directories [UtDirectory.packages] lists.
- */
 class UtDirectoryTest :
     FunSpec({
         test("of maps each package extension to its directory") {
@@ -27,8 +24,8 @@ class UtDirectoryTest :
             UtDirectory.of("") shouldBe null
         }
 
-        test("packages holds the five package directories, System first, in probe order") {
-            UtDirectory.packages shouldBe
+        test("PACKAGES holds the five package directories, System first, in probe order") {
+            UtDirectory.PACKAGES shouldBe
                 listOf(
                     UtDirectory.System,
                     UtDirectory.Maps,
@@ -36,5 +33,9 @@ class UtDirectoryTest :
                     UtDirectory.Sounds,
                     UtDirectory.Music,
                 )
+        }
+
+        test("PACKAGE_EXTENSIONS is u, unr, utx, uax and umx, in that order") {
+            UtDirectory.PACKAGE_EXTENSIONS.toList() shouldBe listOf("u", "unr", "utx", "uax", "umx")
         }
     })

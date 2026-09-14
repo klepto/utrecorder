@@ -2,22 +2,22 @@ package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.install.Installer
 import dev.klepto.utrecorder.common.io.Downloader
-import dev.klepto.utrecorder.common.io.createParentDirectory
+import dev.klepto.utrecorder.common.io.copy
+import dev.klepto.utrecorder.common.io.encodeUrlPathSegment
 import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.headCatching
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.stage
 import dev.klepto.utrecorder.common.log.logger
 import java.io.IOException
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.nio.file.Path
-import kotlin.io.path.copyTo
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.extension
 
 /**
- * Fetches the packages a demo names into an installation, from the installation itself, from the packages directory
- * and from the configured redirects, in that order.
+ * Provisioner of the packages a demo names into an installation.
+ *
+ * Use [install] to fetch the packages the installation is missing, and [installed] to read what it fetched.
  *
  * @property packages The packages the demo names, at the GUIDs it recorded.
  * @property installation The installation the packages are provisioned into.
@@ -29,26 +29,15 @@ class UtPackageInstaller(
     private val config: UtConfig = UtConfig.DEFAULT,
 ) : Installer {
     /**
-     * Logger for this class.
-     */
-    private val log = logger<UtPackageInstaller>()
-
-    /**
      * The packages fetched so far, in the order they were fetched.
      */
     private val fetched = mutableListOf<UtPackage>()
 
     /**
-     * The extensions a package is probed for at a redirect, in the order they are probed.
-     */
-    private val packageExtensions: List<String>
-        get() = UtDirectory.packages.mapNotNull { it.extension }
-
-    /**
      * The sources a package is looked for in, in the order they are tried, as the failure names them.
      */
     private val sources: List<String>
-        get() = listOf("${installation.directory}", "${config.packagesDirectory}") + config.redirectUrls
+        get() = listOf("${installation.directory}", "${config.directories.packages}") + config.redirectUrls
 
     /**
      * The packages this installer fetched, in the order it fetched them. Empty before [install] runs, and empty after
@@ -57,8 +46,9 @@ class UtPackageInstaller(
     val installed: List<UtPackage> get() = fetched.toList()
 
     /**
-     * Fetches every package the installation does not already hold at the GUID the demo names. A package fetched
-     * before a later one fails is kept, on disk and in [installed].
+     * Fetches every package the installation does not already hold at the GUID the demo names, looking in the
+     * packages directory first and at the redirects after. A package fetched before a later one fails is kept, on
+     * disk and in [installed].
      *
      * @throws UtPackageException when no source holds one of them.
      */
@@ -71,8 +61,7 @@ class UtPackageInstaller(
     }
 
     /**
-     * Deletes the packages this installer fetched from the installation. A package the installation already held is
-     * not this installer's to remove, so [uninstall] before an [install] deletes nothing.
+     * Deletes the packages this installer fetched from the installation, leaving the ones it already held.
      */
     override fun uninstall() {
         fetched.forEach { it.path?.deleteIfExists() }
@@ -88,36 +77,36 @@ class UtPackageInstaller(
      * Returns the package the installation holds satisfying [required], or `null` when it holds none.
      */
     private fun installedPackage(required: UtPackage): UtPackage? =
-        UtDirectory.packages.firstNotNullOfOrNull { directory ->
+        UtDirectory.PACKAGES.firstNotNullOfOrNull { directory ->
             installation.packages(directory).firstOrNull { it.satisfies(required) }
         }
 
     /**
      * Returns the package the packages directory holds satisfying [required], or `null` when it holds none.
      */
-    private fun localPackage(required: UtPackage): UtPackage? = packagesIn(config.packagesDirectory).firstOrNull { it.satisfies(required) }
+    private fun localPackage(required: UtPackage): UtPackage? =
+        UtPackage.list(config.directories.packages, UtDirectory.PACKAGE_EXTENSIONS).firstOrNull { it.satisfies(required) }
 
     /**
-     * Returns the package [required] fetched into the packages directory from the first redirect serving it, or
+     * Returns the package [required] fetched from the first redirect serving it into the packages directory, or
      * `null` when no redirect does.
      */
     private fun fetchedPackage(required: UtPackage): UtPackage? = config.redirectUrls.firstNotNullOfOrNull { fetch(it, required) }
 
     /**
-     * Returns the package [required] fetched from the redirect [base] into the packages directory, or `null` when the
-     * redirect serves it under no package extension.
-     *
-     * The redirect names a file rather than a package, so every package extension is probed in turn and the first one
-     * it answers is the one that is fetched. The archive is decompressed in a staging directory beside the file it
-     * becomes, so that a failed decode leaves no half-written package behind.
+     * Returns the package [required] fetched from the redirect [base] into the packages directory under the first
+     * package extension the redirect serves, or `null` when it serves none.
      */
     private fun fetch(
         base: String,
         required: UtPackage,
     ): UtPackage? {
-        val extension = packageExtensions.firstOrNull { Downloader(redirectUrl(base, required.name, it)).exists() } ?: return null
-        val url = redirectUrl(base, required.name, extension)
-        val target = config.packagesDirectory["${required.name}.$extension"]
+        val (extension, url) =
+            UtDirectory.PACKAGE_EXTENSIONS
+                .asSequence()
+                .map { it to redirectUrl(base, required.name, it) }
+                .firstOrNull { (_, url) -> headCatching(url).isSuccess } ?: return null
+        val target = config.directories.packages["${required.name}.$extension"]
         log.info { "Fetching ${required.name} from $url" }
 
         target.stage { staging ->
@@ -136,10 +125,7 @@ class UtPackageInstaller(
      */
     private fun copyIntoInstallation(source: UtPackage): UtPackage {
         val path = checkNotNull(source.path) { "No file holds the package ${source.name}" }
-        val target = installationPath(path)
-        target.createParentDirectory()
-        path.copyTo(target, overwrite = true)
-        return UtPackage.read(target)
+        return UtPackage.read(path.copy(installationPath(path), overwrite = true))
     }
 
     /**
@@ -148,6 +134,19 @@ class UtPackageInstaller(
     private fun installationPath(path: Path): Path {
         val directory = checkNotNull(UtDirectory.of(path.extension)) { "No directory of an installation holds $path" }
         return installation.directory[directory]["${path.fileName}"]
+    }
+
+    companion object {
+        private val log = logger<UtPackageInstaller>()
+
+        /**
+         * Returns the URL the package [name] of [extension] is fetched from at the redirect [base].
+         */
+        private fun redirectUrl(
+            base: String,
+            name: String,
+            extension: String,
+        ): String = "$base/${name.encodeUrlPathSegment()}.$extension.uz"
     }
 }
 
@@ -161,16 +160,3 @@ class UtPackageException(
     val packageName: String,
     val sources: List<String>,
 ) : IOException("No source holds $packageName, tried: ${sources.joinToString()}")
-
-/**
- * Returns the URL a package named [name] with the extension [extension] would be fetched from at the redirect [base].
- * The name is URL-encoded, with `+` rewritten to `%20`, because a redirect serves a file name rather than a form.
- */
-internal fun redirectUrl(
-    base: String,
-    name: String,
-    extension: String,
-): String {
-    val encoded = URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20")
-    return "$base/$encoded.$extension.uz"
-}

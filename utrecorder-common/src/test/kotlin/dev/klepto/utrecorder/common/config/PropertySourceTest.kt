@@ -1,117 +1,132 @@
 package dev.klepto.utrecorder.common.config
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
-
-/**
- * Matching environment variables are set in `build.gradle.kts`.
- */
-private const val TEST_PREFIX = "utrecorder_test"
-
-private val testSource = PropertySource(TEST_PREFIX)
+import kotlin.time.Duration.Companion.seconds
 
 class PropertySourceTest :
     FunSpec({
-        val property = SystemProperties()
+        fun source(
+            properties: Map<String, String> = emptyMap(),
+            environment: Map<String, String> = emptyMap(),
+        ) = PropertySource("utrecorder_test", properties::get, environment::get)
 
-        afterTest { property.clear() }
+        context("get") {
+            test("reads the prefixed key from the properties") {
+                source(properties = mapOf("utrecorder_test.record_codec" to "libopenh264"))["record_codec"] shouldBe
+                    "libopenh264"
+            }
 
-        test("a source built with no prefix reads under the application prefix") {
-            property("${PropertySource.APPLICATION_PREFIX}.probe_key", "probe-value")
+            test("falls back to the upper-cased, underscored environment variable") {
+                source(environment = mapOf("UTRECORDER_TEST_ENV_DOTTED_KEY" to "value-with-dots"))["env.dotted.key"] shouldBe
+                    "value-with-dots"
+            }
 
-            PropertySource().get("probe_key") shouldBe "probe-value"
+            test("prefers the properties over the environment") {
+                val source =
+                    source(
+                        properties = mapOf("utrecorder_test.fps" to "60"),
+                        environment = mapOf("UTRECORDER_TEST_FPS" to "24"),
+                    )
+
+                source["fps"] shouldBe "60"
+            }
+
+            test("returns null for a key neither map holds") {
+                source()["record_codec"].shouldBeNull()
+            }
+
+            test("treats an empty property as missing") {
+                source(properties = mapOf("utrecorder_test.record_codec" to ""))["record_codec"].shouldBeNull()
+            }
+
+            test("treats an empty environment variable as missing") {
+                source(environment = mapOf("UTRECORDER_TEST_EMPTY" to ""))["empty"].shouldBeNull()
+            }
+
+            test("with a mapper maps the value") {
+                source(properties = mapOf("utrecorder_test.record_fps" to "30")).get("record_fps") { it.toInt() } shouldBe 30
+            }
+
+            test("with a mapper does not invoke the mapper for a missing key") {
+                var invoked = false
+
+                source().get("record_fps") { invoked = true }.shouldBeNull()
+
+                invoked shouldBe false
+            }
         }
 
-        test("DEFAULT reads under the application prefix") {
-            property("${PropertySource.APPLICATION_PREFIX}.probe_default", "probe-value")
+        context("duration") {
+            test("reads 90s as 90 seconds") {
+                source(properties = mapOf("utrecorder_test.retention" to "90s")).duration("retention") shouldBe 90.seconds
+            }
 
-            PropertySource.DEFAULT.get("probe_default") shouldBe "probe-value"
+            test("reads a missing key as null") {
+                source().duration("retention").shouldBeNull()
+            }
+
+            test("throws IllegalArgumentException for a malformed value") {
+                shouldThrow<IllegalArgumentException> {
+                    source(properties = mapOf("utrecorder_test.retention" to "ninety")).duration("retention")
+                }
+            }
         }
 
-        test("get reads the system property under the configured prefix") {
-            property("$TEST_PREFIX.record_codec", "libopenh264")
+        context("systemProperty") {
+            test("reads an unprefixed name from the properties") {
+                source(properties = mapOf("os.name" to "Linux")).systemProperty("os.name") shouldBe "Linux"
+            }
 
-            testSource.get("record_codec") shouldBe "libopenh264"
+            test("does not read the environment") {
+                source(environment = mapOf("os.name" to "Linux")).systemProperty("os.name").shouldBeNull()
+            }
+
+            test("reads an empty value as null") {
+                source(properties = mapOf("os.name" to "")).systemProperty("os.name").shouldBeNull()
+            }
         }
 
-        test("get returns null for a missing property") {
-            testSource.get("record_codec").shouldBeNull()
+        context("environmentVariable") {
+            test("reads an unprefixed name from the environment") {
+                source(environment = mapOf("LOCALAPPDATA" to "C:\\Local")).environmentVariable("LOCALAPPDATA") shouldBe
+                    "C:\\Local"
+            }
+
+            test("does not read the properties") {
+                source(properties = mapOf("LOCALAPPDATA" to "C:\\Local")).environmentVariable("LOCALAPPDATA").shouldBeNull()
+            }
+
+            test("reads an empty value as null") {
+                source(environment = mapOf("LOCALAPPDATA" to "")).environmentVariable("LOCALAPPDATA").shouldBeNull()
+            }
         }
 
-        test("get treats an empty property as missing") {
-            property("$TEST_PREFIX.record_codec", "")
+        context("list") {
+            test("splits a comma-separated value and trims each entry") {
+                source(properties = mapOf("utrecorder_test.urls" to " http://one.test , http://two.test ")).list("urls") shouldBe
+                    listOf("http://one.test", "http://two.test")
+            }
 
-            testSource.get("record_codec").shouldBeNull()
+            test("drops empty entries") {
+                source(properties = mapOf("utrecorder_test.urls" to "http://one.test,,   ,http://two.test")).list("urls") shouldBe
+                    listOf("http://one.test", "http://two.test")
+            }
+
+            test("returns null for a key nothing holds") {
+                source().list("urls").shouldBeNull()
+            }
+
+            test("returns null for a key holding only separators and blanks") {
+                source(properties = mapOf("utrecorder_test.urls" to " , ,, ")).list("urls").shouldBeNull()
+            }
         }
 
-        test("get falls back to the uppercased environment variable") {
-            testSource.get("env_codec") shouldBe "libx264"
-        }
-
-        test("get maps a dotted key to an underscored environment variable") {
-            testSource.get("env.dotted.key") shouldBe "value-with-dots"
-        }
-
-        test("get prefers the system property over the environment variable") {
-            property("$TEST_PREFIX.env_fps", "60")
-
-            testSource.get("env_fps") shouldBe "60"
-        }
-
-        test("get treats an empty environment variable as missing") {
-            testSource.get("env_empty").shouldBeNull()
-        }
-
-        test("get with a mapper maps the property value") {
-            property("$TEST_PREFIX.record_fps", "30")
-
-            testSource.get("record_fps") { it.toInt() } shouldBe 30
-        }
-
-        test("get with a mapper returns null for a missing property") {
-            testSource.get("record_fps") { it.toInt() }.shouldBeNull()
-        }
-
-        test("get with a mapper does not invoke the mapper for a missing property") {
-            var invoked = false
-
-            testSource.get("record_fps") { invoked = true }.shouldBeNull()
-
-            invoked shouldBe false
-        }
-
-        test("environment reads the given variable, unprefixed") {
-            testSource.environment("UTRECORDER_TEST_ENV_CODEC") shouldBe "libx264"
-        }
-
-        test("environment returns null for a missing variable") {
-            testSource.environment("UTRECORDER_TEST_NO_SUCH_VARIABLE").shouldBeNull()
-        }
-
-        test("environment treats an empty variable as missing") {
-            testSource.environment("UTRECORDER_TEST_ENV_EMPTY").shouldBeNull()
-        }
-
-        test("list splits a comma-separated value and trims each entry") {
-            property("$TEST_PREFIX.redirect_urls", " http://one.test , http://two.test ")
-
-            testSource.list("redirect_urls") shouldBe listOf("http://one.test", "http://two.test")
-        }
-
-        test("list drops empty entries") {
-            property("$TEST_PREFIX.redirect_urls", "http://one.test,,   ,http://two.test")
-
-            testSource.list("redirect_urls") shouldBe listOf("http://one.test", "http://two.test")
-        }
-
-        test("list returns null for a key nothing holds") {
-            testSource.list("redirect_urls").shouldBeNull()
-        }
-
-        test("list returns null for a key holding only separators and blanks") {
-            property("$TEST_PREFIX.redirect_urls", " , ,, ")
-
-            testSource.list("redirect_urls").shouldBeNull()
+        context("DEFAULT") {
+            test("reads user.dir through systemProperty as the value the JVM holds") {
+                PropertySource.DEFAULT.systemProperty("user.dir") shouldBe System.getProperty("user.dir")
+            }
         }
     })

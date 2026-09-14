@@ -1,34 +1,32 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.os.OS
-import dev.klepto.utrecorder.common.os.OperatingSystem.LINUX
-import dev.klepto.utrecorder.common.os.OperatingSystem.WINDOWS
+import dev.klepto.utrecorder.common.os.OperatingSystem
+import java.nio.charset.Charset
 
 /**
- * The platforms an installation is provisioned for, each naming the files Unreal Tournament ships under it.
+ * An operating system Unreal Tournament runs on, and the file names the game ships under it.
  *
- * Use [UT_PLATFORM] for the platform the current process runs on.
+ * Use [current] for the platform of the current process.
  *
+ * @property operatingSystem The operating system this platform runs on.
  * @property patchSuffix The part of the OldUnreal patch file name that names this platform.
- * @property compilerExecutable Compiler executable name.
- * @property gameExecutable Unreal Tournament executable name.
- * @property executableSuffix The extension an executable takes on this platform, empty where it takes none.
+ * @property compilerExecutable The file name of the UCC executable.
+ * @property gameExecutable The file name of the game executable.
  * @property homeArguments The arguments that keep the game and the compiler out of the home directory of the user.
  */
 enum class UtPlatform(
+    val operatingSystem: OperatingSystem,
     private val patchSuffix: String,
     val compilerExecutable: String,
     val gameExecutable: String,
-    val executableSuffix: String,
     val homeArguments: List<String>,
 ) {
-    WINDOWS("Windows-x86.zip", "UCC.exe", "UnrealTournament.exe", ".exe", emptyList()),
-    LINUX("Linux-x86.tar.bz2", "ucc-bin", "ut-bin", "", listOf("-nohomedir")),
+    WINDOWS(OperatingSystem.WINDOWS, "Windows-x86.zip", "UCC.exe", "UnrealTournament.exe", emptyList()),
+    LINUX(OperatingSystem.LINUX, "Linux-x86.tar.bz2", "ucc-bin", "ut-bin", listOf("-nohomedir")),
     ;
 
     /**
-     * Returns the name of the patch file holding the given [patchVersion] for this platform. A function of the
-     * version rather than a constant, so that the enum does not read a configuration to build itself.
+     * Returns the name of the OldUnreal patch file holding [patchVersion] for this platform.
      */
     fun patchFileName(patchVersion: String): String = "$PATCH_FILE_PREFIX$patchVersion-$patchSuffix"
 
@@ -37,15 +35,18 @@ enum class UtPlatform(
          * The prefix every OldUnreal patch file name takes.
          */
         private const val PATCH_FILE_PREFIX = "OldUnreal-UTPatch"
+
+        /**
+         * The charset Unreal Tournament reads and writes its text in.
+         */
+        val CHARSET: Charset = Charsets.ISO_8859_1
+
+        /**
+         * Returns the platform that runs on [operatingSystem].
+         *
+         * @throws IllegalStateException if no platform runs on [operatingSystem].
+         */
+        fun current(operatingSystem: OperatingSystem = OperatingSystem.current()): UtPlatform =
+            entries.firstOrNull { it.operatingSystem == operatingSystem } ?: error("Unsupported operating system")
     }
 }
-
-/**
- * The current platform.
- */
-val UT_PLATFORM: UtPlatform =
-    when (OS) {
-        WINDOWS -> UtPlatform.WINDOWS
-        LINUX -> UtPlatform.LINUX
-        else -> error("Unsupported operating system")
-    }

@@ -10,7 +10,6 @@ import io.kotest.matchers.shouldBe
 import io.ktor.client.plugins.ClientRequestException
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.listDirectoryEntries
@@ -19,26 +18,23 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.random.Random
 
-private const val BODY = "utrecorder-22"
-private const val BODY_MD5 = "00ad189b536dc412168fc866a7ec13b0"
-private const val BODY_SHA256 = "0323ec0736b6000fffd1a01bc5a70c1e35dc998f1214edde7a668879b54b9562"
-
-private const val TAMPERED = "tampered"
-private const val TAMPERED_MD5 = "07b218b924120d49a725c36b06556000"
-
 class DownloaderTest :
     FunSpec({
+        val sample = "utrecorder-22"
+        val sampleMd5 = "00ad189b536dc412168fc866a7ec13b0"
+        val sampleSha256 = "0323ec0736b6000fffd1a01bc5a70c1e35dc998f1214edde7a668879b54b9562"
+        val tampered = "tampered"
+        val tamperedMd5 = "07b218b924120d49a725c36b06556000"
+
         val root = createTempDirectory("utrecorder-downloader-test")
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
 
         val notFound: (HttpExchange) -> Unit = { it.sendResponseHeaders(404, -1) }
         var handler = notFound
         var requests = 0
-        val methods = mutableListOf<String>()
 
         server.createContext("/") { exchange ->
             requests++
-            methods += exchange.requestMethod
             try {
                 handler(exchange)
             } finally {
@@ -55,7 +51,6 @@ class DownloaderTest :
         beforeTest {
             handler = notFound
             requests = 0
-            methods.clear()
         }
 
         val url = "http://${server.address.hostString}:${server.address.port}/file"
@@ -83,11 +78,10 @@ class DownloaderTest :
         }
 
         fun serve(
-            body: String = BODY,
+            body: String = sample,
             chunked: Boolean = false,
         ) = serveBytes(body.toByteArray(), chunked)
 
-        /** Temporary files are created next to the output, so leftovers show up in [root]. */
         fun leftovers() = root.listDirectoryEntries("*.tmp")
 
         test("writes the response body to the output path") {
@@ -96,7 +90,7 @@ class DownloaderTest :
 
             Downloader(url).download(output)
 
-            output.readText() shouldBe BODY
+            output.readText() shouldBe sample
         }
 
         test("creates missing parent directories") {
@@ -133,7 +127,7 @@ class DownloaderTest :
 
             Downloader(url).download(root / "progress") { received, total -> progress += received to total }
 
-            progress.last() shouldBe (BODY.length.toLong() to BODY.length.toLong())
+            progress.last() shouldBe (sample.length.toLong() to sample.length.toLong())
         }
 
         test("reports a total of -1 when the length is unknown") {
@@ -142,51 +136,51 @@ class DownloaderTest :
 
             Downloader(url).download(root / "chunked") { received, total -> progress += received to total }
 
-            progress.last() shouldBe (BODY.length.toLong() to -1L)
+            progress.last() shouldBe (sample.length.toLong() to -1L)
         }
 
         test("accepts a matching md5 hash") {
             serve()
             val output = root / "md5-match"
 
-            Downloader(url, BODY_MD5).download(output)
+            Downloader(url, sampleMd5).download(output)
 
-            output.readText() shouldBe BODY
+            output.readText() shouldBe sample
         }
 
         test("accepts a matching sha-256 hash") {
             serve()
             val output = root / "sha-match"
 
-            Downloader(url, BODY_SHA256, algorithm = "sha-256").download(output)
+            Downloader(url, sampleSha256, algorithm = "sha-256").download(output)
 
-            output.readText() shouldBe BODY
+            output.readText() shouldBe sample
         }
 
         test("compares hashes case-insensitively") {
             serve()
             val output = root / "uppercase-hash"
 
-            Downloader(url, BODY_MD5.uppercase()).download(output)
+            Downloader(url, sampleMd5.uppercase()).download(output)
 
-            output.readText() shouldBe BODY
+            output.readText() shouldBe sample
         }
 
         test("reports both hashes when the download does not match") {
-            serve(TAMPERED)
+            serve(tampered)
 
-            val error = shouldThrow<HashMismatchException> { Downloader(url, BODY_MD5).download(root / "mismatch") }
+            val error = shouldThrow<HashMismatchException> { Downloader(url, sampleMd5).download(root / "mismatch") }
 
-            error.expected shouldBe BODY_MD5
-            error.actual shouldBe TAMPERED_MD5
-            error.message shouldBe "Hash mismatch for download $url: expected $BODY_MD5, actual $TAMPERED_MD5"
+            error.expected shouldBe sampleMd5
+            error.actual shouldBe tamperedMd5
+            error.message shouldBe "Hash mismatch for download $url: expected $sampleMd5, actual $tamperedMd5"
         }
 
         test("leaves no output file when the hash does not match") {
-            serve(TAMPERED)
+            serve(tampered)
             val output = root / "mismatch-output"
 
-            shouldThrow<HashMismatchException> { Downloader(url, BODY_MD5).download(output) }
+            shouldThrow<HashMismatchException> { Downloader(url, sampleMd5).download(output) }
 
             output.shouldNotExist()
             leftovers() shouldBe emptyList()
@@ -194,31 +188,31 @@ class DownloaderTest :
 
         test("skips the request when the output already matches the hash") {
             serve()
-            val output = (root / "cached").apply { writeText(BODY) }
+            val output = (root / "cached").apply { writeText(sample) }
 
-            Downloader(url, BODY_MD5).download(output)
+            Downloader(url, sampleMd5).download(output)
 
             requests shouldBe 0
         }
 
         test("reports the cached size to the listener when the download is skipped") {
             serve()
-            val output = (root / "cached-progress").apply { writeText(BODY) }
+            val output = (root / "cached-progress").apply { writeText(sample) }
             val progress = mutableListOf<Pair<Long, Long>>()
 
-            Downloader(url, BODY_MD5).download(output) { received, total -> progress += received to total }
+            Downloader(url, sampleMd5).download(output) { received, total -> progress += received to total }
 
-            progress shouldBe listOf(BODY.length.toLong() to BODY.length.toLong())
+            progress shouldBe listOf(sample.length.toLong() to sample.length.toLong())
         }
 
         test("re-downloads when the existing output has a different hash") {
             serve()
             val output = (root / "stale").apply { writeText("stale") }
 
-            Downloader(url, BODY_MD5).download(output)
+            Downloader(url, sampleMd5).download(output)
 
             requests shouldBe 1
-            output.readText() shouldBe BODY
+            output.readText() shouldBe sample
         }
 
         test("re-downloads an existing output when no hash is given") {
@@ -228,12 +222,12 @@ class DownloaderTest :
             Downloader(url).download(output)
 
             requests shouldBe 2
-            output.readText() shouldBe BODY
+            output.readText() shouldBe sample
         }
 
         test("skips the download when the existing size already matches the remote content length") {
             serve()
-            val staleContent = "x".repeat(BODY.length)
+            val staleContent = "x".repeat(sample.length)
             val output = (root / "size-match").apply { writeText(staleContent) }
 
             Downloader(url).download(output)
@@ -247,7 +241,7 @@ class DownloaderTest :
                 if (exchange.requestMethod == "HEAD") {
                     exchange.sendResponseHeaders(404, -1)
                 } else {
-                    val bytes = BODY.toByteArray()
+                    val bytes = sample.toByteArray()
                     exchange.sendResponseHeaders(200, bytes.size.toLong())
                     exchange.responseBody.use { it.write(bytes) }
                 }
@@ -257,7 +251,7 @@ class DownloaderTest :
             Downloader(url).download(output)
 
             requests shouldBe 2
-            output.readText() shouldBe BODY
+            output.readText() shouldBe sample
         }
 
         test("throws on an error status") {
@@ -292,29 +286,5 @@ class DownloaderTest :
             shouldThrow<ClientRequestException> { Downloader(url).download(root / "clean-failure") }
 
             leftovers() shouldBe emptyList()
-        }
-
-        test("reports a URL that answers a HEAD request with 200 as existing") {
-            serve()
-
-            Downloader(url).exists() shouldBe true
-        }
-
-        test("reports a URL that answers 404 as not existing") {
-            Downloader(url).exists() shouldBe false
-        }
-
-        test("reports a URL whose host refuses the connection as not existing") {
-            val refused = ServerSocket(0).use { "http://${InetAddress.getLoopbackAddress().hostAddress}:${it.localPort}/file" }
-
-            Downloader(refused).exists() shouldBe false
-        }
-
-        test("probes with a HEAD request so that no body is pulled") {
-            serve()
-
-            Downloader(url).exists()
-
-            methods shouldBe listOf("HEAD")
         }
     })

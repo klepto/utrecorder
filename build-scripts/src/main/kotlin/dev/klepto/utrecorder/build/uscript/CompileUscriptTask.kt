@@ -81,7 +81,7 @@ abstract class CompileUscriptTask : DefaultTask() {
 
     /**
      * The directory the configuration and the output of the compiler run are written under. A run that succeeds leaves
-     * it empty, a run that fails keeps its job directory there.
+     * it empty, a run that fails keeps its task directory there.
      */
     @get:OutputDirectory
     abstract val logDirectory: DirectoryProperty
@@ -112,7 +112,7 @@ abstract class CompileUscriptTask : DefaultTask() {
         val outputPath = outputDirectory.file("${packageName.get()}.u").get().asFile
         val logPath = logDirectory.get().asFile
 
-        // The compiler keeps the job of a failed run, so the previous one has to go or its log outlives its output.
+        // The compiler keeps the task directory of a failed run, so the previous one has to go or its log outlives its output.
         files.delete {
             delete(outputDirectory, logDirectory)
         }
@@ -141,7 +141,7 @@ abstract class CompileUscriptTask : DefaultTask() {
             "make",
             "--sources=${sources.get().asFile.absolutePath}",
             "--output=$outputPath",
-            "--jobs=$logPath",
+            "--tasks=$logPath",
             editPackagesArgument(),
         )
 
@@ -156,7 +156,7 @@ abstract class CompileUscriptTask : DefaultTask() {
 
     companion object {
         /**
-         * The entry point of `utrecorder-ut99`. Referenced by name, so the class has to keep it - see `UtCli`.
+         * The command line entry point of `utrecorder-ut99` the compiler is forked through.
          */
         private const val MAIN_CLASS = "dev.klepto.utrecorder.ut99.UtCli"
     }

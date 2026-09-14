@@ -6,19 +6,14 @@ ktlint = "1.8.0"
 ktlint-plugin = "14.2.0"
 loop-fs = "2.1.0"
 commons-compress = "1.28.0"
-ffmpeg = "8.1.2-1.5.14"
-javacpp = "1.5.14"
 ktor = "3.5.2"
 kotlin-logging = "8.0.4"
 logback = "1.5.38"
 kotest = "6.2.4"
-slf4j = "2.0.17"
 
 [libraries]
 loop-fs-iso = { module = "com.github.stephenc.java-iso-tools:loop-fs-iso-impl", version.ref = "loop-fs" }
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commons-compress" }
-ffmpeg = { module = "org.bytedeco:ffmpeg", version.ref = "ffmpeg" }
-javacpp = { module = "org.bytedeco:javacpp", version.ref = "javacpp" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
 kotlin-logging = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlin-logging" }
@@ -29,13 +24,8 @@ kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 detekt-gradle-plugin = { module = "dev.detekt:detekt-gradle-plugin", version.ref = "detekt" }
 ktlint-gradle-plugin = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlint-plugin" }
-slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 
 [bundles]
 archives = ["loop-fs-iso", "commons-compress"]
 ktor-client = ["ktor-client-core", "ktor-client-cio"]
-logging = ["kotlin-logging", "logback-classic", "slf4j-api"]
 kotest = ["kotest-runner-junit5", "kotest-assertions-core"]
-
-[plugins]
-kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

@@ -1,11 +1,10 @@
-import dev.klepto.utrecorder.build.createFromLayout
 import dev.klepto.utrecorder.build.embedded.EmbeddedArtifactsExtension
 import dev.klepto.utrecorder.build.native.CompileNativeTask
 import dev.klepto.utrecorder.build.native.NativeBinaryType
 import dev.klepto.utrecorder.build.native.NativeExtension
 import dev.klepto.utrecorder.build.native.NativePlatform
 import dev.klepto.utrecorder.build.native.NativeToolchain
-import org.gradle.language.base.plugins.LifecycleBasePlugin
+import dev.klepto.utrecorder.build.registerLayoutTasks
 
 plugins {
     `java-library`
@@ -18,9 +17,7 @@ embeddedArtifacts.namespace.convention("native")
 val nativeBinaries = extensions.create<NativeExtension>("nativeBinaries")
 nativeBinaries.sourceDirectory.convention(layout.projectDirectory.dir("src/main/native"))
 
-/**
- * The platform this build targets. Nothing here cross-compiles, so it is the platform the build runs on.
- */
+// Nothing cross-compiles, so the platform a build targets is the platform it runs on.
 val targetPlatform = NativePlatform.current
 
 val nativeToolchain =
@@ -34,40 +31,25 @@ tasks.jar {
     archiveClassifier = targetPlatform.id
 }
 
-tasks.register("compileNative") {
-    group = LifecycleBasePlugin.BUILD_GROUP
-    description = "Compiles every native binary of this module."
+registerLayoutTasks(
+    elements = nativeBinaries.binaries,
+    sourceDirectory = nativeBinaries.sourceDirectory.get(),
+    taskName = "compileNative",
+    description = "Compiles every native binary of this module.",
+    taskType = CompileNativeTask::class,
+    outputDirectory = { it.outputDirectory },
+) { binary ->
+    description = "Compiles the ${binary.name} native binary."
 
-    dependsOn(tasks.withType<CompileNativeTask>())
-}
+    sources = binary.sources.convention(nativeBinaries.sourceDirectory.dir(binary.name))
+    binaryName = binary.name
+    binaryType = binary.type.convention(NativeBinaryType.SHARED_LIBRARY)
+    platforms = binary.platforms.convention(NativePlatform.entries.toSet())
 
-nativeBinaries.binaries.createFromLayout(nativeBinaries.sourceDirectory.get())
+    platform = targetPlatform
+    toolchain = nativeToolchain
 
-// A task property shadows an enclosing local of the same name, so the locals a task is configured from are named apart
-// from the properties they feed. Sharing a name self-assigns the property and fails as a circular reference.
-nativeBinaries.binaries.all {
-    val nativeName = name
-    val nativeSources = sources.convention(nativeBinaries.sourceDirectory.dir(nativeName))
-    val nativeType = type.convention(NativeBinaryType.SHARED_LIBRARY)
-    val nativePlatforms = platforms.convention(NativePlatform.entries.toSet())
-
-    val compileTask =
-        tasks.register<CompileNativeTask>("compileNative${nativeName.replaceFirstChar(Char::uppercaseChar)}") {
-            group = LifecycleBasePlugin.BUILD_GROUP
-            description = "Compiles the $nativeName native binary."
-
-            sources = nativeSources
-            binaryName = nativeName
-            binaryType = nativeType
-            platforms = nativePlatforms
-
-            platform = targetPlatform
-            toolchain = nativeToolchain
-
-            outputDirectory = layout.buildDirectory.dir("native/$nativeName")
-            logDirectory = layout.buildDirectory.dir("native-logs/$nativeName")
-            workDirectory = layout.buildDirectory.dir("tmp/native/$nativeName")
-        }
-
-    embeddedArtifacts.artifacts.from(compileTask.flatMap { it.outputDirectory })
+    outputDirectory = layout.buildDirectory.dir("native/${binary.name}")
+    logDirectory = layout.buildDirectory.dir("native-logs/${binary.name}")
+    workDirectory = layout.buildDirectory.dir("tmp/native/${binary.name}")
 }

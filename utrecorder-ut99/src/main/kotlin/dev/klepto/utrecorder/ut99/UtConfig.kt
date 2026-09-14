@@ -6,22 +6,19 @@ import dev.klepto.utrecorder.common.io.get
 import java.nio.file.Path
 
 /**
- * Everything the Unreal Tournament module needs from its environment.
+ * Configuration of the Unreal Tournament module.
  *
- * Use [DEFAULT] for the configuration the current process works against, or [fromProperties] to build one from a given
+ * Use [DEFAULT] for the configuration of the current process, or [fromProperties] to build one from a
  * [PropertySource].
  *
- * @property directories The directories the installation is materialized under.
- * @property gameDirectory The directory where the game is installed. Named separately from [directories], so that
- * callers that cannot share one installation can each name their own.
+ * @property directories The directories the installation, the packages and the downloads live under.
+ * @property gameDirectory The directory the game is installed in.
  * @property isoUrl The URL of the original UT ISO file.
  * @property isoMd5 The MD5 hash of the original UT ISO file.
  * @property patchUrl The URL of the UT patch releases.
  * @property patchVersion The version of the UT patch to use.
- * @property redirectUrls The base URLs a package a demo names is fetched from when neither the installation nor the
- * packages directory holds it. They serve plain HTTP, and no redirect in the UT ecosystem serves TLS, so a package is
- * fetched over an unauthenticated connection. A `.u` package is UnrealScript bytecode the game executes and the GUID
- * check reads a field the downloaded file itself supplies, so whoever can answer the request can serve code.
+ * @property redirectUrls The base URLs a package missing from the installation and the packages directory is fetched
+ * from.
  */
 data class UtConfig(
     val directories: Directories = Directories.DEFAULT,
@@ -33,25 +30,15 @@ data class UtConfig(
     val redirectUrls: List<String> = DEFAULT_REDIRECT_URLS,
 ) {
     /**
-     * The directory where game packages are stored.
-     */
-    val packagesDirectory: Path = directories.packages
-
-    /**
-     * The directory where downloads are cached.
-     */
-    val cacheDirectory: Path = directories.cache
-
-    /**
      * The name of the patch file this configuration installs on the current platform.
      */
-    val patchFileName: String = UT_PLATFORM.patchFileName(patchVersion)
+    val patchFileName: String = UtPlatform.current().patchFileName(patchVersion)
 
     companion object {
         /**
          * The name the installation takes within the installs directory.
          */
-        private const val GAME_DIRECTORY = "ut99"
+        const val GAME_DIRECTORY = "ut99"
 
         /**
          * The URL the original UT ISO is fetched from by default.
@@ -79,8 +66,7 @@ data class UtConfig(
         private val DEFAULT_REDIRECT_URLS = listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com")
 
         /**
-         * The configuration a caller that names none works against. Resolved on first use rather than at class load,
-         * so that the order in which classes happen to load cannot decide what a process installs.
+         * The configuration a caller that names none works against, resolved on first use.
          */
         val DEFAULT: UtConfig by lazy { fromProperties() }
 

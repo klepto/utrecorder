@@ -1,10 +1,8 @@
 package dev.klepto.utrecorder.common.process
 
 import dev.klepto.utrecorder.common.config.PropertySource
-import dev.klepto.utrecorder.common.os.OS
+import dev.klepto.utrecorder.common.io.workingDirectory
 import dev.klepto.utrecorder.common.os.OperatingSystem
-import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.CLOSE_TIMEOUT
-import dev.klepto.utrecorder.common.process.ExecutableProcess.Companion.MAX_OUTPUT_LINES
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
@@ -15,29 +13,20 @@ import kotlin.time.TimeSource
 import kotlin.time.toJavaDuration
 
 /**
- * Returns the executable of the program at [executablePath], described by [configure]. Environment values already set
- * for the current process are read from [properties].
- */
-fun executable(
-    executablePath: Path,
-    properties: PropertySource = PropertySource.DEFAULT,
-    configure: ExecutableBuilder.() -> Unit = {},
-): Executable = ExecutableBuilder(executablePath, properties).apply(configure).build()
-
-/**
- * A mutable description of an executable, built into the immutable value by [executable].
+ * A mutable description of an executable, built into the immutable value by [Executable.build].
  *
  * @property executablePath The path of the program to run.
- * @property properties The source the environment of the current process is read from.
+ * @property properties The source the working directory, the operating system and the inherited environment are read
+ * from.
  */
 class ExecutableBuilder(
     var executablePath: Path,
     private val properties: PropertySource = PropertySource.DEFAULT,
 ) {
     /**
-     * The directory the process starts in.
+     * The directory the process starts in, the working directory of [properties] unless set.
      */
-    var workingDirectory: Path = Path.of("").toAbsolutePath()
+    var workingDirectory: Path = workingDirectory(properties)
 
     /**
      * The arguments passed to the program, in the order the program receives them.
@@ -51,13 +40,13 @@ class ExecutableBuilder(
 
     /**
      * Puts [value] in front of the variable [name], separated by the platform path separator. What follows it is the
-     * value this configuration already holds, or the one the current process inherited.
+     * value this builder already holds, or the one [properties] holds.
      */
     fun prependEnvironment(
         name: String,
         value: String,
     ) {
-        val existing = environment[name] ?: properties.environment(name)
+        val existing = environment[name] ?: properties.environmentVariable(name)
         environment[name] =
             when {
                 existing.isNullOrEmpty() -> value
@@ -66,19 +55,18 @@ class ExecutableBuilder(
     }
 
     /**
-     * Puts [path] in front of the variable [operatingSystem] resolves shared libraries through, so that a program
-     * started from this configuration loads the libraries sitting there. An operating system that resolves libraries
-     * without such a variable, Windows among them, is left alone.
+     * Puts [path] in front of the variable [operatingSystem] resolves shared libraries through. An operating system
+     * that resolves libraries without such a variable is left alone.
      */
     fun prependLibraryPath(
         path: Path,
-        operatingSystem: OperatingSystem = OS,
+        operatingSystem: OperatingSystem = OperatingSystem.current(properties),
     ) {
         operatingSystem.libraryPathVariable?.let { prependEnvironment(it, "$path") }
     }
 
     /**
-     * Returns the immutable executable this configuration describes.
+     * The immutable executable this builder describes.
      */
     fun build(): Executable = Executable(executablePath, arguments.toList(), workingDirectory, environment.toMap())
 }
@@ -86,7 +74,7 @@ class ExecutableBuilder(
 /**
  * An immutable command line and the process environment it starts under, reusable across runs.
  *
- * Use [executable] to build one.
+ * Use [Executable.build] to build one.
  *
  * @property executablePath The path of the program to run.
  * @property arguments The arguments passed to the program, in the order the program receives them.
@@ -95,9 +83,9 @@ class ExecutableBuilder(
  */
 data class Executable(
     val executablePath: Path,
-    val arguments: List<String> = emptyList(),
-    val workingDirectory: Path = Path.of("").toAbsolutePath(),
-    val environment: Map<String, String> = emptyMap(),
+    val arguments: List<String>,
+    val workingDirectory: Path,
+    val environment: Map<String, String>,
 ) {
     /**
      * Starts the process using this executable configuration. The error stream is merged into the output stream, which
@@ -118,13 +106,27 @@ data class Executable(
     fun startAndAwait(timeout: Duration = Duration.INFINITE): ExecutableResult = start().use { it.await(timeout) }
 
     /**
-     * Returns a string representation of this executable configuration.
+     * The command line of this executable, its path followed by its arguments.
      */
     override fun toString(): String = "$executablePath ${arguments.joinToString(" ")}"
+
+    companion object {
+        /**
+         * The executable of the program at [executablePath] that [configure] describes, reading the working directory,
+         * the operating system and the inherited environment from [properties].
+         */
+        fun build(
+            executablePath: Path,
+            properties: PropertySource = PropertySource.DEFAULT,
+            configure: ExecutableBuilder.() -> Unit = {},
+        ): Executable = ExecutableBuilder(executablePath, properties).apply(configure).build()
+    }
 }
 
 /**
  * A running process started from an [Executable], holding its trailing output lines and the thread that reads them.
+ *
+ * Use [Executable.start] to start one.
  *
  * @property executable The configuration the process was started from.
  * @property process The process this one reads and waits on.
@@ -140,8 +142,7 @@ class ExecutableProcess(
         get() = process.isAlive
 
     /**
-     * Guards [output] and [consumer]. Held by the daemon thread while it delivers a line, and by [drain] while it
-     * replays the buffer and registers a consumer.
+     * The monitor guarding [output] and [consumer].
      */
     private val lock = Any()
 
@@ -151,8 +152,7 @@ class ExecutableProcess(
     private val output = ArrayDeque<String>()
 
     /**
-     * The head of the output consumer chain. Starts as [appendOutput] and grows with every consumer registered through
-     * [drain], which are invoked in registration order.
+     * The head of the output consumer chain, invoking every consumer registered through [drain] in registration order.
      */
     private var consumer: (String) -> Unit = ::appendOutput
 
@@ -162,8 +162,7 @@ class ExecutableProcess(
     @Volatile private var consumerFailure: Throwable? = null
 
     /**
-     * Marks whether [close] has been called, so that the reader failing on the stream it closed is not mistaken for a
-     * read error.
+     * Marks whether [close] has been called.
      */
     @Volatile private var closing = false
 
@@ -173,7 +172,7 @@ class ExecutableProcess(
     private val daemon: Thread = startOutputReader()
 
     /**
-     * Starts and returns the thread backing [daemon].
+     * The started daemon thread running [readOutput], named after the [executable].
      */
     private fun startOutputReader(): Thread =
         Thread(::readOutput).apply {
@@ -259,7 +258,7 @@ class ExecutableProcess(
             .getOrThrow()
 
     /**
-     * Backs [await] with the waiting itself, leaving the process untouched on failure so that [await] owns the closing.
+     * The result of the process once it finishes within [timeout], leaving the process running on failure.
      */
     private fun awaitResult(timeout: Duration): ExecutableResult {
         val timer = TimeSource.Monotonic.markNow()
@@ -305,11 +304,12 @@ class ExecutableProcess(
 }
 
 /**
- * The exit code and output of a process that has finished. The [output] holds the trailing lines emitted by the
- * process, earlier lines are dropped once the process exceeds the retained line count.
+ * The exit code and trailing output of a finished process.
+ *
+ * Returned by [ExecutableProcess.await] and [Executable.startAndAwait].
  *
  * @property executable The configuration the process was started from.
- * @property output The trailing lines the process emitted.
+ * @property output The trailing lines the process emitted, earlier lines dropped past the retained line count.
  * @property exitCode The code the process exited with.
  */
 data class ExecutableResult(
@@ -318,24 +318,18 @@ data class ExecutableResult(
     val exitCode: Int,
 ) {
     /**
-     * Marks whether the process exited with a success code.
+     * `true` if the process exited with code `0`.
      */
     val isSuccess: Boolean
         get() = exitCode == 0
 
     /**
-     * Marks whether the process exited with a failure code.
-     */
-    val isFailure: Boolean
-        get() = !isSuccess
-
-    /**
-     * Throws an exception if the process exited with a failure code.
+     * This result, or an [IllegalStateException] thrown if the process exited with a failure code.
      */
     fun orThrow(): ExecutableResult = apply { check(isSuccess) { failureMessage() } }
 
     /**
-     * Returns the message of the exception [orThrow] throws.
+     * The message of the exception [orThrow] throws, holding the last ten output lines.
      */
     private fun failureMessage(): String {
         val lines = output.takeLast(10).joinToString("\n")

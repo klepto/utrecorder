@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.ut99
 
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
@@ -15,7 +14,8 @@ import kotlin.io.path.nameWithoutExtension
 /**
  * A package of an Unreal Tournament installation, either as a demo names it or as an installation holds it.
  *
- * Use [named] for a package a demo asks for, and [read] for a file an installation holds.
+ * Use [named] for a package a demo asks for, [read] for a file an installation holds, and [list] for the files of a
+ * directory.
  *
  * @property name The name of the package, such as `Engine`.
  * @property path The file the package is held in, or `null` for a package a demo names.
@@ -26,14 +26,24 @@ class UtPackage private constructor(
     guid: () -> String,
 ) {
     /**
-     * The GUID of this package version. For a package on disk it is read from the file header on first access, so
-     * that listing a directory costs no header reads.
+     * The GUID of this package version, read from the file header on first access. Empty for a file that is not a
+     * package, and for a package whose demo recorded no GUID.
+     *
+     * @throws java.io.IOException if the header of the file cannot be read.
      */
     val guid: String by lazy(guid)
 
     /**
-     * Returns `true` when [other] is a package of the same name held at the same path. The GUID takes no part, so
-     * comparing two packages never reads a header.
+     * Returns `true` when this package satisfies [required]: the names are equal ignoring case, and either [required]
+     * carries no GUID or the two GUIDs are equal ignoring case.
+     */
+    fun satisfies(required: UtPackage): Boolean =
+        name.equals(required.name, ignoreCase = true) &&
+            (required.guid.isEmpty() || guid.equals(required.guid, ignoreCase = true))
+
+    /**
+     * Returns `true` when [other] is a package of the same name, ignoring case, held at the same path. The GUID takes
+     * no part.
      */
     override fun equals(other: Any?): Boolean = other is UtPackage && name.equals(other.name, ignoreCase = true) && path == other.path
 
@@ -107,8 +117,27 @@ class UtPackage private constructor(
         fun read(path: Path): UtPackage = UtPackage(path.nameWithoutExtension, path) { readGuid(path) }
 
         /**
-         * Returns the GUID the header of the file at [path] holds, or an empty GUID when the file is not a package or
-         * cannot be read.
+         * Returns the packages held directly in [directory]: its regular files whose extension is one of [extensions],
+         * compared ignoring case. Empty when [directory] does not exist.
+         */
+        fun list(
+            directory: Path,
+            extensions: Set<String>,
+        ): List<UtPackage> {
+            if (!directory.isDirectory()) return emptyList()
+            return directory
+                .listDirectoryEntries()
+                .filter { it.isRegularFile() && it.hasExtension(extensions) }
+                .map(::read)
+        }
+
+        /**
+         * Returns `true` when the extension of this path is one of [extensions], compared ignoring case.
+         */
+        private fun Path.hasExtension(extensions: Set<String>): Boolean = extensions.any { it.equals(extension, ignoreCase = true) }
+
+        /**
+         * Returns the GUID the header of the file at [path] holds, or an empty GUID when the file is not a package.
          */
         private fun readGuid(path: Path): String {
             val header = readHeader(path) ?: return ""
@@ -133,56 +162,14 @@ class UtPackage private constructor(
         }
 
         /**
-         * Returns the opening bytes of the file at [path], or `null` when it holds fewer than a header of them or
-         * cannot be read at all.
+         * Returns the opening bytes of the file at [path], or `null` when it holds fewer than a header of them.
          */
         private fun readHeader(path: Path): ByteBuffer? {
-            val bytes =
-                try {
-                    path.inputStream().use { it.readNBytes(HEADER_BYTES) }
-                } catch (ignored: IOException) {
-                    return null
-                }
-            if (bytes.size < GUID_OFFSET + GUID_BYTES) return null
-            return ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val bytes = path.inputStream().use { it.readNBytes(HEADER_BYTES) }
+            return when {
+                bytes.size < GUID_OFFSET + GUID_BYTES -> null
+                else -> ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            }
         }
     }
 }
-
-/**
- * Returns `true` when this package satisfies [required]: the names are equal ignoring case, and either [required]
- * carries no GUID or the two GUIDs are equal ignoring case.
- */
-fun UtPackage.satisfies(required: UtPackage): Boolean =
-    name.equals(required.name, ignoreCase = true) &&
-        (required.guid.isEmpty() || guid.equals(required.guid, ignoreCase = true))
-
-/**
- * Returns the packages held directly in [directory]: its regular files whose extension is [extension], or whose
- * extension is any package extension when [extension] is `null`, compared ignoring case. A directory that is not there
- * holds no packages.
- */
-internal fun packagesIn(
-    directory: Path,
-    extension: String? = null,
-): List<UtPackage> {
-    if (!directory.isDirectory()) return emptyList()
-    return directory
-        .listDirectoryEntries()
-        .filter { it.isRegularFile() && holdsPackage(it, extension) }
-        .map(UtPackage::read)
-}
-
-/**
- * Returns `true` when [path] is named as a package of [extension], or as a package of any extension a directory
- * declares when [extension] is `null`.
- */
-private fun holdsPackage(
-    path: Path,
-    extension: String?,
-): Boolean =
-    if (extension == null) {
-        UtDirectory.of(path.extension) != null
-    } else {
-        path.extension.equals(extension, ignoreCase = true)
-    }

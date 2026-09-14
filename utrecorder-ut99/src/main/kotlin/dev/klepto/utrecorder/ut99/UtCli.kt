@@ -9,17 +9,10 @@ import kotlin.system.exitProcess
 /**
  * Command line entry point of the Unreal Tournament module, provisioning an installation and driving [UtCompiler].
  *
- * ```
- * UtCli install [--install=<dir>]
- * UtCli make --sources=<dir> --output=<file> [--jobs=<dir>] [--install=<dir>] [--edit-packages=A,B,C]
- * ```
- *
- * `--install` names the installation to provision and compile with, so that callers that cannot share one - concurrent
- * builds, say - can each hold their own. It defaults to the installation [UtConfig.DEFAULT] names.
- *
- * `--jobs` names the directory the run writes its configuration and its compiler log under, so that a caller driving
- * the compiler - a build, say - collects the diagnostics of a failed run beside the output it was producing. It
- * defaults to [Workspace.DEFAULT]. Either way only a failed run leaves anything behind.
+ * Use [main] to run it as a process, or [run] to run it in the current one. `install` provisions the installation, and
+ * `make` compiles the package `--sources` names into the file `--output` names. `--install` names the installation,
+ * defaulting to the one [UtConfig.DEFAULT] names. `--tasks` names the directory a run writes its tasks under,
+ * defaulting to [Workspace.DEFAULT]. `--edit-packages` names the packages a compile compiles against.
  *
  * @property arguments The command line arguments, the command first and its options after it.
  */
@@ -27,14 +20,9 @@ class UtCli(
     private val arguments: List<String>,
 ) {
     /**
-     * Logger for this class.
+     * The name of the command to run, or `null` if the arguments name none.
      */
-    private val log = logger<UtCli>()
-
-    /**
-     * The command to run, or `null` if the arguments name none.
-     */
-    private val command = arguments.firstOrNull()?.takeUnless { it.startsWith(OPTION_PREFIX) }
+    private val commandName = arguments.firstOrNull()?.takeUnless { it.startsWith(OPTION_PREFIX) }
 
     /**
      * The `--key=value` options the arguments hold, by key.
@@ -47,14 +35,9 @@ class UtCli(
     private val config = path("install")?.let { UtConfig.DEFAULT.copy(gameDirectory = it) } ?: UtConfig.DEFAULT
 
     /**
-     * The installation the command runs against.
+     * The workspace the command runs its tasks in, rooted at the directory the `--tasks` option names.
      */
-    private val installDirectory = config.gameDirectory
-
-    /**
-     * The workspace the command runs its tasks in, rooted at the directory the `--jobs` option names.
-     */
-    private val workspace = path("tasks")?.let { Workspace(directory = it) } ?: Workspace.DEFAULT
+    private val workspace = path("tasks")?.let { Workspace(it, Workspace.DEFAULT.keep, Workspace.DEFAULT.retention) } ?: Workspace.DEFAULT
 
     /**
      * Reads the `--key=value` options the [arguments] hold into a map, by key.
@@ -73,16 +56,12 @@ class UtCli(
     }
 
     /**
-     * Runs the command the arguments name and returns the exit code of the process.
+     * Runs the command the arguments name and returns the exit code of the process, `1` when the command fails.
      */
     @Suppress("TooGenericExceptionCaught")
     fun run(): Int =
         try {
-            when (command) {
-                "install" -> install()
-                "make" -> make()
-                else -> error("Unknown command '$command', expected one of ${COMMANDS.joinToString(", ")}")
-            }
+            command().run(this)
             0
         } catch (cause: Exception) {
             log.error(cause) { USAGE }
@@ -90,11 +69,20 @@ class UtCli(
         }
 
     /**
+     * Returns the command the arguments name.
+     *
+     * @throws IllegalStateException if the arguments name no known command.
+     */
+    private fun command(): Command =
+        Command.entries.firstOrNull { it.commandName == commandName }
+            ?: error("Unknown command '$commandName', expected one of ${Command.entries.joinToString(", ") { it.commandName }}")
+
+    /**
      * Provisions the installation, and returns it.
      */
     private fun install(): UtInstallation {
         UtInstaller(config).install()
-        return UtInstallation(installDirectory, workspace)
+        return UtInstallation(config.gameDirectory, workspace)
     }
 
     /**
@@ -120,6 +108,28 @@ class UtCli(
      */
     private fun path(key: String): Path? = options[key]?.takeIf { it.isNotEmpty() }?.toAbsolutePath()
 
+    /**
+     * A command this entry point runs, by the name the arguments give it.
+     */
+    private enum class Command(
+        val commandName: String,
+    ) {
+        INSTALL("install") {
+            override fun run(cli: UtCli) {
+                cli.install()
+            }
+        },
+        MAKE("make") {
+            override fun run(cli: UtCli) = cli.make()
+        },
+        ;
+
+        /**
+         * Runs this command against [cli].
+         */
+        abstract fun run(cli: UtCli)
+    }
+
     companion object {
         /**
          * The prefix an option takes, distinguishing it from the command.
@@ -127,18 +137,15 @@ class UtCli(
         private const val OPTION_PREFIX = "--"
 
         /**
-         * The commands this entry point accepts.
-         */
-        private val COMMANDS = listOf("install", "make")
-
-        /**
          * The usage this entry point reports when it cannot run the arguments it was given.
          */
         private val USAGE =
             """
             usage: UtCli install [--install=<dir>]
-                   UtCli make --sources=<dir> --output=<file> [--jobs=<dir>] [--install=<dir>] [--edit-packages=A,B,C]
+                   UtCli make --sources=<dir> --output=<file> [--tasks=<dir>] [--install=<dir>] [--edit-packages=A,B,C]
             """.trimIndent()
+
+        private val log = logger<UtCli>()
 
         @JvmStatic
         fun main(args: Array<String>): Unit = exitProcess(UtCli(args.toList()).run())

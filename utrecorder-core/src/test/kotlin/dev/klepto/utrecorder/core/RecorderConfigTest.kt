@@ -1,72 +1,64 @@
 package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.PropertySource
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import kotlin.io.path.createTempDirectory
-import kotlin.io.path.div
+import java.nio.file.Path
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
-/**
- * Tests for [RecorderConfig.fromProperties], the timeout derivations, and the defaults they fall back to.
- */
 class RecorderConfigTest :
     FunSpec({
-        val home = createTempDirectory("utrecorder-recorderconfig-test")
-        val directories = Directories(home)
-        val property = SystemProperties()
+        fun properties(values: Map<String, String>) = PropertySource(properties = values::get, environment = { null })
 
-        afterSpec { home.toFile().deleteRecursively() }
-        afterTest { property.clear() }
+        test("fromProperties honours every core key") {
+            val installation = Path.of("custom-install").toAbsolutePath()
+            val properties =
+                properties(
+                    mapOf(
+                        "utrecorder.core.installation_directory" to installation.toString(),
+                        "utrecorder.core.startup_timeout" to "PT10S",
+                        "utrecorder.core.max_run_margin" to "PT20S",
+                        "utrecorder.core.timeout_grace" to "PT30S",
+                        "utrecorder.core.exit_delay" to "PT40S",
+                    ),
+                )
 
-        test("defaults are StartupTimeout 90s, maxRunMargin 120s, timeoutGrace 60s, exitDelay 5s") {
-            val config = RecorderConfig(installationDirectory = directories.installs / "ut99")
+            val config = RecorderConfig.fromProperties(properties, Directories(Path.of("home")))
 
-            config.startupTimeout shouldBe 90.seconds
-            config.maxRunMargin shouldBe 120.seconds
-            config.timeoutGrace shouldBe 60.seconds
-            config.exitDelay shouldBe 5.seconds
+            config shouldBe
+                RecorderConfig(
+                    installationDirectory = installation,
+                    startupTimeout = 10.seconds,
+                    maxRunMargin = 20.seconds,
+                    timeoutGrace = 30.seconds,
+                    exitDelay = 40.seconds,
+                )
         }
 
-        test("maxRunSeconds returns duration + maxRunMargin for a known demo duration") {
-            val config = RecorderConfig(installationDirectory = directories.installs / "ut99")
-            val demoDuration = 10.minutes
+        test("fromProperties falls back to ut99 under the installs directory and the default durations") {
+            val config = RecorderConfig.fromProperties(properties(emptyMap()), Directories(Path.of("home")))
 
-            config.maxRunSeconds(demoDuration) shouldBe (demoDuration + 120.seconds)
+            config shouldBe
+                RecorderConfig(
+                    installationDirectory = Path.of("home", "installs", "ut99"),
+                    startupTimeout = 90.seconds,
+                    maxRunMargin = 120.seconds,
+                    timeoutGrace = 60.seconds,
+                    exitDelay = 5.seconds,
+                )
         }
 
-        test("timeout returns duration + maxRunMargin + timeoutGrace for a known demo duration") {
-            val config = RecorderConfig(installationDirectory = directories.installs / "ut99")
-            val demoDuration = 10.minutes
+        test("maxRunTime adds the margin and timeout adds the grace to a known demo duration") {
+            val config =
+                RecorderConfig(
+                    installationDirectory = Path.of("install"),
+                    maxRunMargin = 13.seconds,
+                    timeoutGrace = 17.seconds,
+                )
 
-            config.timeout(demoDuration) shouldBe (demoDuration + 120.seconds + 60.seconds)
-        }
-
-        test("fromProperties honours every core.* override") {
-            val installation = home / "custom-install"
-            property("utrecorder.core.installation_directory", installation.toString())
-            property("utrecorder.core.startup_timeout", "PT10S")
-            property("utrecorder.core.max_run_margin", "PT20S")
-            property("utrecorder.core.timeout_grace", "PT30S")
-            property("utrecorder.core.exit_delay", "PT40S")
-
-            val config = RecorderConfig.fromProperties(directories = directories)
-
-            config.installationDirectory shouldBe installation.toAbsolutePath()
-            config.startupTimeout shouldBe 10.seconds
-            config.maxRunMargin shouldBe 20.seconds
-            config.timeoutGrace shouldBe 30.seconds
-            config.exitDelay shouldBe 40.seconds
-        }
-
-        test("fromProperties falls back to defaults when no keys are set") {
-            val config = RecorderConfig.fromProperties(directories = directories)
-
-            config.installationDirectory shouldBe directories.installs / "ut99"
-            config.startupTimeout shouldBe 90.seconds
-            config.maxRunMargin shouldBe 120.seconds
-            config.timeoutGrace shouldBe 60.seconds
-            config.exitDelay shouldBe 5.seconds
+            config.maxRunTime(10.minutes) shouldBe 613.seconds
+            config.timeout(10.minutes) shouldBe 630.seconds
         }
     })

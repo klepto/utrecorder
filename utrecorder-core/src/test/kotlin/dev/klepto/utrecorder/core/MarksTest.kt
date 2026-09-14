@@ -7,9 +7,6 @@ import io.kotest.matchers.string.shouldContain
 import java.time.Instant
 import kotlin.time.Duration.Companion.seconds
 
-/**
- * Tests for [parseMarks], the reader turning a run log into the demo-time range the game actually played.
- */
 class MarksTest :
     FunSpec({
         test("both marks present in realistic log lines returns first start and last end") {
@@ -22,18 +19,18 @@ class MarksTest :
                     "Exit: Preparing to exit.",
                 )
 
-            val marks = parseMarks(lines)
+            val marks = DemoMarks.parse(lines)
 
             marks.start shouldBe
                 DemoMark(
-                    label = "start",
+                    label = DemoMark.Label.START,
                     wallTime = Instant.parse("2026-09-13T10:30:05.123Z"),
                     frame = 4567,
                     demoTime = 12.5.seconds,
                 )
             marks.end shouldBe
                 DemoMark(
-                    label = "end",
+                    label = DemoMark.Label.END,
                     wallTime = Instant.parse("2026-09-13T10:35:42.250Z"),
                     frame = 98765,
                     demoTime = 300.75.seconds,
@@ -46,7 +43,7 @@ class MarksTest :
                     "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
                 )
 
-            val failure = shouldThrow<IllegalStateException> { parseMarks(lines) }
+            val failure = shouldThrow<IllegalStateException> { DemoMarks.parse(lines) }
 
             failure.message shouldContain "start"
         }
@@ -57,7 +54,7 @@ class MarksTest :
                     "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
                 )
 
-            val failure = shouldThrow<IllegalStateException> { parseMarks(lines) }
+            val failure = shouldThrow<IllegalStateException> { DemoMarks.parse(lines) }
 
             failure.message shouldContain "end"
         }
@@ -72,7 +69,7 @@ class MarksTest :
                     "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
                 )
 
-            val marks = parseMarks(lines)
+            val marks = DemoMarks.parse(lines)
 
             marks.start.frame shouldBe 4567
             marks.end.frame shouldBe 98765
@@ -87,7 +84,7 @@ class MarksTest :
                     "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
                 )
 
-            val marks = parseMarks(lines)
+            val marks = DemoMarks.parse(lines)
 
             marks.start.frame shouldBe 4567
             marks.start.demoTime shouldBe 12.5.seconds
@@ -104,15 +101,41 @@ class MarksTest :
                     "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
                 )
 
-            val marks = parseMarks(lines)
+            val marks = DemoMarks.parse(lines)
 
             marks.start.frame shouldBe 4567
             marks.end.frame shouldBe 98765
         }
 
         test("an empty log throws naming the missing start mark") {
-            val failure = shouldThrow<IllegalStateException> { parseMarks(emptyList()) }
+            val failure = shouldThrow<IllegalStateException> { DemoMarks.parse(emptyList()) }
 
             failure.message shouldContain "start"
+        }
+
+        test("a mark labelled START in upper case is ignored") {
+            val lines =
+                listOf(
+                    "ScriptLog: UTRecorder: mark START 2026 9 13 10 29 0 0 100 0.5",
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
+                )
+
+            val marks = DemoMarks.parse(lines)
+
+            marks.start.frame shouldBe 4567
+        }
+
+        test("a mark whose month is 13 is ignored") {
+            val lines =
+                listOf(
+                    "ScriptLog: UTRecorder: mark start 2026 13 13 10 29 0 0 100 0.5",
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
+                )
+
+            val marks = DemoMarks.parse(lines)
+
+            marks.start.frame shouldBe 4567
         }
     })
