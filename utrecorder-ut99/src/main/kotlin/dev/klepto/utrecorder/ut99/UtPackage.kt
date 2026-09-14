@@ -2,7 +2,9 @@ package dev.klepto.utrecorder.ut99
 
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.channels.FileChannel
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.Objects
 import kotlin.io.path.extension
 import kotlin.io.path.inputStream
@@ -52,6 +54,11 @@ class UtPackage private constructor(
     override fun toString(): String = "$name[${guid.take(SHORT_GUID_LENGTH)}]" + (path?.let { " at $it" } ?: "")
 
     companion object {
+        /**
+         * The number of characters a GUID is spelled with.
+         */
+        private const val GUID_CHARACTERS = 32
+
         /**
          * The tag every Unreal package header opens with, `0x9E2A83C1` as the signed int the header holds.
          */
@@ -125,7 +132,12 @@ class UtPackage private constructor(
         fun setGuid(
             path: Path,
             guid: String,
-        ): Unit = TODO()
+        ) {
+            require(guid.length == GUID_CHARACTERS) { "Expected a 32 character GUID but got $guid" }
+            val offset = readHeader(path)?.let { guidOffset(it) } ?: error("Not an Unreal package: $path")
+            val bytes = guidBytes(guid)
+            FileChannel.open(path, StandardOpenOption.WRITE).use { it.write(bytes, offset.toLong()) }
+        }
 
         /**
          * Returns the packages held directly in [directory]: its regular files whose extension is one of [extensions],
@@ -181,6 +193,16 @@ class UtPackage private constructor(
                 bytes.size < GUID_OFFSET + GUID_BYTES -> null
                 else -> ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
             }
+        }
+
+        /**
+         * Returns the bytes of [guid] in the order the header carries them: little endian words of the GUID's
+         * hexadecimal characters.
+         */
+        private fun guidBytes(guid: String): ByteBuffer {
+            val bytes = ByteBuffer.allocate(GUID_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+            (0 until GUID_WORDS).forEach { bytes.putInt(it * WORD_BYTES, guid.substring(it * 8, it * 8 + 8).toLong(16).toInt()) }
+            return bytes
         }
     }
 }
