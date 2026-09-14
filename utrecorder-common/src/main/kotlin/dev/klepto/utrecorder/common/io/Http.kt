@@ -17,6 +17,11 @@ import kotlin.time.Duration.Companion.seconds
 private val HTTP_CONNECT_TIMEOUT: Duration = 30.seconds
 
 /**
+ * The time a whole demo download may take before the fetch of it fails.
+ */
+val DEMO_FETCH_TIMEOUT: Duration = 10.minutes
+
+/**
  * The time a read may stall before a connection is considered dead.
  */
 val HTTP_SOCKET_TIMEOUT: Duration = 1.minutes
