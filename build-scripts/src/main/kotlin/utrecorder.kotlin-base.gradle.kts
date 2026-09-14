@@ -1,5 +1,4 @@
 import dev.klepto.utrecorder.build.bundle
-import dev.klepto.utrecorder.build.detektVersion
 import dev.klepto.utrecorder.build.javaVersion
 import dev.klepto.utrecorder.build.ktlintVersion
 import dev.klepto.utrecorder.build.lib
@@ -9,20 +8,12 @@ import org.gradle.language.base.plugins.LifecycleBasePlugin
 plugins {
     id("org.jetbrains.kotlin.jvm")
     id("org.jlleitschuh.gradle.ktlint")
-    id("dev.detekt")
 }
 
 val INTEGRATION_TEST_PATTERN = "*IntegrationTest"
 
 kotlin {
     jvmToolchain(javaVersion)
-}
-
-detekt {
-    toolVersion = detektVersion
-    config.setFrom(rootProject.layout.projectDirectory.file("config/detekt/detekt.yml"))
-    buildUponDefaultConfig = true
-    parallel = true
 }
 
 ktlint {

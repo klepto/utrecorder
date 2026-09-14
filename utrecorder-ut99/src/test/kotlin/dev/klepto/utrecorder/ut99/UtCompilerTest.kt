@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.process.Executable
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -14,7 +14,6 @@ import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.writeText
-import kotlin.time.Duration.Companion.days
 
 class UtCompilerTest :
     FunSpec({
@@ -102,7 +101,6 @@ class UtCompilerTest :
 
         fun installation(
             name: String,
-            keep: Boolean = false,
             compiler: Boolean = true,
             fails: Boolean = false,
         ): UtInstallation {
@@ -117,7 +115,7 @@ class UtCompilerTest :
             if (fails) {
                 (systemDirectory / "ucc.fail").writeText("")
             }
-            return UtInstallation(root / name, Workspace(root / "$name-tasks", keep = keep, retention = 7.days))
+            return UtInstallation(root / name, Directories(root / "$name-home"))
         }
 
         fun sources(packageName: String): Path {
@@ -127,8 +125,8 @@ class UtCompilerTest :
             return sourcesPath
         }
 
-        fun taskDirectories(name: String): List<Path> =
-            (root / "$name-tasks").takeIf { it.exists() }?.listDirectoryEntries("ucc-*") ?: emptyList()
+        fun workspaces(name: String): List<Path> =
+            (root / "$name-home" / "workspace").takeIf { it.exists() }?.listDirectoryEntries("ucc-*") ?: emptyList()
 
         test("throws naming the missing path when the installation holds no compiler executable") {
             val installation = installation("no-compiler", compiler = false)
@@ -139,37 +137,28 @@ class UtCompilerTest :
         }
 
         context("make") {
-            test("creates a task directory holding make.ini and make.log") {
-                val compiler = installation("task-files", keep = true).compiler
-
-                compiler.make(sources("PackageOne"), root / "out" / "PackageOne.u")
-
-                val taskDirectory = taskDirectories("task-files").single()
-                (taskDirectory / "make.ini").exists() shouldBe true
-                (taskDirectory / "make.log").exists() shouldBe true
-            }
-
             test("make.ini is Default.ini plus EditPackages, with the configure block applied on top") {
-                val compiler = installation("make-ini", keep = true).compiler
+                val compiler = installation("make-ini", fails = true).compiler
 
-                compiler.make(sources("PackageTwo"), root / "out" / "PackageTwo.u") {
-                    this["Editor.EditorEngine", "UseSound"] = "False"
+                shouldThrow<IllegalStateException> {
+                    compiler.make(sources("PackageTwo"), root / "out" / "PackageTwo.u") {
+                        this["Editor.EditorEngine", "UseSound"] = "False"
+                    }
                 }
 
-                val ini = UtIni.read(taskDirectories("make-ini").single() / "make.ini")
+                val ini = UtIni.read(workspaces("make-ini").single() / "make.ini")
                 ini["Editor.EditorEngine", "EditPackages"] shouldBe listOf("Core", "PackageTwo")
                 ini["Editor.EditorEngine", "UseSound"] shouldBe listOf("False")
             }
 
-            test("copies the compiled package to outputPath and keeps a copy in the task directory") {
-                val compiler = installation("output", keep = true).compiler
+            test("copies the compiled package to outputPath") {
+                val compiler = installation("output").compiler
                 val outputPath = root / "out" / "PackageThree.u"
 
                 val result = compiler.make(sources("PackageThree"), outputPath)
 
                 result shouldBe outputPath
                 outputPath.exists() shouldBe true
-                (taskDirectories("output").single() / "PackageThree.u").exists() shouldBe true
             }
 
             test("removes the staged package sources from the installation root after a successful run") {
@@ -180,24 +169,24 @@ class UtCompilerTest :
                 (root / "staged" / "PackageFour").exists() shouldBe false
             }
 
-            test("leaves no task directory behind after a successful run when keep is off") {
+            test("leaves no workspace behind after a successful run") {
                 val compiler = installation("no-keep").compiler
 
                 compiler.make(sources("PackageSix"), root / "out" / "PackageSix.u")
 
-                taskDirectories("no-keep") shouldBe emptyList()
+                workspaces("no-keep") shouldBe emptyList()
             }
 
-            test("keeps the task directory of a failed run with make.log written, and throws") {
+            test("keeps the workspace of a failed run with make.log written, and throws") {
                 val compiler = installation("failure", fails = true).compiler
 
                 shouldThrow<IllegalStateException> {
                     compiler.make(sources("PackageFive"), root / "out" / "PackageFive.u")
                 }
 
-                val taskDirectory = taskDirectories("failure").single()
-                (taskDirectory / "make.log").exists() shouldBe true
-                (taskDirectory / "PackageFive.u").exists() shouldBe false
+                val workspace = workspaces("failure").single()
+                (workspace / "make.log").exists() shouldBe true
+                (workspace / "PackageFive.u").exists() shouldBe false
                 (root / "failure" / "PackageFive").exists() shouldBe false
             }
         }

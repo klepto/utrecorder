@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.readTextOrEmpty
 import dev.klepto.utrecorder.common.os.OperatingSystem
 import io.kotest.assertions.throwables.shouldThrow
@@ -9,6 +9,7 @@ import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldMatch
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Path
@@ -18,6 +19,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.div
 import kotlin.io.path.exists
+import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Duration.Companion.days
@@ -162,7 +164,7 @@ class UtInstanceTest :
             (systemDirectory / "UnrealTournament.ini").writeText(gameIniContent)
             (systemDirectory / "User.ini").writeText(userIni)
 
-            return UtInstallation(installRoot, Workspace(root / "tasks", keep = false, retention = 7.days))
+            return UtInstallation(installRoot, Directories(root / "home"))
         }
 
         fun snapshot(directory: Path): Map<String, ByteArray> =
@@ -171,6 +173,11 @@ class UtInstanceTest :
                 .walkTopDown()
                 .filter { it.isFile }
                 .associate { directory.relativize(it.toPath()).toString() to it.readBytes() }
+
+        fun keptDirectory(name: String): Path =
+            (root / "home" / "workspace")
+                .listDirectoryEntries()
+                .single { it.name.matches(Regex("""${Regex.escape(name)}-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}""")) }
 
         fun scriptInstance(
             installation: UtInstallation,
@@ -192,6 +199,16 @@ class UtInstanceTest :
         val installation = createFakeInstall("install")
 
         context("instance") {
+            test("throws for a name outside [A-Za-z0-9._-]+ and creates nothing under the workspace directory") {
+                val workspaceDirectory = root / "home" / "workspace"
+                val before = workspaceDirectory.takeIf { it.exists() }?.listDirectoryEntries().orEmpty()
+
+                shouldThrow<IllegalArgumentException> { installation.instance("bad/name") }
+                shouldThrow<IllegalArgumentException> { installation.instance("") }
+
+                workspaceDirectory.takeIf { it.exists() }?.listDirectoryEntries().orEmpty() shouldBe before
+            }
+
             test("writes nothing to the installation") {
                 val before = snapshot(installation.systemDirectory)
 
@@ -206,21 +223,34 @@ class UtInstanceTest :
                 }
             }
 
-            test("names the run's paths ut-<id> plus the platform suffix, .ini, .user.ini, .exec.txt and .log") {
+            test("names the run's paths in System as named-paths-<id>- followed by each file name") {
                 val instance = installation.instance("named-paths") { exec = listOf("line") }
+                val systemDirectory = installation.systemDirectory.toAbsolutePath()
+                val prefix = """named-paths-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-"""
+                val paths =
+                    listOf(
+                        instance.executablePath to UtPlatform.current().gameExecutable,
+                        instance.gameIniPath to "UnrealTournament.ini",
+                        instance.userIniPath to "User.ini",
+                        instance.execPath to "exec.txt",
+                        instance.logPath to "UnrealTournament.log",
+                    )
 
-                instance.executablePath.name shouldBe "ut-${instance.id}${UtPlatform.current().operatingSystem.executableSuffix}"
-                instance.gameIniPath.name shouldBe "ut-${instance.id}.ini"
-                instance.userIniPath.name shouldBe "ut-${instance.id}.user.ini"
-                instance.execPath.name shouldBe "ut-${instance.id}.exec.txt"
-                instance.logPath.name shouldBe "ut-${instance.id}.log"
+                paths.forEach { (path, fileName) ->
+                    path.parent shouldBe systemDirectory
+                    path.name shouldMatch Regex(prefix + Regex.escape(fileName))
+                }
             }
 
-            test("gives two instances built back to back different ids") {
-                val first = installation.instance("first-id")
-                val second = installation.instance("second-id")
+            test("gives two instances of the same name built back to back different paths") {
+                val first = installation.instance("same-name")
+                val second = installation.instance("same-name")
 
-                first.id shouldNotBe second.id
+                first.executablePath shouldNotBe second.executablePath
+                first.gameIniPath shouldNotBe second.gameIniPath
+                first.userIniPath shouldNotBe second.userIniPath
+                first.execPath shouldNotBe second.execPath
+                first.logPath shouldNotBe second.logPath
             }
         }
 
@@ -353,19 +383,6 @@ class UtInstanceTest :
         context("start and await") {
             val okInstallation = createFakeInstall("ok-install", userIni = "user-config")
             val failInstallation = createFakeInstall("fail-install", exitCode = 9)
-
-            test("creates the executable and ini copies named ut-<id> plus the platform suffix") {
-                val instance = scriptInstance(okInstallation, "start-copies").start()
-
-                instance.executablePath.exists() shouldBe true
-                instance.gameIniPath.exists() shouldBe true
-                instance.userIniPath.exists() shouldBe true
-                instance.executablePath.name shouldBe "ut-${instance.id}${UtPlatform.current().operatingSystem.executableSuffix}"
-                instance.gameIniPath.name shouldBe "ut-${instance.id}.ini"
-                instance.userIniPath.name shouldBe "ut-${instance.id}.user.ini"
-
-                instance.await()
-            }
 
             test("throws when the instance is already started") {
                 val instance = scriptInstance(okInstallation, "double-start").start()
@@ -519,15 +536,15 @@ class UtInstanceTest :
                 result.exitCode shouldBe 9
             }
 
-            test("removes every file carrying the run's id and leaves the installation otherwise unchanged") {
+            test("leaves System as it was and no workspace directory for the run after a clean run is awaited") {
                 val before = snapshot(okInstallation.systemDirectory)
 
-                val instance = scriptInstance(okInstallation, "cleanup").start()
-                instance.await()
+                scriptInstance(okInstallation, "clean-cleanup").start().await()
 
-                val after = snapshot(okInstallation.systemDirectory)
-                after shouldBe before
-                after.keys.none { it.contains(instance.id) } shouldBe true
+                snapshot(okInstallation.systemDirectory) shouldBe before
+                (root / "home" / "workspace")
+                    .listDirectoryEntries()
+                    .none { it.name.startsWith("clean-cleanup-") } shouldBe true
             }
 
             test("does not touch the files of another instance started against the same installation") {
@@ -579,15 +596,94 @@ class UtInstanceTest :
                 instance.isRunning shouldBe false
             }
 
-            test("leaves no file carrying the run's id behind after a timed-out run") {
+            test("leaves System as it was after a run that outlives its timeout is awaited") {
                 val before = snapshot(okInstallation.systemDirectory)
-                val instance = scriptInstance(okInstallation, "timeout-cleanup", sleepingConfig).start()
 
-                instance.await(shortTimeout)
+                scriptInstance(okInstallation, "timeout-cleanup", sleepingConfig).start().await(shortTimeout)
 
-                val after = snapshot(okInstallation.systemDirectory)
-                after shouldBe before
-                after.keys.none { it.contains(instance.id) } shouldBe true
+                snapshot(okInstallation.systemDirectory) shouldBe before
+            }
+
+            test("leaves System as it was after a run exiting with a non-zero code is awaited") {
+                val before = snapshot(failInstallation.systemDirectory)
+
+                scriptInstance(failInstallation, "non-zero-cleanup").start().await()
+
+                snapshot(failInstallation.systemDirectory) shouldBe before
+            }
+
+            test("removes the inis and log of a run whose held executable copy fails the await, and throws it again")
+                .config(enabledIf = { OperatingSystem.current() == OperatingSystem.WINDOWS }) {
+                    val instance = scriptInstance(okInstallation, "held-executable-removal").start()
+                    val stream = FileOutputStream(instance.executablePath.toFile(), true)
+
+                    try {
+                        val first = shouldThrow<IOException> { instance.await() }
+                        val second = shouldThrow<IOException> { instance.await() }
+
+                        (first === second) shouldBe true
+                        instance.gameIniPath.exists() shouldBe false
+                        instance.userIniPath.exists() shouldBe false
+                        instance.logPath.exists() shouldBe false
+                    } finally {
+                        stream.close()
+                        instance.executablePath.deleteIfExists()
+                    }
+                }
+
+            test("rethrows a failure to read the run's files back and keeps its inis and log in the workspace directory") {
+                val before = snapshot(okInstallation.systemDirectory)
+                val instance = scriptInstance(okInstallation, "read-failure")
+                instance.logPath.createDirectories()
+                instance.start()
+
+                shouldThrow<IOException> { instance.await() }
+
+                snapshot(okInstallation.systemDirectory) shouldBe before
+                val kept = keptDirectory("read-failure")
+                (kept / "UnrealTournament.ini").exists() shouldBe true
+                (kept / "User.ini").exists() shouldBe true
+                (kept / "UnrealTournament.log").exists() shouldBe true
+                (kept / UtPlatform.current().gameExecutable).exists() shouldBe false
+            }
+
+            test("throws the same failure to read the run's files back from a second await") {
+                val instance = scriptInstance(okInstallation, "read-failure-again")
+                instance.logPath.createDirectories()
+                instance.start()
+
+                val first = shouldThrow<IOException> { instance.await() }
+                val second = shouldThrow<IOException> { instance.await() }
+
+                (first === second) shouldBe true
+            }
+
+            test("rethrows a failure to start a program that does not exist and keeps the inis but no executable copy") {
+                val before = snapshot(okInstallation.systemDirectory)
+                val instance =
+                    okInstallation.instance("launch-failure") {
+                        executable = root / "missing-program" / "program.exe"
+                    }
+
+                shouldThrow<IOException> { instance.start() }
+
+                snapshot(okInstallation.systemDirectory) shouldBe before
+                val kept = keptDirectory("launch-failure")
+                (kept / "UnrealTournament.ini").exists() shouldBe true
+                (kept / "User.ini").exists() shouldBe true
+                (kept / UtPlatform.current().gameExecutable).exists() shouldBe false
+            }
+
+            test("rethrows a failure to write the run's files when User.ini is missing and keeps the game ini") {
+                val missingUserIniInstallation = createFakeInstall("missing-user-ini-install")
+                missingUserIniInstallation.userIniPath.deleteIfExists()
+                val before = snapshot(missingUserIniInstallation.systemDirectory)
+                val instance = scriptInstance(missingUserIniInstallation, "write-failure")
+
+                shouldThrow<IllegalStateException> { instance.start() }.message shouldContain "User.ini"
+
+                snapshot(missingUserIniInstallation.systemDirectory) shouldBe before
+                (keptDirectory("write-failure") / "UnrealTournament.ini").exists() shouldBe true
             }
         }
 

@@ -15,8 +15,6 @@ import kotlin.io.path.PathWalkOption
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createParentDirectories
-import kotlin.io.path.createTempDirectory
-import kotlin.io.path.createTempFile
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.exists
 import kotlin.io.path.inputStream
@@ -58,37 +56,6 @@ operator fun Path.get(name: PathName): Path = get(name.pathName)
  */
 fun workingDirectory(properties: PropertySource = PropertySource.DEFAULT): Path =
     checkNotNull(properties.systemProperty("user.dir")) { "No user.dir system property" }.toAbsolutePath()
-
-/**
- * A new, uniquely named directory under this directory, starting with [prefix]. This directory is created first when
- * it does not exist.
- */
-fun Path.createTemporaryDirectory(prefix: String): Path {
-    createDirectories()
-    return createTempDirectory(this, prefix)
-}
-
-/**
- * A new, uniquely named `.tmp` file in the directory of this path, named after it. The directory is created first when
- * it does not exist.
- */
-fun Path.createTemporaryFile(): Path = createTempFile(toAbsolutePath().createParentDirectories().parent, "$fileName-", ".tmp")
-
-/**
- * Runs [block] against a new staging directory in the directory of this path, removes the staging directory once the
- * block returns or throws, and returns what the block returns.
- *
- * @throws IOException if the block returned but the staging directory cannot be removed. When the block throws, a
- * failure to remove the staging directory is suppressed into what it threw.
- */
-fun <T> Path.stage(block: (Path) -> T): T {
-    val staging = toAbsolutePath().parent.createTemporaryDirectory("$fileName-")
-    val outcome = runCatching { block(staging) }
-    staging.deleteRecursivelyCatching().onFailure { failure ->
-        outcome.exceptionOrNull()?.addSuppressed(failure) ?: throw failure
-    }
-    return outcome.getOrThrow()
-}
 
 /**
  * Copies the file at this path to [target], creating the parent directories of [target], and returns [target].
@@ -196,7 +163,7 @@ private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
  *
  * @throws IllegalArgumentException if [attempts] is below 1.
  */
-fun Path.deleteRecursivelyCatching(
+fun Path.deleteCatching(
     attempts: Int = 1,
     delay: Duration = Duration.ZERO,
 ): Result<Unit> {
@@ -209,6 +176,9 @@ fun Path.deleteRecursivelyCatching(
     }
 }
 
+/**
+ * The outcome of removing this path and everything under it once, after waiting [after].
+ */
 @OptIn(ExperimentalPathApi::class)
 private fun Path.deleteOnceCatching(after: Duration = Duration.ZERO): Result<Unit> {
     Thread.sleep(after.inWholeMilliseconds)

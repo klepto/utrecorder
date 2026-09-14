@@ -1,19 +1,19 @@
 package dev.klepto.utrecorder.ut99
 
+import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.copy
-import dev.klepto.utrecorder.common.io.deleteRecursivelyCatching
-import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.readLinesOrEmpty
 import dev.klepto.utrecorder.common.io.readTextOrEmpty
 import dev.klepto.utrecorder.common.log.logger
+import dev.klepto.utrecorder.common.log.mergeAndThrow
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableProcess
-import dev.klepto.utrecorder.common.time.TimestampId
 import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeoutException
 import kotlin.io.path.absolutePathString
-import kotlin.io.path.deleteIfExists
 import kotlin.io.path.name
 import kotlin.io.path.writeLines
 import kotlin.time.Duration
@@ -21,54 +21,51 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * One run of an installation: the files it adds to the installation, all named after its [id], and, once started, the
- * process reading them.
+ * One run of an installation: the files it adds to the installation's `System` directory, named by the run's
+ * [Workspace] as `<name>-<id>-<file>`, and, once started, the process reading them.
  *
  * Built by [UtInstallation.instance]. [start] writes the files and starts the process; [await] waits for it, reads the
- * files back into a [UtInstanceResult] and deletes them.
+ * files back into a [UtInstanceResult] and removes them. A run that throws keeps its files, except the executable copy,
+ * in `<home>/workspace/<name>-<id>/`. A run started and never awaited leaves its files in `System` until a later run of
+ * the same name prunes them after 7 days.
  *
- * @property name The name the run is logged under.
+ * @property name The name the run is logged under and its files are named after.
  */
 class UtInstance private constructor(
     val name: String,
     private val installation: UtInstallation,
     private val settings: Settings,
+    directories: Directories,
 ) {
-    /**
-     * The date and time naming this run and its files, such as `2026-09-08-1450-49`.
-     */
-    val id: String = ids.next()
-
     private val systemDirectory: Path = installation.systemDirectory.toAbsolutePath()
 
-    private val prefix = "$FILE_PREFIX$id"
+    private val workspace: Workspace = Workspace(name, systemDirectory, directories)
 
     /**
-     * The copy of the game executable this run launches, whether the run starts it directly or through [Builder.executable].
+     * The copy of the game executable this run launches, whether the run starts it directly or through
+     * [Builder.executable]: the run's file in `System` named after the installation's executable.
      */
-    val executablePath: Path = systemDirectory["$prefix${installation.platform.operatingSystem.executableSuffix}"]
+    val executablePath: Path = workspace.file(installation.executablePath.name)
 
     /**
-     * The copy of the game configuration this run reads.
+     * The copy of the game configuration this run reads: the run's `UnrealTournament.ini` in `System`.
      */
-    val gameIniPath: Path = systemDirectory["$prefix.ini"]
+    val gameIniPath: Path = workspace.file(installation.gameIniPath.name)
 
     /**
-     * The copy of the user configuration this run reads.
+     * The copy of the user configuration this run reads: the run's `User.ini` in `System`.
      */
-    val userIniPath: Path = systemDirectory["$prefix.user.ini"]
+    val userIniPath: Path = workspace.file(installation.userIniPath.name)
 
     /**
-     * The exec script this run plays.
+     * The exec script this run plays: the run's `exec.txt` in `System`.
      */
-    val execPath: Path = systemDirectory["$prefix.exec.txt"]
+    val execPath: Path = workspace.file("exec.txt")
 
     /**
-     * The log this run writes.
+     * The log this run writes: the run's `UnrealTournament.log` in `System`.
      */
-    val logPath: Path = systemDirectory["$prefix.log"]
-
-    private val files = Files()
+    val logPath: Path = workspace.file("UnrealTournament.log")
 
     /**
      * The command line this run starts: `<program> <arguments> <executable copy> <game arguments>` when the run
@@ -112,19 +109,51 @@ class UtInstance private constructor(
     val isRunning: Boolean get() = process?.isRunning == true
 
     /**
-     * Writes the files of this run into the installation, starts the process and returns this instance. A write that
-     * fails deletes the files already written.
+     * Writes the files of this run into the installation, starts the process and returns this instance. When writing
+     * the files or starting the process fails, the executable copy is deleted, the other files are moved into
+     * `<home>/workspace/<name>-<id>/`, and the failure is rethrown with any failure of that clean-up suppressed.
      *
      * @throws IllegalStateException if the instance is already started.
      */
     fun start(): UtInstance =
         apply {
             check(process == null) { "Instance $name is already started" }
-            runCatching { files.write() }
-                .onFailure { failure -> deleteFiles(failure) }
-                .getOrThrow()
-            process = executable.start()
+            process =
+                runCatching {
+                    writeFiles()
+                    executable.start()
+                }.onFailure { failure -> deleteFiles(failure) }
+                    .getOrThrow()
         }
+
+    /**
+     * Writes the configuration copies, the exec script and the executable copy of this run.
+     */
+    private fun writeFiles() {
+        copyIni(installation.gameIniPath, gameIniPath, settings.gameIniEdits)
+        copyIni(installation.userIniPath, userIniPath, settings.userIniEdits)
+        writeExec()
+        installation.executablePath.copy(executablePath) { "UT executable not found at ${installation.executablePath}" }
+        executablePath.toFile().setExecutable(true)
+    }
+
+    private fun copyIni(
+        source: Path,
+        target: Path,
+        edits: List<UtIni.() -> Unit>,
+    ) {
+        source.copy(target) { "UT configuration not found at $source" }
+        if (edits.isEmpty()) return
+
+        val ini = UtIni.read(target)
+        edits.forEach { edit -> ini.edit() }
+        ini.write(target)
+    }
+
+    private fun writeExec() {
+        if (settings.exec.isEmpty()) return
+        execPath.writeLines(settings.exec, UtPlatform.CHARSET)
+    }
 
     /**
      * Registers [consumer] for every line the run prints, replaying the lines already printed, and returns this
@@ -136,11 +165,14 @@ class UtInstance private constructor(
 
     /**
      * The exit code of the run and the contents of every file it wrote, waiting up to [timeout] for the process to end
-     * and killing it once the timeout expires. The files of the run are deleted before this returns or throws. Every
-     * call after the first returns or throws what the first one did.
+     * and killing it once the timeout expires. A result, whatever its exit code and including a killed run, deletes
+     * the executable copy and removes the other files of the run. When waiting or reading fails, the executable copy
+     * is deleted, the other files are moved into `<home>/workspace/<name>-<id>/`, and the failure is rethrown with any
+     * failure of that clean-up suppressed. Every call after the first returns or throws what the first one did.
      *
      * @throws IllegalStateException if the instance is not started.
-     * @throws IOException if the files of the run cannot be deleted.
+     * @throws IOException if the executable copy or the other files of a run that returned a result cannot be removed,
+     * the first failure thrown with the other suppressed.
      */
     fun await(timeout: Duration = Duration.INFINITE): UtInstanceResult =
         synchronized(outcomeLock) { outcome ?: captureOutcome(timeout) }.getOrThrow()
@@ -149,22 +181,58 @@ class UtInstance private constructor(
 
     private fun captureResult(timeout: Duration): UtInstanceResult {
         val process = startedProcess()
-        val result = runCatching { process.use { files.read(exitCode(it, timeout)) } }
+        val result = runCatching { process.use { readResult(exitCode(it, timeout)) } }
         deleteFiles(result.exceptionOrNull())
         return result.getOrThrow()
     }
 
     /**
-     * Deletes the files of this run, adding a failure to do so to [failure] as suppressed, or throwing it when there
-     * is no [failure].
+     * The result of this run exiting with [exitCode], holding the contents of the files it wrote.
+     */
+    private fun readResult(exitCode: Int): UtInstanceResult =
+        UtInstanceResult(
+            exitCode = exitCode,
+            log = logPath.readLinesOrEmpty(UtPlatform.CHARSET),
+            gameIni = gameIniPath.readTextOrEmpty(UtPlatform.CHARSET),
+            userIni = userIniPath.readTextOrEmpty(UtPlatform.CHARSET),
+            exec = execPath.readLinesOrEmpty(UtPlatform.CHARSET),
+        )
+
+    /**
+     * Ends the files of this run: deletes the executable copy, then removes the other files when there is no
+     * [failure], or moves them into `<home>/workspace/<name>-<id>/` and adds every failure of that clean-up to
+     * [failure] as suppressed.
+     *
+     * @throws IOException if there is no [failure] and the files cannot be removed, the first failure thrown with the
+     * other suppressed.
      */
     private fun deleteFiles(failure: Throwable?) {
-        try {
-            files.delete()
-        } catch (cause: IOException) {
-            failure?.addSuppressed(cause) ?: throw cause
+        when (failure) {
+            null -> removeFiles()
+            else -> keepFiles().forEach(failure::addSuppressed)
         }
     }
+
+    /**
+     * Deletes the executable copy, then removes every other file of the run, trying both.
+     *
+     * @throws IOException if either cannot be removed, the first failure thrown with the other suppressed.
+     */
+    private fun removeFiles() {
+        listOf(deleteExecutableCatching(), runCatching { workspace.delete() })
+            .mapNotNull { it.exceptionOrNull() }
+            .mergeAndThrow()
+    }
+
+    /**
+     * Deletes the executable copy, then moves every other file of the run into `<home>/workspace/<name>-<id>/`, trying
+     * both, and returns the failures of the two.
+     */
+    private fun keepFiles(): List<Throwable> =
+        listOf(deleteExecutableCatching(), runCatching { workspace.persistShared() })
+            .mapNotNull { it.exceptionOrNull() }
+
+    private fun deleteExecutableCatching(): Result<Unit> = executablePath.deleteCatching(attempts = 10, delay = 100.milliseconds)
 
     private fun exitCode(
         process: ExecutableProcess,
@@ -202,11 +270,13 @@ class UtInstance private constructor(
      * Reached through the configuration block of [UtInstallation.instance].
      *
      * @property installation The installation the run is made against.
-     * @property name The name the run is logged under.
+     * @property name The name the run is logged under and its files are named after.
+     * @property directories The directories the run's workspace keeps the files of a failed run under.
      */
     class Builder(
         private val installation: UtInstallation,
         private val name: String,
+        private val directories: Directories,
     ) {
         /**
          * The program the run starts in front of the game executable copy, or `null` to start the copy itself.
@@ -267,15 +337,18 @@ class UtInstance private constructor(
         }
 
         /**
-         * An unstarted instance of the run this builder describes.
+         * An unstarted instance of the run this builder describes. Building one prunes the expired leftovers of earlier
+         * runs of the same name and writes nothing into the installation.
          *
-         * @throws IllegalArgumentException if [arguments] are set without an [executable].
+         * @throws IllegalArgumentException if the name does not match `[A-Za-z0-9._-]+`, or [arguments] are set without
+         * an [executable].
          */
         fun build(): UtInstance {
+            require(NAME_PATTERN.matches(name)) { "Instance name '$name' does not match ${NAME_PATTERN.pattern}" }
             require(arguments.isEmpty() || executable != null) {
                 "Instance $name takes arguments ahead of the game executable but starts no program to receive them"
             }
-            return UtInstance(name, installation, settings())
+            return UtInstance(name, installation, settings(), directories)
         }
 
         private fun settings(): Settings =
@@ -316,54 +389,7 @@ class UtInstance private constructor(
         val userIniEdits: List<UtIni.() -> Unit>,
     )
 
-    /**
-     * Writing, reading back and deleting the files at the paths of this run, each named rather than matched by prefix.
-     */
-    private inner class Files {
-        fun write() {
-            copyIni(installation.gameIniPath, gameIniPath, settings.gameIniEdits)
-            copyIni(installation.userIniPath, userIniPath, settings.userIniEdits)
-            writeExec()
-            installation.executablePath.copy(executablePath) { "UT executable not found at ${installation.executablePath}" }
-            executablePath.toFile().setExecutable(true)
-        }
-
-        private fun copyIni(
-            source: Path,
-            target: Path,
-            edits: List<UtIni.() -> Unit>,
-        ) {
-            source.copy(target) { "UT configuration not found at $source" }
-            if (edits.isEmpty()) return
-
-            val ini = UtIni.read(target)
-            edits.forEach { edit -> ini.edit() }
-            ini.write(target)
-        }
-
-        private fun writeExec() {
-            if (settings.exec.isEmpty()) return
-            execPath.writeLines(settings.exec, UtPlatform.CHARSET)
-        }
-
-        fun read(exitCode: Int): UtInstanceResult =
-            UtInstanceResult(
-                exitCode = exitCode,
-                log = logPath.readLinesOrEmpty(UtPlatform.CHARSET),
-                gameIni = gameIniPath.readTextOrEmpty(UtPlatform.CHARSET),
-                userIni = userIniPath.readTextOrEmpty(UtPlatform.CHARSET),
-                exec = execPath.readLinesOrEmpty(UtPlatform.CHARSET),
-            )
-
-        fun delete() {
-            listOf(gameIniPath, userIniPath, execPath, logPath).forEach { it.deleteIfExists() }
-            executablePath.deleteRecursivelyCatching(attempts = 10, delay = 100.milliseconds).getOrThrow()
-        }
-    }
-
     companion object {
-        private const val FILE_PREFIX = "ut-"
-
         /**
          * The time a killed run is given to report its exit code.
          */
@@ -371,14 +397,17 @@ class UtInstance private constructor(
 
         private const val KILLED_EXIT_CODE = -1
 
-        private val ids = TimestampId()
+        /**
+         * The pattern the name of an instance matches, so that it can be part of a file name.
+         */
+        private val NAME_PATTERN = Regex("[A-Za-z0-9._-]+")
 
         private val log = logger<UtInstance>()
     }
 }
 
 /**
- * The exit code of a finished [UtInstance] and the contents of the files it wrote, read before they were deleted.
+ * The exit code of a finished [UtInstance] and the contents of the files it wrote, read before they were removed.
  *
  * @property exitCode The code the process exited with, or `-1` for a killed run that reported none.
  * @property log The lines of the run's log.

@@ -50,12 +50,6 @@ val Project.javaVersion: Int
     get() = catalogVersion("java").toInt()
 
 /**
- * The detekt release the static analysis runs.
- */
-val Project.detektVersion: String
-    get() = catalogVersion("detekt")
-
-/**
  * The ktlint release the formatter runs.
  */
 val Project.ktlintVersion: String

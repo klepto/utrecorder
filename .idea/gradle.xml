@@ -21,6 +21,7 @@
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/build-scripts" />
             <option value="$PROJECT_DIR$/utrecorder-common" />
+            <option value="$PROJECT_DIR$/utrecorder-core" />
             <option value="$PROJECT_DIR$/utrecorder-hooks" />
             <option value="$PROJECT_DIR$/utrecorder-uscript" />
             <option value="$PROJECT_DIR$/utrecorder-ut99" />

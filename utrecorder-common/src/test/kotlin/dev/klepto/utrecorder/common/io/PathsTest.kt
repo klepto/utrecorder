@@ -203,100 +203,6 @@ class PathsTest :
             }
         }
 
-        context("stage") {
-            test("runs the block against a directory that is a sibling of the receiver") {
-                val target = root / "stage-sibling" / "install"
-
-                target.stage { directory ->
-                    directory.shouldExist()
-                    directory.parent shouldBe target.toAbsolutePath().parent
-                }
-            }
-
-            test("removes the directory and passes the block's result through once it returns") {
-                val target = root / "stage-return"
-                var captured: Path? = null
-
-                val result =
-                    target.stage { directory ->
-                        captured = directory
-                        sample
-                    }
-
-                result shouldBe sample
-                captured!!.shouldNotExist()
-            }
-
-            test("removes the directory and propagates the exception when the block throws") {
-                val target = root / "stage-throws"
-                var captured: Path? = null
-
-                shouldThrow<IllegalStateException> {
-                    target.stage { directory ->
-                        captured = directory
-                        error("boom")
-                    }
-                }
-
-                captured!!.shouldNotExist()
-            }
-
-            test("never creates the receiver itself, only its parent") {
-                val target = root / "stage-parent-only" / "install"
-
-                target.stage { }
-
-                target.parent.shouldExist()
-                target.shouldNotExist()
-            }
-
-            test("creates the parent directory when it is missing") {
-                val target = root / "stage-missing-parent" / "nested" / "install"
-
-                target.stage { }
-
-                target.parent.shouldExist()
-            }
-
-            test("gives different directories to two calls on the same receiver") {
-                val target = root / "stage-twice"
-
-                val first = target.stage { it }
-                val second = target.stage { it }
-
-                first shouldNotBe second
-            }
-        }
-
-        context("createTemporaryDirectory") {
-            test("creates a uniquely named directory under the receiver, named with the given prefix") {
-                val target = root / "temp-dir-parent"
-
-                val created = target.createTemporaryDirectory("probe-")
-
-                created.parent shouldBe target
-                created.fileName.toString() shouldStartWith "probe-"
-                created.shouldExist()
-            }
-
-            test("creates the receiver directory when it does not exist") {
-                val target = root / "temp-dir-missing" / "nested"
-
-                target.createTemporaryDirectory("probe-")
-
-                target.shouldExist()
-            }
-
-            test("gives different directories to two calls with the same prefix") {
-                val target = root / "temp-dir-twice"
-
-                val first = target.createTemporaryDirectory("probe-")
-                val second = target.createTemporaryDirectory("probe-")
-
-                first shouldNotBe second
-            }
-        }
-
         context("toAbsolutePath") {
             test("resolves a relative path against the current working directory") {
                 "utrecorder-relative-probe".toAbsolutePath() shouldBe
@@ -314,40 +220,12 @@ class PathsTest :
             }
         }
 
-        context("createTemporaryFile") {
-            test("creates the file next to the receiver") {
-                val target = root / "temp-file-sibling" / "install"
-
-                val created = target.createTemporaryFile()
-
-                created.parent shouldBe target.toAbsolutePath().parent
-                created.shouldExist()
-            }
-
-            test("creates the parent directory when it is missing") {
-                val target = root / "temp-file-missing-parent" / "nested" / "install"
-
-                target.createTemporaryFile()
-
-                target.parent.shouldExist()
-            }
-
-            test("gives different files to two calls on the same receiver") {
-                val target = root / "temp-file-twice"
-
-                val first = target.createTemporaryFile()
-                val second = target.createTemporaryFile()
-
-                first shouldNotBe second
-            }
-        }
-
-        context("deleteRecursivelyCatching") {
+        context("deleteCatching") {
             test("removes a populated directory tree") {
                 val directory = (root / "delete-tree").apply { createDirectories() }
                 (directory / "child").writeText(sample)
 
-                directory.deleteRecursivelyCatching()
+                directory.deleteCatching()
 
                 directory.shouldNotExist()
             }
@@ -355,20 +233,20 @@ class PathsTest :
             test("does not throw for a path that does not exist") {
                 val missing = root / "delete-absent"
 
-                missing.deleteRecursivelyCatching()
+                missing.deleteCatching()
 
                 missing.shouldNotExist()
             }
 
             test("throws IllegalArgumentException for zero attempts") {
                 shouldThrow<IllegalArgumentException> {
-                    (root / "delete-zero-attempts").deleteRecursivelyCatching(attempts = 0)
+                    (root / "delete-zero-attempts").deleteCatching(attempts = 0)
                 }
             }
 
             test("succeeds at once for a missing path, without waiting out the delay") {
                 val missing = root / "delete-absent-delayed"
-                val (outcome, elapsed) = measureTimedValue { missing.deleteRecursivelyCatching(attempts = 3, delay = 5.seconds) }
+                val (outcome, elapsed) = measureTimedValue { missing.deleteCatching(attempts = 3, delay = 5.seconds) }
 
                 outcome.shouldBeSuccess()
                 elapsed.inWholeMilliseconds shouldBeLessThan 5000L
@@ -384,7 +262,7 @@ class PathsTest :
                             stream.close()
                         }
 
-                    val outcome = path.deleteRecursivelyCatching(attempts = 50, delay = 100.milliseconds)
+                    val outcome = path.deleteCatching(attempts = 50, delay = 100.milliseconds)
                     closer.join()
 
                     outcome.shouldBeSuccess()
@@ -398,7 +276,7 @@ class PathsTest :
 
                     val (outcome, elapsed) =
                         try {
-                            measureTimedValue { path.deleteRecursivelyCatching(attempts = 3, delay = 200.milliseconds) }
+                            measureTimedValue { path.deleteCatching(attempts = 3, delay = 200.milliseconds) }
                         } finally {
                             stream.close()
                         }

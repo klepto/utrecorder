@@ -2,7 +2,6 @@ package dev.klepto.utrecorder.ut99
 
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.process.Executable
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -156,7 +155,7 @@ class UtPackageInstallerTest :
             if (compilerFails) {
                 (systemDirectory / "ucc.fail").writeText("")
             }
-            return UtInstallation(root / name / "install", Workspace(root / name / "tasks", keep = false, retention = 7.days))
+            return UtInstallation(root / name / "install", Directories(root / name))
         }
 
         fun installer(

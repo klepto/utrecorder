@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.common.io
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import dev.klepto.utrecorder.common.config.Directories
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.paths.shouldExist
@@ -12,7 +13,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
-import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.readBytes
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
@@ -27,6 +27,7 @@ class DownloaderTest :
         val tamperedMd5 = "07b218b924120d49a725c36b06556000"
 
         val root = createTempDirectory("utrecorder-downloader-test")
+        val directories = Directories(root / "home")
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
 
         val notFound: (HttpExchange) -> Unit = { it.sendResponseHeaders(404, -1) }
@@ -82,13 +83,18 @@ class DownloaderTest :
             chunked: Boolean = false,
         ) = serveBytes(body.toByteArray(), chunked)
 
-        fun leftovers() = root.listDirectoryEntries("*.tmp")
+        fun leftovers() =
+            (root / "home" / "workspace")
+                .toFile()
+                .walk()
+                .filter { it.isFile }
+                .toList()
 
         test("writes the response body to the output path") {
             serve()
             val output = root / "body"
 
-            Downloader(url).download(output)
+            Downloader(url, directories = directories).download(output)
 
             output.readText() shouldBe sample
         }
@@ -97,7 +103,7 @@ class DownloaderTest :
             serve()
             val output = root / "missing" / "nested" / "body"
 
-            Downloader(url).download(output)
+            Downloader(url, directories = directories).download(output)
 
             output.shouldExist()
         }
@@ -107,7 +113,7 @@ class DownloaderTest :
             serveBytes(bytes)
             val output = root / "large"
 
-            Downloader(url).download(output)
+            Downloader(url, directories = directories).download(output)
 
             output.readBytes() shouldBe bytes
         }
@@ -116,7 +122,7 @@ class DownloaderTest :
             serve("")
             val output = root / "empty"
 
-            Downloader(url).download(output)
+            Downloader(url, directories = directories).download(output)
 
             output.readBytes().size shouldBe 0
         }
@@ -125,7 +131,7 @@ class DownloaderTest :
             serve()
             val progress = mutableListOf<Pair<Long, Long>>()
 
-            Downloader(url).download(root / "progress") { received, total -> progress += received to total }
+            Downloader(url, directories = directories).download(root / "progress") { received, total -> progress += received to total }
 
             progress.last() shouldBe (sample.length.toLong() to sample.length.toLong())
         }
@@ -134,7 +140,7 @@ class DownloaderTest :
             serve(chunked = true)
             val progress = mutableListOf<Pair<Long, Long>>()
 
-            Downloader(url).download(root / "chunked") { received, total -> progress += received to total }
+            Downloader(url, directories = directories).download(root / "chunked") { received, total -> progress += received to total }
 
             progress.last() shouldBe (sample.length.toLong() to -1L)
         }
@@ -143,7 +149,7 @@ class DownloaderTest :
             serve()
             val output = root / "md5-match"
 
-            Downloader(url, sampleMd5).download(output)
+            Downloader(url, sampleMd5, directories = directories).download(output)
 
             output.readText() shouldBe sample
         }
@@ -152,7 +158,7 @@ class DownloaderTest :
             serve()
             val output = root / "sha-match"
 
-            Downloader(url, sampleSha256, algorithm = "sha-256").download(output)
+            Downloader(url, sampleSha256, algorithm = "sha-256", directories = directories).download(output)
 
             output.readText() shouldBe sample
         }
@@ -161,7 +167,7 @@ class DownloaderTest :
             serve()
             val output = root / "uppercase-hash"
 
-            Downloader(url, sampleMd5.uppercase()).download(output)
+            Downloader(url, sampleMd5.uppercase(), directories = directories).download(output)
 
             output.readText() shouldBe sample
         }
@@ -169,7 +175,9 @@ class DownloaderTest :
         test("reports both hashes when the download does not match") {
             serve(tampered)
 
-            val error = shouldThrow<HashMismatchException> { Downloader(url, sampleMd5).download(root / "mismatch") }
+            val downloader = Downloader(url, sampleMd5, directories = directories)
+
+            val error = shouldThrow<HashMismatchException> { downloader.download(root / "mismatch") }
 
             error.expected shouldBe sampleMd5
             error.actual shouldBe tamperedMd5
@@ -180,7 +188,7 @@ class DownloaderTest :
             serve(tampered)
             val output = root / "mismatch-output"
 
-            shouldThrow<HashMismatchException> { Downloader(url, sampleMd5).download(output) }
+            shouldThrow<HashMismatchException> { Downloader(url, sampleMd5, directories = directories).download(output) }
 
             output.shouldNotExist()
             leftovers() shouldBe emptyList()
@@ -190,7 +198,7 @@ class DownloaderTest :
             serve()
             val output = (root / "cached").apply { writeText(sample) }
 
-            Downloader(url, sampleMd5).download(output)
+            Downloader(url, sampleMd5, directories = directories).download(output)
 
             requests shouldBe 0
         }
@@ -200,7 +208,7 @@ class DownloaderTest :
             val output = (root / "cached-progress").apply { writeText(sample) }
             val progress = mutableListOf<Pair<Long, Long>>()
 
-            Downloader(url, sampleMd5).download(output) { received, total -> progress += received to total }
+            Downloader(url, sampleMd5, directories = directories).download(output) { received, total -> progress += received to total }
 
             progress shouldBe listOf(sample.length.toLong() to sample.length.toLong())
         }
@@ -209,7 +217,7 @@ class DownloaderTest :
             serve()
             val output = (root / "stale").apply { writeText("stale") }
 
-            Downloader(url, sampleMd5).download(output)
+            Downloader(url, sampleMd5, directories = directories).download(output)
 
             requests shouldBe 1
             output.readText() shouldBe sample
@@ -219,7 +227,7 @@ class DownloaderTest :
             serve()
             val output = (root / "no-hash").apply { writeText("stale") }
 
-            Downloader(url).download(output)
+            Downloader(url, directories = directories).download(output)
 
             requests shouldBe 2
             output.readText() shouldBe sample
@@ -230,7 +238,7 @@ class DownloaderTest :
             val staleContent = "x".repeat(sample.length)
             val output = (root / "size-match").apply { writeText(staleContent) }
 
-            Downloader(url).download(output)
+            Downloader(url, directories = directories).download(output)
 
             requests shouldBe 1
             output.readText() shouldBe staleContent
@@ -248,20 +256,20 @@ class DownloaderTest :
             }
             val output = (root / "no-remote-size").apply { writeText("stale") }
 
-            Downloader(url).download(output)
+            Downloader(url, directories = directories).download(output)
 
             requests shouldBe 2
             output.readText() shouldBe sample
         }
 
         test("throws on an error status") {
-            shouldThrow<ClientRequestException> { Downloader(url).download(root / "not-found") }
+            shouldThrow<ClientRequestException> { Downloader(url, directories = directories).download(root / "not-found") }
         }
 
         test("leaves no output file when the request fails") {
             val output = root / "failed"
 
-            shouldThrow<ClientRequestException> { Downloader(url).download(output) }
+            shouldThrow<ClientRequestException> { Downloader(url, directories = directories).download(output) }
 
             output.shouldNotExist()
         }
@@ -269,7 +277,7 @@ class DownloaderTest :
         test("keeps the previous output when the request fails") {
             val output = (root / "preserved").apply { writeText("previous") }
 
-            shouldThrow<ClientRequestException> { Downloader(url).download(output) }
+            shouldThrow<ClientRequestException> { Downloader(url, directories = directories).download(output) }
 
             output.readText() shouldBe "previous"
         }
@@ -277,13 +285,13 @@ class DownloaderTest :
         test("removes the temporary file after a successful download") {
             serve()
 
-            Downloader(url).download(root / "clean-success")
+            Downloader(url, directories = directories).download(root / "clean-success")
 
             leftovers() shouldBe emptyList()
         }
 
         test("removes the temporary file after a failed download") {
-            shouldThrow<ClientRequestException> { Downloader(url).download(root / "clean-failure") }
+            shouldThrow<ClientRequestException> { Downloader(url, directories = directories).download(root / "clean-failure") }
 
             leftovers() shouldBe emptyList()
         }

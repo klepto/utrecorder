@@ -1,14 +1,12 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.exists
-import kotlin.time.Duration.Companion.days
 
 class UtPackageInstallerIntegrationTest :
     FunSpec({
@@ -21,7 +19,7 @@ class UtPackageInstallerIntegrationTest :
         beforeSpec { UtInstaller(defaults).install() }
         afterSpec { home.toFile().deleteRecursively() }
 
-        val installation by lazy { UtInstallation(config.gameDirectory, Workspace(home / "tasks", keep = false, retention = 7.days)) }
+        val installation by lazy { UtInstallation(config.gameDirectory, config.directories) }
 
         context("install") {
             test("fetches a real package from a real redirect into a real installation") {

@@ -26,8 +26,8 @@ class DirectoriesTest :
             Directories(root).installs shouldBe root / "installs"
         }
 
-        test("tasks is a tasks directory under home") {
-            Directories(root).tasks shouldBe root / "tasks"
+        test("workspace is a workspace directory under home") {
+            Directories(root).workspace shouldBe root / "workspace"
         }
 
         test("packages is a packages directory under home") {

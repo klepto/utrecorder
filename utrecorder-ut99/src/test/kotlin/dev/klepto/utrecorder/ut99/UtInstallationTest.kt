@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.config.Directories
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Path
@@ -9,7 +9,6 @@ import kotlin.io.path.createParentDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.writeText
-import kotlin.time.Duration.Companion.days
 
 class UtInstallationTest :
     FunSpec({
@@ -22,7 +21,7 @@ class UtInstallationTest :
             val executable = directory / UtDirectory.System.name / UtPlatform.current().gameExecutable
             executable.createParentDirectories()
             executable.writeText("")
-            return UtInstallation(directory, Workspace(root / "tasks", keep = false, retention = 7.days))
+            return UtInstallation(directory, Directories(root / "home"))
         }
 
         fun emptyFile(path: Path): Path = path.createParentDirectories().also { it.writeText("") }

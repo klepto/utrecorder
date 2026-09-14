@@ -1,10 +1,11 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.copy
-import dev.klepto.utrecorder.common.io.deleteRecursivelyCatching
+import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
+import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableResult
 import java.nio.file.Path
@@ -23,12 +24,12 @@ import kotlin.io.path.writeText
  * Use [UtInstallation.compiler] for the compiler of an installation.
  *
  * @property installation The installation the compiler belongs to.
- * @property workspace The workspace a compile runs its task in.
+ * @property directories The directories holding the workspace a compile runs in.
  * @throws IllegalStateException if [installation] holds no compiler executable.
  */
 class UtCompiler(
     private val installation: UtInstallation,
-    private val workspace: Workspace = Workspace.DEFAULT,
+    private val directories: Directories = Directories.DEFAULT,
 ) {
     /**
      * The directory holding the compiler executable, where the compiler reads and writes packages.
@@ -97,12 +98,12 @@ class UtCompiler(
         val stagedPath = installation.directory[packageName]
         val producedPath = directory[packageFileName]
 
-        return workspace.task("ucc") { taskDirectory ->
+        return workspace("ucc", directories = directories) {
             val iniPath =
                 defaultConfig()
                     .apply(configure)
                     .apply { add(EDITOR_SECTION, EDIT_PACKAGES, packageName) }
-                    .write(taskDirectory[MAKE_INI])
+                    .write(file(MAKE_INI))
 
             val result =
                 try {
@@ -111,16 +112,16 @@ class UtCompiler(
                     producedPath.deleteIfExists()
                     run("make", "-nobind", "-bytehax", "-packages=$packageName", "-ini=${iniPath.absolutePathString()}")
                 } finally {
-                    stagedPath.deleteRecursivelyCatching()
+                    stagedPath.deleteCatching()
                 }
 
-            taskDirectory[MAKE_LOG].writeText(result.output.joinToString(System.lineSeparator()))
+            file(MAKE_LOG).writeText(result.output.joinToString(System.lineSeparator()))
             result.orThrow()
 
-            check(producedPath.exists()) { "UCC failed to compile $packageName, see ${taskDirectory[MAKE_LOG]}" }
-            producedPath.move(taskDirectory[packageFileName])
+            check(producedPath.exists()) { "UCC failed to compile $packageName, see ${file(MAKE_LOG)}" }
+            producedPath.move(file(packageFileName))
 
-            taskDirectory[packageFileName].copy(outputPath, overwrite = true)
+            file(packageFileName).copy(outputPath, overwrite = true)
         }
     }
 

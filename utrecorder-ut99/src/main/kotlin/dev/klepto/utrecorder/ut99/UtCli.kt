@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.toAbsolutePath
 import dev.klepto.utrecorder.common.log.logger
 import java.nio.file.Path
@@ -11,8 +10,7 @@ import kotlin.system.exitProcess
  *
  * Use [main] to run it as a process, or [run] to run it in the current one. `install` provisions the installation, and
  * `make` compiles the package `--sources` names into the file `--output` names. `--install` names the installation,
- * defaulting to the one [UtConfig.DEFAULT] names. `--tasks` names the directory a run writes its tasks under,
- * defaulting to [Workspace.DEFAULT]. `--edit-packages` names the packages a compile compiles against.
+ * defaulting to the one [UtConfig.DEFAULT] names. `--edit-packages` names the packages a compile compiles against.
  *
  * @property arguments The command line arguments, the command first and its options after it.
  */
@@ -35,11 +33,6 @@ class UtCli(
     private val config = path("install")?.let { UtConfig.DEFAULT.copy(gameDirectory = it) } ?: UtConfig.DEFAULT
 
     /**
-     * The workspace the command runs its tasks in, rooted at the directory the `--tasks` option names.
-     */
-    private val workspace = path("tasks")?.let { Workspace(it, Workspace.DEFAULT.keep, Workspace.DEFAULT.retention) } ?: Workspace.DEFAULT
-
-    /**
      * Reads the `--key=value` options the [arguments] hold into a map, by key.
      */
     private fun parseOptions(): Map<String, String> =
@@ -58,7 +51,6 @@ class UtCli(
     /**
      * Runs the command the arguments name and returns the exit code of the process, `1` when the command fails.
      */
-    @Suppress("TooGenericExceptionCaught")
     fun run(): Int =
         try {
             command().run(this)
@@ -82,7 +74,7 @@ class UtCli(
      */
     private fun install(): UtInstallation {
         UtInstaller(config).install()
-        return UtInstallation(config.gameDirectory, workspace)
+        return UtInstallation(config.gameDirectory, config.directories)
     }
 
     /**
@@ -142,7 +134,7 @@ class UtCli(
         private val USAGE =
             """
             usage: UtCli install [--install=<dir>]
-                   UtCli make --sources=<dir> --output=<file> [--tasks=<dir>] [--install=<dir>] [--edit-packages=A,B,C]
+                   UtCli make --sources=<dir> --output=<file> [--install=<dir>] [--edit-packages=A,B,C]
             """.trimIndent()
 
         private val log = logger<UtCli>()

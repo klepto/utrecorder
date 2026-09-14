@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.get
 import java.nio.file.Path
 import kotlin.io.path.exists
@@ -12,12 +12,12 @@ import kotlin.io.path.exists
  * Use [UtInstaller] to materialize one, [instance] to run it, and [compiler] to compile against it.
  *
  * @property directory The root of the installation.
- * @property workspace The workspace anything the installation runs uses for its tasks.
+ * @property directories The directories holding the workspaces anything the installation runs works in.
  * @throws IllegalStateException if [directory] or the game executable it holds does not exist.
  */
 class UtInstallation(
     val directory: Path,
-    private val workspace: Workspace = Workspace.DEFAULT,
+    private val directories: Directories = Directories.DEFAULT,
 ) {
     /**
      * The platform the installation runs on.
@@ -52,7 +52,7 @@ class UtInstallation(
     /**
      * The UCC utility of this installation.
      */
-    val compiler: UtCompiler by lazy { UtCompiler(this, workspace) }
+    val compiler: UtCompiler by lazy { UtCompiler(this, directories) }
 
     init {
         check(directory.exists()) { "UT installation directory not found at $directory" }
@@ -60,13 +60,17 @@ class UtInstallation(
     }
 
     /**
-     * Returns an unstarted run of this installation, named [name] and described by [configure]. Building one writes
-     * nothing: [UtInstance.start] adds the files the run needs, and [UtInstance.await] removes them again.
+     * Returns an unstarted run of this installation, named [name] and described by [configure]. Building one prunes the
+     * expired leftovers of earlier runs of that name and writes nothing into the installation: [UtInstance.start] adds
+     * the files the run needs, and [UtInstance.await] removes them again.
+     *
+     * @throws IllegalArgumentException if [name] does not match `[A-Za-z0-9._-]+`, or [configure] sets arguments
+     * without an executable.
      */
     fun instance(
         name: String,
         configure: UtInstance.Builder.() -> Unit = {},
-    ): UtInstance = UtInstance.Builder(this, name).apply(configure).build()
+    ): UtInstance = UtInstance.Builder(this, name, directories).apply(configure).build()
 
     /**
      * Returns the packages [packageDirectory] of this installation holds, matched by the extension it declares. Empty

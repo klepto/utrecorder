@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.common.io
 
+import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.log.logger
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.onDownload
@@ -32,12 +33,14 @@ typealias DownloadListener = (received: Long, total: Long) -> Unit
  * @property hash The expected hash of the file, compared case-insensitively, or `null` to skip verification.
  * @property algorithm The hash algorithm name to use for checking the downloaded file (e.g. "md5", "sha-256").
  * @property timeout The maximum time to wait between reads before the connection is considered stalled.
+ * @property directories The directories holding the workspace a download is written in until it is complete.
  */
 class Downloader(
     private val url: String,
     private val hash: String? = null,
     private val algorithm: String = "md5",
     private val timeout: Duration = HTTP_SOCKET_TIMEOUT,
+    private val directories: Directories = Directories.DEFAULT,
 ) {
     private val normalizedHash: String? = hash?.lowercase()
 
@@ -56,14 +59,16 @@ class Downloader(
             return
         }
 
-        val temporary = outputPath.createTemporaryFile()
-        log.info { "Downloading $url to $outputPath" }
-        try {
-            fetch(temporary, listener)
-            verifyHash(temporary)
-            temporary.move(outputPath)
-        } finally {
-            temporary.deleteIfExists()
+        workspace("download", directories = directories) {
+            val temporary = tempFile()
+            log.info { "Downloading $url to $outputPath" }
+            try {
+                fetch(temporary, listener)
+                verifyHash(temporary)
+                temporary.move(outputPath)
+            } finally {
+                temporary.deleteIfExists()
+            }
         }
     }
 

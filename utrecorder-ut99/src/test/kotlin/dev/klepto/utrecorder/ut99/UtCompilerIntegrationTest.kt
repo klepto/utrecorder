@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.get
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -15,7 +15,6 @@ import kotlin.io.path.fileSize
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
-import kotlin.time.Duration.Companion.days
 
 /**
  * Tests [UtCompiler.make] against a real Unreal Tournament installation and a real compiler, pinning the assumptions
@@ -33,13 +32,7 @@ class UtCompilerIntegrationTest :
         beforeSpec { UtInstaller(config).install() }
         afterSpec { root.toFile().deleteRecursively() }
 
-        fun compiler(
-            packageName: String,
-            keep: Boolean = false,
-        ): UtCompiler {
-            val workspace = Workspace(root / "tasks" / packageName, keep = keep, retention = 7.days)
-            return UtInstallation(config.gameDirectory, workspace).compiler
-        }
+        fun compiler(packageName: String): UtCompiler = UtInstallation(config.gameDirectory, Directories(root / packageName)).compiler
 
         fun sources(
             packageName: String,
@@ -51,24 +44,19 @@ class UtCompilerIntegrationTest :
             return sourcesPath
         }
 
-        fun taskDirectories(packageName: String): List<Path> =
-            (root / "tasks" / packageName).takeIf { it.exists() }?.listDirectoryEntries("ucc-*") ?: emptyList()
+        fun workspaces(packageName: String): List<Path> =
+            (root / packageName / "workspace").takeIf { it.exists() }?.listDirectoryEntries("ucc-*") ?: emptyList()
 
         context("make") {
             test("compiles a package into a real Unreal Tournament package file") {
                 val packageName = "UtRecorderProbe"
                 val outputPath = root / "out" / "$packageName.u"
 
-                val result = compiler(packageName, keep = true).make(sources(packageName), outputPath)
+                val result = compiler(packageName).make(sources(packageName), outputPath)
 
                 result shouldBe outputPath
                 outputPath.exists() shouldBe true
                 (outputPath.fileSize() > 0) shouldBe true
-
-                val taskDirectory = taskDirectories(packageName).single()
-                (taskDirectory / "make.ini").exists() shouldBe true
-                (taskDirectory / "make.log").exists() shouldBe true
-                (taskDirectory / "$packageName.u").exists() shouldBe true
 
                 (config.gameDirectory[UtDirectory.System] / "$packageName.u").exists() shouldBe false
                 (config.gameDirectory / packageName).exists() shouldBe false
@@ -76,22 +64,25 @@ class UtCompilerIntegrationTest :
 
             test("applies the configure block on top of the installation defaults") {
                 val packageName = "UtRecorderConfigured"
+                val sourcesPath = sources(packageName, "class $packageName extends NoSuchParentClass;")
 
-                compiler(packageName, keep = true).make(sources(packageName), root / "out" / "$packageName.u") {
-                    this["Core.System", "Suppress"] = "DevCompile"
+                shouldThrow<IllegalStateException> {
+                    compiler(packageName).make(sourcesPath, root / "out" / "$packageName.u") {
+                        this["Core.System", "Suppress"] = "DevCompile"
+                    }
                 }
 
-                val ini = UtIni.read(taskDirectories(packageName).single() / "make.ini")
+                val ini = UtIni.read(workspaces(packageName).single() / "make.ini")
                 ini["Editor.EditorEngine", "EditPackages"].last() shouldBe packageName
                 ini["Core.System", "Suppress"] shouldBe listOf("DevCompile")
             }
 
-            test("leaves no task directory behind after a successful run when keep is off") {
+            test("leaves no workspace behind after a successful run") {
                 val packageName = "UtRecorderClean"
 
                 compiler(packageName).make(sources(packageName), root / "out" / "$packageName.u")
 
-                taskDirectories(packageName) shouldBe emptyList()
+                workspaces(packageName) shouldBe emptyList()
             }
 
             test("fails the run and keeps the compiler diagnostics when the sources don't compile") {
@@ -104,9 +95,9 @@ class UtCompilerIntegrationTest :
                 outputPath.exists() shouldBe false
                 (config.gameDirectory / packageName).exists() shouldBe false
 
-                val taskDirectory = taskDirectories(packageName).single()
-                (taskDirectory / "make.log").readText() shouldContain packageName
-                (taskDirectory / "$packageName.u").exists() shouldBe false
+                val workspace = workspaces(packageName).single()
+                (workspace / "make.log").readText() shouldContain packageName
+                (workspace / "$packageName.u").exists() shouldBe false
             }
         }
     })

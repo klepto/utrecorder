@@ -5,7 +5,7 @@ import dev.klepto.utrecorder.common.io.Downloader
 import dev.klepto.utrecorder.common.io.extract
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
-import dev.klepto.utrecorder.common.io.stage
+import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.log.logger
 import dev.klepto.utrecorder.ut99.UtDirectory.Help
 import dev.klepto.utrecorder.ut99.UtDirectory.Maps
@@ -54,7 +54,7 @@ class UtInstaller(
         }
 
         log.info { "Installing UT..." }
-        directory.stage { staging ->
+        workspace("ut-installer", directories = config.directories) { staging ->
             installIso(staging)
             installPatch(staging)
             staging.move(directory)
@@ -68,7 +68,7 @@ class UtInstaller(
      */
     private fun installIso(directory: Path) {
         val isoPath = config.directories.cache[ISO_FILE]
-        Downloader(config.isoUrl, config.isoMd5).download(isoPath)
+        Downloader(config.isoUrl, config.isoMd5, directories = config.directories).download(isoPath)
         isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }
 
         val target = directory[System]
@@ -82,7 +82,7 @@ class UtInstaller(
     private fun installPatch(directory: Path) {
         val patchPath = config.directories.cache[config.patchFileName]
         val patchUrl = "${config.patchUrl}/v${config.patchVersion}/${config.patchFileName}"
-        Downloader(patchUrl).download(patchPath)
+        Downloader(patchUrl, directories = config.directories).download(patchPath)
         patchPath.extract(directory)
     }
 

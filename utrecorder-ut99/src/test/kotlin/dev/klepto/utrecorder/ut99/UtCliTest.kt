@@ -23,7 +23,7 @@ class UtCliTest :
 
             test("returns 1 for make with no --sources, without provisioning an installation") {
                 val install = root / "no-sources"
-                val arguments = listOf("make", "--output=${root / "out" / "Package.u"}", "--install=$install", "--tasks=${root / "tasks"}")
+                val arguments = listOf("make", "--output=${root / "out" / "Package.u"}", "--install=$install")
 
                 UtCli(arguments).run() shouldBe 1
 

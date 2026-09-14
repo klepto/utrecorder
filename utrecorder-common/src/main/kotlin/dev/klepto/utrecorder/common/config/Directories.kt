@@ -29,9 +29,9 @@ data class Directories(
     val installs: Path = home["installs"]
 
     /**
-     * The directory the working directories of tasks are held in.
+     * The directory workspaces hold their own directories in, and the files of a failed shared workspace are moved to.
      */
-    val tasks: Path = home["tasks"]
+    val workspace: Path = home["workspace"]
 
     /**
      * The directory fetched game packages are stored in.

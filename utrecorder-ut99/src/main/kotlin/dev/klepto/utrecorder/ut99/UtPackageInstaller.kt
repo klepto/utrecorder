@@ -7,7 +7,7 @@ import dev.klepto.utrecorder.common.io.encodeUrlPathSegment
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.headCatching
 import dev.klepto.utrecorder.common.io.move
-import dev.klepto.utrecorder.common.io.stage
+import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.log.logger
 import java.io.IOException
 import java.nio.file.Path
@@ -109,9 +109,9 @@ class UtPackageInstaller(
         val target = config.directories.packages["${required.name}.$extension"]
         log.info { "Fetching ${required.name} from $url" }
 
-        target.stage { staging ->
+        workspace("uz-installer", directories = config.directories) { staging ->
             val archive = staging["${target.fileName}.uz"]
-            Downloader(url).download(archive)
+            Downloader(url, directories = config.directories).download(archive)
             val extracted = installation.compiler.extract(archive, staging["${target.fileName}"])
             archive.deleteIfExists()
             extracted.move(target)

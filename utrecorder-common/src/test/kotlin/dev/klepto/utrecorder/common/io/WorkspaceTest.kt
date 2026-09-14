@@ -1,28 +1,29 @@
 package dev.klepto.utrecorder.common.io
 
 import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.config.PropertySource
 import dev.klepto.utrecorder.common.os.OperatingSystem
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.core.test.TestCase
 import io.kotest.matchers.paths.shouldExist
 import io.kotest.matchers.paths.shouldNotExist
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
-import io.kotest.matchers.string.shouldStartWith
+import io.kotest.matchers.string.shouldMatch
 import java.io.FileOutputStream
-import java.io.IOException
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
+import kotlin.io.path.exists
+import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.readText
 import kotlin.io.path.setLastModifiedTime
 import kotlin.io.path.writeText
-import kotlin.time.Duration.Companion.days
-import kotlin.time.Duration.Companion.minutes
 
 class WorkspaceTest :
     FunSpec({
@@ -30,170 +31,176 @@ class WorkspaceTest :
 
         afterSpec { root.toFile().deleteRecursively() }
 
-        fun workspace(
-            directory: Path,
-            keep: Boolean = false,
-        ) = Workspace(directory, keep, 7.days)
+        val windowsOnly = { _: TestCase -> OperatingSystem.current() == OperatingSystem.WINDOWS }
 
-        fun expire(directory: Path) = directory.setLastModifiedTime(FileTime.from(Instant.now().minus(8, ChronoUnit.DAYS)))
+        fun expire(path: Path) = path.setLastModifiedTime(FileTime.from(Instant.now().minus(8, ChronoUnit.DAYS)))
 
-        val windowsOnly = { _: io.kotest.core.test.TestCase -> OperatingSystem.current() == OperatingSystem.WINDOWS }
+        context("a workspace with a directory of its own") {
+            test("runs the block in an existing directory under the workspace directory, named after the workspace and its id") {
+                lateinit var directory: Path
+                var existed = false
 
-        context("task") {
-            test("the block receives a directory that exists, under the workspace directory, named with the task name as a prefix") {
-                val directory = root / "probe-tasks"
-                lateinit var taskDirectory: Path
-                var existedDuringBlock = false
-
-                workspace(directory).task("probe") {
-                    taskDirectory = it
-                    existedDuringBlock = it.toFile().exists()
+                workspace("probe", directories = Directories(root / "named")) {
+                    directory = it
+                    existed = it.exists()
                 }
 
-                existedDuringBlock shouldBe true
-                taskDirectory.parent shouldBe directory
-                taskDirectory.fileName.toString() shouldStartWith "probe-"
+                existed shouldBe true
+                directory.parent shouldBe root / "named" / "workspace"
+                directory.fileName.toString() shouldMatch Regex("""probe-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}""")
             }
 
-            test("a task on a workspace whose directory does not exist yet creates it and runs the block") {
-                val directory = root / "missing-tasks" / "nested"
-                var ran = false
-
-                workspace(directory).task("missing") { ran = true }
-
-                ran shouldBe true
-                directory.shouldExist()
+            test("names files and directories inside its directory without a prefix") {
+                workspace("plain", directories = Directories(root / "plain")) { directory ->
+                    file("make.log") shouldBe directory / "make.log"
+                    directory("logs") shouldBe directory / "logs"
+                    (directory / "logs").shouldExist()
+                }
             }
 
-            test("a task on a workspace whose directory is a regular file throws before the block runs") {
-                val directory = (root / "file-tasks").apply { writeText("") }
-                var ran = false
-
-                shouldThrow<IOException> { workspace(directory).task("file") { ran = true } }
-
-                ran shouldBe false
-            }
-
-            test("a successful task removes its directory and passes through the block's return value") {
-                lateinit var taskDirectory: Path
+            test("removes the directory and passes the result through when the block returns") {
+                lateinit var directory: Path
 
                 val result =
-                    workspace(root / "cleanup-tasks").task("cleanup") {
-                        taskDirectory = it
+                    workspace("success", directories = Directories(root / "success")) {
+                        directory = it
+                        (it / "make.log").writeText("log")
                         "the result"
                     }
 
                 result shouldBe "the result"
-                taskDirectory.shouldNotExist()
+                directory.shouldNotExist()
             }
 
-            test("a failing task keeps its directory and rethrows") {
-                lateinit var taskDirectory: Path
+            test("keeps the directory and rethrows when the block throws") {
+                lateinit var directory: Path
 
                 shouldThrow<IllegalStateException> {
-                    workspace(root / "failing-tasks").task("failing") {
-                        taskDirectory = it
-                        error("boom")
+                    workspace("failure", directories = Directories(root / "failure")) {
+                        directory = it
+                        (it / "make.log").writeText("log")
+                        error("Boom")
                     }
                 }
 
-                taskDirectory.shouldExist()
+                (directory / "make.log").readText() shouldBe "log"
             }
 
-            test("keep keeps the directory of a successful task") {
-                lateinit var taskDirectory: Path
+            test("removes the directory and rethrows when the block is cancelled") {
+                lateinit var directory: Path
 
-                workspace(root / "kept-tasks", keep = true).task("kept") { taskDirectory = it }
+                shouldThrow<CancellationException> {
+                    workspace("cancelled", directories = Directories(root / "cancelled")) {
+                        directory = it
+                        throw CancellationException("Cancelled")
+                    }
+                }
 
-                taskDirectory.shouldExist()
+                directory.shouldNotExist()
             }
 
-            test("two tasks of the same name started back to back get different directories") {
-                val workspace = workspace(root / "collision-tasks", keep = true)
-                lateinit var first: Path
-                lateinit var second: Path
+            test("removes the directory when the block returns from the enclosing function") {
+                fun leaveEarly(): Path {
+                    workspace("early", directories = Directories(root / "early")) { return it }
+                }
 
-                workspace.task("collision") { first = it }
-                workspace.task("collision") { second = it }
+                leaveEarly().shouldNotExist()
+            }
+
+            test("gives two workspaces of the same name different directories") {
+                val directories = Directories(root / "twice")
+
+                val first = workspace("twice", directories = directories) { it }
+                val second = workspace("twice", directories = directories) { it }
 
                 first shouldNotBe second
             }
+        }
 
-            test("a stale leftover directory is removed by the next task call, and a fresh one is not") {
-                val directory = (root / "prune-tasks").apply { createDirectories() }
-                val stale = (directory / "stale-leftover").apply { createDirectories() }
-                val fresh = (directory / "fresh-leftover").apply { createDirectories() }
+        context("a workspace in a shared root") {
+            test("names files in the root with the name and id of the workspace as a prefix") {
+                val shared = root / "shared-names"
+
+                workspace("ucc", shared, Directories(root / "shared-names-home")) { directory ->
+                    directory shouldBe shared
+                    file("make.ini").parent shouldBe shared
+                    file("make.ini").fileName.toString() shouldMatch Regex("""ucc-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-make\.ini""")
+                }
+            }
+
+            test("removes the files it named and keeps the rest of the root when the block returns") {
+                val shared = (root / "shared-success").apply { createDirectories() }
+                val foreign = (shared / "UnrealTournament.ini").apply { writeText("game") }
+
+                workspace("ucc", shared, Directories(root / "shared-success-home")) {
+                    file("make.ini").writeText("ini")
+                    (directory("Package") / "Package.uc").writeText("class Package extends Object;")
+                }
+
+                shared.listDirectoryEntries() shouldBe listOf(foreign)
+            }
+
+            test("moves the files it named into a workspace directory without their prefix when the block throws") {
+                val shared = (root / "shared-failure").apply { createDirectories() }
+                val foreign = (shared / "UnrealTournament.ini").apply { writeText("game") }
+
+                shouldThrow<IllegalStateException> {
+                    workspace("ucc", shared, Directories(root / "shared-failure-home")) {
+                        file("make.log").writeText("log")
+                        error("Boom")
+                    }
+                }
+
+                shared.listDirectoryEntries() shouldBe listOf(foreign)
+                val kept = (root / "shared-failure-home" / "workspace").listDirectoryEntries().single()
+                kept.fileName.toString() shouldMatch Regex("""ucc-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}""")
+                (kept / "make.log").readText() shouldBe "log"
+            }
+        }
+
+        context("prune") {
+            test("removes an entry of the workspace directory older than 7 days when a workspace starts, and keeps a fresh one") {
+                val stale = (root / "prune-owned" / "workspace" / "stale").apply { createDirectories() }
+                val fresh = (root / "prune-owned" / "workspace" / "fresh").apply { createDirectories() }
                 expire(stale)
 
-                workspace(directory).task("prune-trigger") {}
+                workspace("trigger", directories = Directories(root / "prune-owned")) {}
 
                 stale.shouldNotExist()
                 fresh.shouldExist()
             }
 
-            test("a successful task whose block leaves a file of its directory open throws the removal failure after the block returned")
+            test("removes an expired file of a shared root only when it carries the workspace name and an id") {
+                val shared = (root / "prune-shared").apply { createDirectories() }
+                val own = (shared / "ucc-2020-01-01-0000-00-make.ini").apply { writeText("") }
+                val otherName = (shared / "ut-2020-01-01-0000-00-make.ini").apply { writeText("") }
+                val foreign = (shared / "UCC.log").apply { writeText("") }
+                listOf(own, otherName, foreign).forEach(::expire)
+
+                workspace("ucc", shared, Directories(root / "prune-shared-home")) {}
+
+                own.shouldNotExist()
+                otherName.shouldExist()
+                foreign.shouldExist()
+            }
+
+            test("runs the block when an expired entry cannot be removed, and removes the others")
                 .config(enabledIf = windowsOnly) {
-                    var stream: FileOutputStream? = null
-                    var returned = false
-
-                    try {
-                        shouldThrow<IOException> {
-                            workspace(root / "open-tasks").task("open") {
-                                stream = FileOutputStream((it / "held").toFile())
-                                returned = true
-                            }
-                        }
-                    } finally {
-                        stream?.close()
-                    }
-
-                    returned shouldBe true
-                }
-
-            test("an expired directory holding an open file fails the next task before its block runs, while another beside it is removed")
-                .config(enabledIf = windowsOnly) {
-                    val directory = (root / "held-prune-tasks").apply { createDirectories() }
-                    val held = (directory / "held-leftover").apply { createDirectories() }
-                    val removable = (directory / "removable-leftover").apply { createDirectories() }
+                    val held = (root / "prune-held" / "workspace" / "held").apply { createDirectories() }
+                    val removable = (root / "prune-held" / "workspace" / "removable").apply { createDirectories() }
                     val stream = FileOutputStream((held / "held").toFile())
                     expire(held)
                     expire(removable)
                     var ran = false
 
                     try {
-                        shouldThrow<IOException> { workspace(directory).task("held-prune") { ran = true } }
+                        workspace("trigger", directories = Directories(root / "prune-held")) { ran = true }
                     } finally {
                         stream.close()
                     }
 
-                    ran shouldBe false
+                    ran shouldBe true
                     removable.shouldNotExist()
                 }
-        }
-
-        context("fromProperties") {
-            val directories = Directories(root / "fromproperties-home")
-
-            fun source(vararg properties: Pair<String, String>) =
-                PropertySource(properties = mapOf(*properties)::get, environment = { null })
-
-            test("derives directory from the tasks directory of the given directories") {
-                Workspace.fromProperties(source(), directories).directory shouldBe directories.tasks
-            }
-
-            test("honours tasks.keep") {
-                Workspace.fromProperties(source("utrecorder.tasks.keep" to "true"), directories).keep shouldBe true
-            }
-
-            test("honours tasks.retention") {
-                Workspace.fromProperties(source("utrecorder.tasks.retention" to "30m"), directories).retention shouldBe 30.minutes
-            }
-
-            test("falls back to not keeping and 7 days") {
-                val workspace = Workspace.fromProperties(source(), directories)
-
-                workspace.keep shouldBe false
-                workspace.retention shouldBe 7.days
-            }
         }
     })
