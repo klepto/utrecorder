@@ -17,7 +17,7 @@ import java.nio.file.Path
  */
 class Ffmpeg(
     private val properties: PropertySource = PropertySource.DEFAULT,
-) {
+) : FfmpegLike {
     /**
      * The path of the bundled ffmpeg executable, resolved once at first use alongside the probe's.
      */
@@ -27,6 +27,11 @@ class Ffmpeg(
      * The path of the bundled ffprobe executable, resolved once at first use alongside the main one's.
      */
     private val probePath: Path by lazy { resolve(ffprobe::class.java) }
+
+    /**
+     * Runs ffmpeg with [arguments] and returns whether it exited with code `0`.
+     */
+    override fun capture(vararg arguments: String): Boolean = run(*arguments)
 
     /**
      * Runs ffmpeg with [arguments] and returns whether it exited with code `0`.
@@ -53,7 +58,7 @@ class Ffmpeg(
     /**
      * Returns how many video frames [file] holds, `0` when ffprobe reports none.
      */
-    fun frames(file: Path): Int =
+    override fun frames(file: Path): Int =
         readProbe(
             listOf(
                 "-select_streams",

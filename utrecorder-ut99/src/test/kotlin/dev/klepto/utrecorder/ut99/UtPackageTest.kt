@@ -174,7 +174,10 @@ class UtPackageTest :
             val path = writePackage(root / "set-guid-heritage" / "Engine.u")
             val heritageHeader = ByteArray(64)
             listOf(0xC1, 0x83, 0x2A, 0x9E, 0x43, 0x00, 0x00, 0x00).forEachIndexed { index, value -> heritageHeader[index] = value.toByte() }
-            listOf(0x02, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00).forEachIndexed { index, value -> heritageHeader[36 + index] = value.toByte() }
+            listOf(0x02, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00).forEachIndexed { index, value ->
+                heritageHeader[36 + index] =
+                    value.toByte()
+            }
             guidHeaderBytes.forEachIndexed { index, value -> heritageHeader[48 + index] = value.toByte() }
             path.writeBytes(heritageHeader)
 

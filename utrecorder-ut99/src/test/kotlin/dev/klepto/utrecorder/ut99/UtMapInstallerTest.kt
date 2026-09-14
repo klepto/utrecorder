@@ -18,10 +18,11 @@ import kotlin.io.path.writeText
 
 class UtMapInstallerTest :
     FunSpec({
-        val root = createTempDirectory("utrecorder-utmapinstaller-test").also { root ->
-            root.toFile().deleteRecursively()
-            root.toFile().mkdirs()
-        }
+        val root =
+            createTempDirectory("utrecorder-utmapinstaller-test").also { root ->
+                root.toFile().deleteRecursively()
+                root.toFile().mkdirs()
+            }
         val platform = UtPlatform.current()
 
         val fakeCompilerScript =
@@ -90,7 +91,11 @@ class UtMapInstallerTest :
             systemDirectory.createDirectories()
             (systemDirectory / platform.gameExecutable).writeText("")
             fakeCompiler.copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
-            return UtInstallation(root / name / "install", dev.klepto.utrecorder.common.config.Directories(root / name))
+            return UtInstallation(
+                root / name / "install",
+                dev.klepto.utrecorder.common.config
+                    .Directories(root / name),
+            )
         }
 
         fun installer(installation: UtInstallation): UtMapInstaller = UtMapInstaller(installation)
