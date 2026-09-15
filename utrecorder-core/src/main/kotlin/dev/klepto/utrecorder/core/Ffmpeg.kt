@@ -44,7 +44,7 @@ class Ffmpeg(
     /**
      * Returns how many seconds long [file] is, `0.0` when ffprobe reports nothing.
      */
-    fun duration(file: Path): Double =
+    override fun duration(file: Path): Double =
         readProbe(
             listOf(
                 "-show_entries",

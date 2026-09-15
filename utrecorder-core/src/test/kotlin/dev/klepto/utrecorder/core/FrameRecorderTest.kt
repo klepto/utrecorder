@@ -22,6 +22,10 @@ class FfmpegLikeStandIn(
     }
 
     override fun frames(file: Path): Int = frameCount
+
+    override fun duration(file: Path): Double = durationValue
+
+    val durationValue: Double = 8.0
 }
 
 class FrameRecorderTest :
@@ -55,7 +59,6 @@ class FrameRecorderTest :
 
         test("captureArguments reads the stream from the loopback with the listen timeout and the frame-sized receive buffer") {
             val read = arguments()
-
             read.size shouldBe 29
             read[11] shouldBe "-i"
             read[12] shouldBe
@@ -65,7 +68,6 @@ class FrameRecorderTest :
 
         test("captureArguments reads the frame size, framerate and queue bound off the config in their argument positions") {
             val read = arguments()
-
             read[0] shouldBe "-y"
             read[1] shouldBe "-f"
             read[2] shouldBe "rawvideo"
@@ -82,7 +84,6 @@ class FrameRecorderTest :
 
         test("captureArguments encodes into the configured final codec with preset, bitrate and GOP") {
             val read = arguments()
-
             read[13] shouldBe "-vf"
             read[14] shouldBe "vflip"
             read[15] shouldBe "-map"
@@ -99,7 +100,6 @@ class FrameRecorderTest :
 
         test("captureArguments reads the output pixel format and the output file off the config") {
             val read = arguments()
-
             read[25] shouldBe "-pix_fmt"
             read[26] shouldBe "yuv420p"
             read[27] shouldBe "-an"
@@ -108,7 +108,6 @@ class FrameRecorderTest :
 
         test("a blank preset and bitrate leave both flags out and extra record arguments land verbatim") {
             val read = arguments(mapOf("preset" to "", "bitrate" to "", "recordArguments" to "-tune vq"))
-
             read shouldBe read.without("-preset", "4", "-b:v", "3200k")
             read[21] shouldBe "-tune"
             read[22] shouldBe "vq"

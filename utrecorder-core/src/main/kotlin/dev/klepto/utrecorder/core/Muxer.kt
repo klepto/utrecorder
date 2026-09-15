@@ -11,13 +11,13 @@ import java.nio.file.Path
 class Muxer(
     private val config: RecorderConfig,
     private val ffmpeg: Ffmpeg = Ffmpeg(),
-) {
+) : MuxerLike {
     /**
      * Merges [video] with [track] into [target] and returns [target], the video stream copied and the audio placed.
      *
      * @throws IllegalStateException when ffmpeg fails.
      */
-    fun merge(
+    override fun merge(
         video: Path,
         track: SoundTrack,
         target: Path,
@@ -39,17 +39,28 @@ class Muxer(
     ): List<String> =
         listOf(
             "-y",
-            "-i", video.toString(),
-            "-ss", seconds(track.offset),
-            "-t", seconds(track.length),
-            "-i", track.file.toString(),
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-c:v", "copy",
-            "-af", config.audioFilter,
-            "-c:a", "aac",
-            "-b:a", config.audioBitrate,
-            "-ac", "2",
+            "-i",
+            video.toString(),
+            "-ss",
+            seconds(track.offset),
+            "-t",
+            seconds(track.length),
+            "-i",
+            track.file.toString(),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:v",
+            "copy",
+            "-af",
+            config.audioFilter,
+            "-c:a",
+            "aac",
+            "-b:a",
+            config.audioBitrate,
+            "-ac",
+            "2",
             "-shortest",
             target.toString(),
         )

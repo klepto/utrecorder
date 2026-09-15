@@ -1,12 +1,20 @@
 package dev.klepto.utrecorder.core
 
+import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.time.TimestampId
+import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtInstallation
+import dev.klepto.utrecorder.ut99.UtInstaller
+import dev.klepto.utrecorder.ut99.UtMapInstaller
+import dev.klepto.utrecorder.ut99.UtPackageException
+import dev.klepto.utrecorder.ut99.UtPackageInstaller
 import dev.klepto.utrecorder.ut99.demo.UtDemo
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
+import kotlin.io.path.name
 import kotlin.time.Duration
 
 /**
@@ -16,9 +24,11 @@ import kotlin.time.Duration
  * Use [playDemo] for a single-pass playback whose marks a caller reads, and [record] for the full recording.
  *
  * @property config The configuration demos are played and recorded with.
+ * @property directories The directories the demo cache, the workspaces and the output live under.
  */
 class UtRecorder(
     private val config: RecorderConfig = RecorderConfig.DEFAULT,
+    private val directories: Directories = Directories.DEFAULT,
 ) {
     /**
      * Plays the demo file at [demo] at normal speed with sound off and returns the demo-time range the game played, as
@@ -75,24 +85,63 @@ class UtRecorder(
      * @throws IllegalStateException when the demo cannot be fetched or resolved, or when a pass fails the recording,
      * which a failed sound pass always does.
      */
-    fun record(url: String): Path = TODO()
+    fun record(url: String): Path {
+        val demo = DemoFetcher(directories).fetch(url)
+        return record(demo)
+    }
 
     /**
-     * Records the demo file at [demo] and returns the mp4 produced, provisioning the installation when it is missing.
+     * Records the demo file at [demo] and returns the mp4 produced, provisioning the installation and decompressing
+     * its maps when either is missing, fetching the packages the demo names into it, and naming the mp4 [name] instead
+     * of the demo's own.
      *
-     * The primitive [record] calls with the demo it fetched; the two passes and the mux run inside a recording
-     * workspace, and the finished mp4 is moved out to the output directory before the workspace closes.
+     * The primitive the URL [record] calls with the demo it fetched and the mp4 name the URL sanitises; the demo is
+     * read once and every package it names is fetched into the installation at the GUID the demo recorded, so playback
+     * resolves every package the demo loads, and the two passes and the mux run inside a recording workspace, the
+     * finished mp4 moved out to the output directory before the workspace closes.
      *
      * @throws IllegalStateException when the demo cannot be resolved, or when a pass fails the recording, which a
      * failed sound pass always does.
+     * @throws UtPackageException when no source serves one of the packages the demo names at the GUID it recorded.
      */
-    fun record(demo: Path): Path = TODO()
+    fun record(
+        demo: Path,
+        name: String = demo.name.substringBeforeLast(DEMO_EXTENSION),
+    ): Path {
+        val utConfig = UtConfig(directories = directories, gameDirectory = config.installationDirectory)
+        UtInstaller(utConfig).install()
+        val installation = UtInstallation(config.installationDirectory, directories)
+        UtMapInstaller(installation).install()
+        UtPackageInstaller(UtDemo.read(demo).packages, installation, utConfig).install()
+        return workspace(RECORD_WORKSPACE, directories = directories) {
+            RecordingSession(config, installation, directories).record(demo, name, this)
+        }
+    }
 
     companion object {
+        /**
+         * The prefix a played demo is staged under.
+         */
         private const val STAGED_DEMO_PREFIX = "ut-"
+
+        /**
+         * The extension a demo file carries.
+         */
         private const val DEMO_EXTENSION = ".dem"
+
+        /**
+         * The name the recorder ini of a playback run carries.
+         */
         private const val RECORDER_INI_NAME = "UTRecorder.ini"
 
+        /**
+         * The name the recording workspace carries.
+         */
+        private const val RECORD_WORKSPACE = "record"
+
+        /**
+         * The source of the ids the stage names carry.
+         */
         private val ids = TimestampId()
     }
 }

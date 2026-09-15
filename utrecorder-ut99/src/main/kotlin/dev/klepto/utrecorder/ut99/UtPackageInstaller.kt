@@ -47,10 +47,11 @@ class UtPackageInstaller(
 
     /**
      * Fetches every package the installation does not already hold at the GUID the demo names, looking in the
-     * packages directory first and at the redirects after. A package fetched before a later one fails is kept, on
-     * disk and in [installed].
+     * packages directory first and at the redirects after. A source serving the package at another GUID is passed
+     * over, and a package fetched at another GUID is discarded. A package fetched before a later one fails is kept,
+     * on disk and in [installed].
      *
-     * @throws UtPackageException when no source holds one of them.
+     * @throws UtPackageException when no source holds one of them at the GUID the demo names.
      */
     override fun install() {
         for (required in packages) {
@@ -89,13 +90,14 @@ class UtPackageInstaller(
 
     /**
      * Returns the package [required] fetched from the first redirect serving it into the packages directory, or
-     * `null` when no redirect does.
+     * `null` when no redirect serves one at the GUID the demo recorded.
      */
     private fun fetchedPackage(required: UtPackage): UtPackage? = config.redirectUrls.firstNotNullOfOrNull { fetch(it, required) }
 
     /**
      * Returns the package [required] fetched from the redirect [base] into the packages directory under the first
-     * package extension the redirect serves, or `null` when it serves none.
+     * package extension the redirect serves, or `null` when it serves none, or serves one at another GUID than the
+     * demo recorded and the fetched file is discarded.
      */
     private fun fetch(
         base: String,
@@ -116,7 +118,13 @@ class UtPackageInstaller(
             archive.deleteIfExists()
             extracted.move(target)
         }
-        return UtPackage.read(target)
+
+        val fetched = UtPackage.read(target)
+        if (fetched.satisfies(required)) return fetched
+
+        log.warn { "Discarding ${target.fileName}, its GUID ${fetched.guid} does not match the recorded ${required.guid}" }
+        target.deleteIfExists()
+        return null
     }
 
     /**

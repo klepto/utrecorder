@@ -34,7 +34,7 @@ class SoundPass(
     private val installation: UtInstallation,
     private val openAlEnvironment: Map<String, String> = emptyMap(),
     private val directories: Directories = Directories.DEFAULT,
-) {
+) : SoundPassLike {
     /**
      * Plays [demo] with sound on and returns the [SoundTrack] the pass produced, placed by its own marks.
      *
@@ -46,7 +46,7 @@ class SoundPass(
      * @throws IllegalStateException when the pass was launched with no audio, or the pass produces no wav, no marks, or
      * marks that fall outside its wav.
      */
-    fun record(
+    override fun record(
         demo: Path,
         workspace: Workspace,
     ): SoundTrack {

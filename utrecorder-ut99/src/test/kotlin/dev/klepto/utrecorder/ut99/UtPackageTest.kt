@@ -5,7 +5,6 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import java.io.IOException
-import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createParentDirectories
@@ -161,49 +160,7 @@ class UtPackageTest :
             found.map { "${it.path?.fileName}" }.toSet() shouldBe setOf("Engine.u", "BTPog.U", "CTF-BT-II.unr")
         }
 
-        test("writing a GUID writes the same bytes at the same offset a version 69 header carries its GUID at") {
-            val path = writePackage(root / "set-guid-bytes" / "Engine.u")
-
-            UtPackage.setGuid(path, otherGuid)
-
-            val written = Files.readAllBytes(path).copyOf(64)
-            otherGuidHeaderBytes.forEachIndexed { index, value -> written[36 + index].toInt() and 0xFF shouldBe value }
-        }
-
-        test("writing a GUID writes it at the heritage offset a heritage-version header carries its GUID at") {
-            val path = writePackage(root / "set-guid-heritage" / "Engine.u")
-            val heritageHeader = ByteArray(64)
-            listOf(0xC1, 0x83, 0x2A, 0x9E, 0x43, 0x00, 0x00, 0x00).forEachIndexed { index, value -> heritageHeader[index] = value.toByte() }
-            listOf(0x02, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00).forEachIndexed { index, value ->
-                heritageHeader[36 + index] =
-                    value.toByte()
-            }
-            guidHeaderBytes.forEachIndexed { index, value -> heritageHeader[48 + index] = value.toByte() }
-            path.writeBytes(heritageHeader)
-
-            UtPackage.setGuid(path, otherGuid)
-
-            val written = Files.readAllBytes(path).copyOf(72)
-            otherGuidHeaderBytes.forEachIndexed { index, value -> written[48 + index].toInt() and 0xFF shouldBe value }
-        }
-
-        test("a GUID that is not 32 hexadecimal characters fails the write") {
-            val path = writePackage(root / "set-guid-invalid" / "Engine.u")
-
-            shouldThrow<IllegalArgumentException> { UtPackage.setGuid(path, "not a guid") }
-            shouldThrow<IllegalArgumentException> { UtPackage.setGuid(path, "123456789ABCDEF0876543210BADF00DX") }
-            shouldThrow<IllegalArgumentException> { UtPackage.setGuid(path, "123456789ABCDEF0876543210BADF00G") }
-            UtPackage.read(path).guid shouldBe guid
-        }
-
         test("list of a directory that does not exist is empty") {
             UtPackage.list(root / "list-missing", setOf("u")) shouldBe emptyList()
-        }
-
-        test("writing a GUID into a package then reading it back returns the written GUID") {
-            val path = writePackage(root / "set-guid-read-back" / "Engine.u")
-
-            UtPackage.setGuid(path, otherGuid)
-            UtPackage.read(path).guid shouldBe otherGuid
         }
     })

@@ -2,9 +2,9 @@ package dev.klepto.utrecorder.core
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import dev.klepto.utrecorder.common.config.Directories
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import dev.klepto.utrecorder.common.config.Directories
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.Path
@@ -31,7 +31,10 @@ class DemoFetcherTest :
             exchange.close()
         }
         server.start()
-        afterSpec { server.stop(0); home.toFile().deleteRecursively() }
+        afterSpec {
+            server.stop(0)
+            home.toFile().deleteRecursively()
+        }
 
         val fetcher = DemoFetcher(directories)
         val url = "http://${server.address.address.hostAddress}:${server.address.port}/dir/demo-file.dem"

@@ -12,6 +12,11 @@ interface FfmpegLike {
     fun capture(vararg arguments: String): Boolean
 
     /**
+     * Returns how many seconds long [file] is.
+     */
+    fun duration(file: Path): Double
+
+    /**
      * Returns how many frames [file] holds.
      */
     fun frames(file: Path): Int

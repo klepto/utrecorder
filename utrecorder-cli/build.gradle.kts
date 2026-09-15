@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    implementation(projects.utrecorderCommon)
     implementation(projects.utrecorderCore)
 }
 

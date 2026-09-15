@@ -337,6 +337,41 @@ class UtPackageInstallerTest :
                     "123456789ABCDEF0876543210BADF00D"
             }
 
+            test("discards a package a redirect serves at another GUID and takes the next redirect serving the demo's") {
+                val installation = installation("mismatched-redirect")
+                served["/first/BTPog.u.uz"] = packageBytes(otherGuid)
+                served["/second/BTPog.u.uz"] = packageBytes(guid)
+                val installer = installer(installation, UtPackage.named("BTPog", guid))
+
+                installer.install()
+
+                requests shouldBe
+                    listOf(
+                        "HEAD /first/BTPog.u.uz",
+                        "GET /first/BTPog.u.uz",
+                        "HEAD /second/BTPog.u.uz",
+                        "GET /second/BTPog.u.uz",
+                    )
+                val target = installationPath(installation, UtDirectory.System, "BTPog.u")
+                UtPackage.read(target).guid shouldBe "123456789ABCDEF0876543210BADF00D"
+                UtPackage.read(packagesDirectory("mismatched-redirect") / "BTPog.u").guid shouldBe
+                    "123456789ABCDEF0876543210BADF00D"
+            }
+
+            test("fails naming the package when no redirect serves it at the demo's GUID") {
+                val installation = installation("mismatched-everywhere")
+                served["/first/BTPog.u.uz"] = packageBytes(otherGuid)
+                served["/second/BTPog.u.uz"] = packageBytes(otherGuid)
+                val installer = installer(installation, UtPackage.named("BTPog", guid))
+
+                val exception = shouldThrow<UtPackageException> { installer.install() }
+
+                exception.packageName shouldBe "BTPog"
+                installer.installed shouldBe emptyList()
+                installationPath(installation, UtDirectory.System, "BTPog.u").exists() shouldBe false
+                packagesDirectory("mismatched-everywhere").listDirectoryEntries() shouldBe emptyList()
+            }
+
             test("does not check the GUID of a package it fetched for a demo entry that carries none") {
                 val installation = installation("empty-guid-fetched")
                 served["/first/BTPog.u.uz"] = packageBytes(otherGuid)

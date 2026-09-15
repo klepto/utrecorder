@@ -1,7 +1,12 @@
 package dev.klepto.utrecorder.core
 
+import dev.klepto.utrecorder.common.log.logger
+import java.net.ServerSocket
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.absolutePathString
+import kotlin.io.path.exists
 
 /**
  * The listening side of the frame capture: an ffmpeg process encoding the frames the shim streams over loopback TCP
@@ -16,22 +21,52 @@ class FrameRecorder(
     private val target: Path,
     private val ffmpeg: FfmpegLike = Ffmpeg(),
 ) {
-    private var created: Process? = null
+    private var port: Int = config.framePort.takeIf { it > 0 } ?: freePort()
 
-    private var bound = 0
+    private val completed = CountDownLatch(1)
+
+    @Volatile
+    private var finalised: Boolean = false
 
     /**
      * Starts ffmpeg listening on the loopback and returns the port the shim connects to, taken from
      * [RecorderConfig.framePort] or a free one.
+     *
+     * The capture runs on a daemon thread of its own, blocking until the shim's frames end the stream, so [stop]
+     * decides when the recording is over.
      */
-    fun start(): Int = TODO()
+    fun start(): Int {
+        val worker =
+            Thread {
+                finalised = ffmpeg.capture(*captureArguments(port).toTypedArray())
+                completed.countDown()
+            }.apply {
+                isDaemon = true
+                name = CAPTURE_THREAD
+            }
+        worker.start()
+        log.info { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
+        return port
+    }
 
     /**
      * Waits for ffmpeg to finalise the capture and returns [target], whose duration is the video's whole length.
      *
      * @throws IllegalStateException when ffmpeg never finished, produced no capture or a capture holding no frames.
      */
-    fun stop(): Path = TODO()
+    fun stop(): Path =
+        try {
+            check(completed.await(config.frameTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)) {
+                "ffmpeg never finished the frame capture"
+            }
+            check(finalised) { "ffmpeg failed the frame capture" }
+            check(target.exists()) { "ffmpeg produced no frame capture" }
+            check(ffmpeg.frames(target) > 0) { "Frame capture holds no frames" }
+            target
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IllegalStateException("ffmpeg never finished the frame capture", interrupted)
+        }
 
     /**
      * The arguments the capture runs ffmpeg with, reading the raw frames the shim streams to [port].
@@ -68,12 +103,34 @@ class FrameRecorder(
             add(target.absolutePathString())
         }
 
+    /**
+     * The free loopback port a capture that names none listens on.
+     */
+    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
+
     private fun streamUrl(port: Int): String =
-        "tcp://127.0.0.1:$port?listen=1&listen_timeout=${config.startupTimeout.inWholeMilliseconds}" +
+        "tcp://$STREAM_HOST:$port?listen=1&listen_timeout=${config.startupTimeout.inWholeMilliseconds}" +
             "&recv_buffer_size=${config.width * config.height * 4}"
 
     private fun option(
         name: String,
         value: String,
     ): List<String> = if (value.isBlank()) emptyList() else listOf(name, value)
+
+    companion object {
+        /**
+         * The host the capture binds on, never leaving the loopback.
+         */
+        private const val STREAM_HOST = "127.0.0.1"
+
+        /**
+         * The name the capture thread carries.
+         */
+        private const val CAPTURE_THREAD = "frame-capture"
+
+        /**
+         * The logger.
+         */
+        private val log = logger<FrameRecorder>()
+    }
 }

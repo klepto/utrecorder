@@ -30,7 +30,7 @@ class FramePass(
     private val installation: UtInstallation,
     private val hooksPaths: List<Path>,
     private val directories: Directories = Directories.DEFAULT,
-) {
+) : FramePassLike {
     /**
      * Plays [demo] through the shim into [recorder], whose capture the shim cut at the source, and returns the marks
      * the pass logged, read for the audio placement.
@@ -41,7 +41,7 @@ class FramePass(
      *
      * @throws IllegalStateException when the pass logs no marks, naming the missing mark and carrying the exit code.
      */
-    fun record(
+    override fun record(
         demo: Path,
         recorder: FrameRecorder,
         workspace: Workspace,
