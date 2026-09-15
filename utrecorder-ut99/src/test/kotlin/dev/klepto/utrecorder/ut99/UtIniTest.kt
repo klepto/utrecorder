@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.io.path.createTempDirectory
@@ -159,6 +160,36 @@ class UtIniTest :
             }
         }
 
+        context("replace") {
+            test("replaces one entry of a repeated key, leaving the others where they are") {
+                val ini =
+                    UtIni(
+                        """
+                        [Section]
+                        Key=1
+                        Key=2
+                        Key=3
+                        """.trimIndent(),
+                    )
+
+                ini.replace("Section", "Key", from = "2", to = "9")
+
+                ini["Section", "Key"] shouldBe listOf("1", "9", "3")
+            }
+
+            test("throws when the section holds no entry of the key at from") {
+                val ini = UtIni("[Section]\nKey=1\nKey=2")
+
+                shouldThrow<IllegalArgumentException> { ini.replace("Section", "Key", from = "3", to = "9") }
+            }
+
+            test("throws when the section is missing altogether") {
+                val ini = UtIni("[Other]\nKey=1")
+
+                shouldThrow<IllegalArgumentException> { ini.replace("Missing", "Key", from = "1", to = "2") }
+            }
+        }
+
         context("remove") {
             test("deletes every matching entry") {
                 val ini =
@@ -175,6 +206,29 @@ class UtIniTest :
 
                 ini["Section", "Suppress"] shouldBe emptyList()
                 ini["Section", "Keep"] shouldBe listOf("1")
+            }
+
+            test("removes the one entry of a repeated key holding the given value") {
+                val ini =
+                    UtIni(
+                        """
+                        [Section]
+                        Suppress=DevNet
+                        Keep=1
+                        Suppress=DevNetTraffic
+                        """.trimIndent(),
+                    )
+
+                ini.remove("Section", "Suppress", value = "DevNet")
+
+                ini["Section", "Suppress"] shouldBe listOf("DevNetTraffic")
+                ini["Section", "Keep"] shouldBe listOf("1")
+            }
+
+            test("throws when the section holds no entry of the key at the given value") {
+                val ini = UtIni("[Section]\nKey=1")
+
+                shouldThrow<IllegalArgumentException> { ini.remove("Section", "Key", value = "2") }
             }
         }
 

@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.ut99.UtIni
+import dev.klepto.utrecorder.ut99.UtPlatform
 import kotlin.time.Duration
 
 /**
@@ -24,6 +25,16 @@ data class PlaybackDescription(
     val startupTimeout: Duration,
     val maxRunTime: Duration,
 ) {
+    /**
+     * The client class the run draws into on [platform]'s build of the game, the value the run names the engine's
+     * viewport manager with.
+     */
+    fun client(platform: UtPlatform): String =
+        when (platform) {
+            UtPlatform.WINDOWS -> RecordingDescription.WINDOWS_CLIENT
+            UtPlatform.LINUX -> RecordingDescription.SDL_CLIENT
+        }
+
     /**
      * Returns the `UTRecorder.ini` configuring this run, with every duration in whole seconds.
      */

@@ -64,10 +64,13 @@ class SoundPass(
                     windowed = true
                     environment += openAlEnvironment
                     gameIni {
+                        PreferredSettings.applyGameIni(ini = this, client = description.client(installation.platform))
+
                         gameIni(demoDuration).forEach { (section, values) ->
                             values.forEach { (key, value) -> this[section, key] = value }
                         }
                     }
+                    userIni { PreferredSettings.applyUserIni(this) }
                 }
             val result = instance.start().await(config.timeout(demoDuration))
             val wav = installation.systemDirectory[WAVE_NAME]

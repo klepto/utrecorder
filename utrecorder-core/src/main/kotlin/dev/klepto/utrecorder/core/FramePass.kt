@@ -110,12 +110,15 @@ class FramePass(
                 windowed = true
                 environment += this@FramePass.environment(port)
                 gameIni {
+                    PreferredSettings.applyGameIni(ini = this, client = description.client(installation.platform))
+
                     val values = RecordingDescription.framePass(config).clientValues()
                     values.forEach { (key, value) ->
                         this[RecordingDescription.WINDOWS_CLIENT, key] = value
                         this[RecordingDescription.SDL_CLIENT, key] = value
                     }
                 }
+                userIni { PreferredSettings.applyUserIni(this) }
             }
 
         return instance

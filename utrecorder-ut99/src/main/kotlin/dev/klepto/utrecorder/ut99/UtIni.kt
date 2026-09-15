@@ -89,6 +89,41 @@ class UtIni(
     ) = entryIndices(section, key).reversed().forEach { lines.removeAt(it) }
 
     /**
+     * Replaces the single [key] entry holding [from] with one holding [to], leaving any other entry of the key where
+     * it is.
+     *
+     * @throws IllegalArgumentException when the section holds no entry of the key at [from].
+     */
+    fun replace(
+        section: String,
+        key: String,
+        from: String,
+        to: String,
+    ) {
+        val index =
+            entryIndices(section, key).firstOrNull { lines[it].trim().substringAfter('=').trim() == from }
+                ?: throw IllegalArgumentException("No $key=$from entry in the [$section] section")
+        lines[index] = "$key=$to"
+    }
+
+    /**
+     * Removes the single [key] entry holding [value] from the given [section], leaving any other entry of the key
+     * where it is.
+     *
+     * @throws IllegalArgumentException when the section holds no entry of the key at [value].
+     */
+    fun remove(
+        section: String,
+        key: String,
+        value: String,
+    ) {
+        val index =
+            entryIndices(section, key).firstOrNull { lines[it].trim().substringAfter('=').trim() == value }
+                ?: throw IllegalArgumentException("No $key=$value entry in the [$section] section")
+        lines.removeAt(index)
+    }
+
+    /**
      * Writes the configuration to the given [path] and returns it.
      */
     fun write(path: Path): Path = path.createParentDirectories().also { it.writeText(toString(), UtPlatform.CHARSET) }

@@ -39,12 +39,12 @@ data class RecordingDescription(
 
     companion object {
         /**
-         * The client section the Windows build configures.
+         * The client section the Windows build draws an instance through, named `ViewportManager` by a run on Windows.
          */
         const val WINDOWS_CLIENT = "WinDrv.WindowsClient"
 
         /**
-         * The client section the Linux build configures.
+         * The client section the Linux build draws an instance through, named `ViewportManager` by a run on Linux.
          */
         const val SDL_CLIENT = "SDLDrv.SDLClient"
 
