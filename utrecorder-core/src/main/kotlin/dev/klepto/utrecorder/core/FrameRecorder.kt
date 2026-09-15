@@ -93,7 +93,9 @@ class FrameRecorder(
             add("-c:v")
             add(config.codec)
             addAll(option("-preset", config.preset))
-            addAll(option("-b:v", config.bitrate))
+            addAll(option("-crf", config.crf))
+            addAll(option(bitrateFlag(), config.bitrate))
+            addAll(option("-svtav1-params", config.svtav1Params))
             add("-g")
             add(config.gop.toString())
             addAll(config.recordArguments.split(" ").filter { it.isNotBlank() })
@@ -116,6 +118,15 @@ class FrameRecorder(
         name: String,
         value: String,
     ): List<String> = if (value.isBlank()) emptyList() else listOf(name, value)
+
+    /**
+     * The flag the bitrate is handed under: the ceiling of a constant rate factor encode, the average of one without.
+     */
+    private fun bitrateFlag(): String =
+        when {
+            config.crf.isBlank() -> "-b:v"
+            else -> "-maxrate"
+        }
 
     companion object {
         /**

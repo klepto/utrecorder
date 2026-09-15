@@ -35,9 +35,10 @@ class FramePass(
      * Plays [demo] through the shim into [recorder], whose capture the shim cut at the source, and returns the marks
      * the pass logged, read for the audio placement.
      *
-     * Starts the capture listening, stages the demo into the installation's `System` directory and plays it windowed
-     * and soundless under the shim's environment, killed once [RecorderConfig.frameTimeout] has passed. The staged
-     * copy is removed whichever way the run ends.
+     * Starts the capture listening, stages the demo into the installation's `System` directory beside the console
+     * settings the run reads, and plays it windowed and soundless under the shim's environment, killed once
+     * [RecorderConfig.frameTimeout] has passed. The staged copy and the console settings are removed whichever way the
+     * run ends.
      *
      * @throws IllegalStateException when the pass logs no marks, naming the missing mark and carrying the exit code.
      */
@@ -48,9 +49,11 @@ class FramePass(
     ): DemoMarks {
         val demoDuration = UtDemo.read(demo).duration
         val description = PlaybackDescription.of(STAGED_DEMO_PREFIX + IDS.next(), demoDuration, config)
+        val recorderPackage = RecorderPackage(installation)
         val stagedDemo = installation.systemDirectory[description.stagedDemoName + DEMO_EXTENSION]
         try {
             demo.copy(stagedDemo) { "Demo file not found at $demo" }
+            recorderPackage.configure(description.recorderIni())
             val result = launch(workspace, description, recorder.start()).start().await(config.frameTimeout)
             return try {
                 DemoMarks.parse(result.log)
@@ -59,6 +62,7 @@ class FramePass(
             }
         } finally {
             stagedDemo.deleteIfExists()
+            recorderPackage.clear()
         }
     }
 
@@ -110,7 +114,11 @@ class FramePass(
                 windowed = true
                 environment += this@FramePass.environment(port)
                 gameIni {
-                    PreferredSettings.applyGameIni(ini = this, client = description.client(installation.platform))
+                    PreferredSettings.applyGameIni(
+                        ini = this,
+                        client = description.client(installation.platform),
+                        console = description.console,
+                    )
 
                     val values = RecordingDescription.framePass(config).clientValues()
                     values.forEach { (key, value) ->

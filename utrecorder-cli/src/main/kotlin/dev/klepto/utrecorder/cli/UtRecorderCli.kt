@@ -6,7 +6,6 @@ import dev.klepto.utrecorder.core.UtRecorder
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
-import kotlin.io.path.name
 import kotlin.system.exitProcess
 
 /**
@@ -56,6 +55,7 @@ object UtRecorderCli {
     /**
      * Runs the CLI against [arguments], printing usage and exiting when [arguments] hold no URL.
      */
+    @JvmStatic
     fun main(arguments: Array<String>) {
         if (arguments.isEmpty()) {
             System.err.println("Usage: utrecorder-cli <demo-url>")

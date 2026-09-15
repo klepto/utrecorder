@@ -3,7 +3,7 @@ package dev.klepto.utrecorder.core
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.YearMonth
-import java.time.ZoneOffset
+import java.time.ZoneId
 import java.time.temporal.ChronoField
 import java.time.temporal.ChronoUnit
 import kotlin.time.Duration
@@ -14,7 +14,8 @@ import kotlin.time.Duration.Companion.seconds
  * time.
  *
  * @property label The mark the game logged.
- * @property wallTime The wall-clock time the mark was logged, read as UTC.
+ * @property wallTime The wall-clock time the mark was logged, read off the host's own clock, which is the clock the
+ * game writes, and resolved to an instant in the zone of the process reading it.
  * @property frame The number of frames the game had rendered when the mark was logged.
  * @property demoTime The demo time the mark was logged at.
  */
@@ -94,7 +95,8 @@ data class DemoMarks(
             return LocalDateTime
                 .of(year, month, day, hour, minute, second)
                 .plus(millisecond.toLong(), ChronoUnit.MILLIS)
-                .toInstant(ZoneOffset.UTC)
+                .atZone(ZoneId.systemDefault())
+                .toInstant()
         }
 
         private fun MatchResult.field(name: String): String = groups[name]?.value.orEmpty()

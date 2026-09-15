@@ -15,20 +15,24 @@ import dev.klepto.utrecorder.ut99.UtIni
  * positions, entries the copy held beyond them are removed, and the ones left over are appended to the section.
  *
  * The two keys the pass itself owns are not in the data: `[Engine.Engine] ViewportManager` is written from the
- * client the run runs its platform's build through, and `Console` is the launcher's own console substitution.
+ * client the run runs its platform's build through, and `Console` from the recorder console the run plays its demo
+ * through.
  */
 object PreferredSettings {
     /**
      * Writes the preferred game settings into [ini], naming [client] the engine's viewport manager, the client class
-     * the run draws into, and setting the `[FirstRun]` patch number that keeps the safe-mode selection screen from
-     * showing up on launch.
+     * the run draws into, and [console] the engine's console, the recorder console class the run plays its demo
+     * through, in place of the installation's own; the `[FirstRun]` patch number the preferred settings carry keeps
+     * the safe-mode selection screen from showing up on launch.
      */
     fun applyGameIni(
         ini: UtIni,
         client: String,
+        console: String,
     ) {
         apply(ini, gameIni)
         ini["Engine.Engine", "ViewportManager"] = client
+        ini["Engine.Engine", "Console"] = console
     }
 
     /**

@@ -27,7 +27,10 @@ import kotlin.time.Duration.Companion.seconds
  * @property fps The rendered frames per demo second the frame pass is locked to.
  * @property codec The ffmpeg video encoder the capture encodes into while the demo renders.
  * @property preset The encoder preset handed to codecs that take one, blank when the encoder has none.
- * @property bitrate The video bitrate of the encode, in ffmpeg's notation.
+ * @property crf The constant rate factor the encode targets, blank for an encode at an average [bitrate].
+ * @property bitrate The video bitrate of the encode, in ffmpeg's notation: the ceiling of a [crf] encode, the average of
+ * one without.
+ * @property svtav1Params The `-svtav1-params` handed to the encoder, blank for none.
  * @property gop How many frames lie between the keyframes of the encode.
  * @property width The viewport width of the frame pass, also the width of the frames the shim sends.
  * @property height The viewport height of the frame pass, also the height of the frames the shim sends.
@@ -59,7 +62,9 @@ data class RecorderConfig(
     val fps: Int = DEFAULT_FPS,
     val codec: String = DEFAULT_CODEC,
     val preset: String = DEFAULT_PRESET,
+    val crf: String = DEFAULT_CRF,
     val bitrate: String = DEFAULT_BITRATE,
+    val svtav1Params: String = DEFAULT_SVTAV1_PARAMS,
     val gop: Int = DEFAULT_GOP,
     val width: Int = DEFAULT_WIDTH,
     val height: Int = DEFAULT_HEIGHT,
@@ -99,7 +104,9 @@ data class RecorderConfig(
         private const val DEFAULT_FPS = 60
         private const val DEFAULT_CODEC = "libsvtav1"
         private const val DEFAULT_PRESET = "4"
-        private const val DEFAULT_BITRATE = "3200k"
+        private const val DEFAULT_CRF = "28"
+        private const val DEFAULT_BITRATE = "4800k"
+        private const val DEFAULT_SVTAV1_PARAMS = "tune=0"
         private const val DEFAULT_GOP = 300
         private const val DEFAULT_WIDTH = 1280
         private const val DEFAULT_HEIGHT = 720
@@ -145,7 +152,9 @@ data class RecorderConfig(
                 fps = properties.get("record.fps", String::toInt) ?: DEFAULT_FPS,
                 codec = properties["record.codec"] ?: DEFAULT_CODEC,
                 preset = properties["record.preset"] ?: DEFAULT_PRESET,
+                crf = properties["record.crf"] ?: DEFAULT_CRF,
                 bitrate = properties["record.bitrate"] ?: DEFAULT_BITRATE,
+                svtav1Params = properties["record.svtav1_params"] ?: DEFAULT_SVTAV1_PARAMS,
                 gop = properties.get("record.gop", String::toInt) ?: DEFAULT_GOP,
                 width = properties.get("record.width", String::toInt) ?: DEFAULT_WIDTH,
                 height = properties.get("record.height", String::toInt) ?: DEFAULT_HEIGHT,

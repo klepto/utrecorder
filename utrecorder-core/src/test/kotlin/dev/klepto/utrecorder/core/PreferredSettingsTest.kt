@@ -10,7 +10,7 @@ class PreferredSettingsTest :
             test("sets FirstRun to the patch number, keeping safe mode from showing on launch") {
                 val ini = UtIni("[FirstRun]\nFirstRun=436\n")
 
-                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient")
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
 
                 ini["FirstRun", "FirstRun"] shouldBe listOf("469")
             }
@@ -18,7 +18,7 @@ class PreferredSettingsTest :
             test("adds the FirstRun patch number when the copy holds no FirstRun section") {
                 val ini = UtIni("[Engine.Engine]\nConsole=Engine.Console\n")
 
-                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient")
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
 
                 ini["FirstRun", "FirstRun"] shouldBe listOf("469")
             }
@@ -26,9 +26,17 @@ class PreferredSettingsTest :
             test("names the given client the engine's viewport manager over the copy's own") {
                 val ini = UtIni("[Engine.Engine]\nViewportManager=SDLDrv.SDLClient\n")
 
-                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient")
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
 
                 ini["Engine.Engine", "ViewportManager"] shouldBe listOf("WinDrv.WindowsClient")
+            }
+
+            test("names the given console the engine's console over the installation's own") {
+                val ini = UtIni("[Engine.Engine]\nConsole=UTMenu.UTConsole\n")
+
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
+
+                ini["Engine.Engine", "Console"] shouldBe listOf("UTRecorder.UTRecorderConsole")
             }
 
             test("collapses the copy's repeated key entries into the preferred settings' full list") {
@@ -42,7 +50,7 @@ class PreferredSettingsTest :
                         """.trimIndent(),
                     )
 
-                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient")
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
 
                 ini["Core.System", "Paths"] shouldBe
                     listOf("../System/*.u", "../Textures/*.utx", "../Maps/*.unr", "../Sounds/*.uax", "../Music/*.umx")
@@ -60,7 +68,7 @@ class PreferredSettingsTest :
                     )
                 val ini = UtIni(before.toString())
 
-                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient")
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
 
                 ini["Kept", "Key"] shouldBe listOf("1")
                 ini["Engine.Engine", "GameRenderDevice"] shouldBe listOf("OpenGLDrv.OpenGLRenderDevice")
@@ -77,7 +85,7 @@ class PreferredSettingsTest :
                             "UnnamedNetKey=Kept\n",
                     )
 
-                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient")
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
 
                 ini["WinDrv.WindowsClient", "UnnamedKey"] shouldBe listOf("Kept")
                 ini["IpDrv.TcpNetDriver", "UnnamedNetKey"] shouldBe listOf("Kept")
@@ -96,7 +104,7 @@ class PreferredSettingsTest :
                             "Brightness=0.900000\n",
                     )
 
-                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient")
+                PreferredSettings.applyGameIni(ini, "WinDrv.WindowsClient", "UTRecorder.UTRecorderConsole")
                 ini["WinDrv.WindowsClient", "WindowedViewportX"] = "64"
                 ini["WinDrv.WindowsClient", "WindowedViewportY"] = "64"
 

@@ -42,7 +42,9 @@ class FrameRecorderTest :
                     fps = 60,
                     codec = "libsvtav1",
                     preset = options["preset"] ?: "4",
-                    bitrate = options["bitrate"] ?: "3200k",
+                    crf = options["crf"] ?: "28",
+                    bitrate = options["bitrate"] ?: "4800k",
+                    svtav1Params = options["svtav1Params"] ?: "tune=0",
                     gop = 300,
                     width = 960,
                     height = 540,
@@ -59,7 +61,7 @@ class FrameRecorderTest :
 
         test("captureArguments reads the stream from the loopback with the listen timeout and the frame-sized receive buffer") {
             val read = arguments()
-            read.size shouldBe 29
+            read.size shouldBe 33
             read[11] shouldBe "-i"
             read[12] shouldBe
                 "tcp://127.0.0.1:12000?listen=1&listen_timeout=5000" +
@@ -82,7 +84,7 @@ class FrameRecorderTest :
             read[11] shouldBe "-i"
         }
 
-        test("captureArguments encodes into the configured final codec with preset, bitrate and GOP") {
+        test("captureArguments encodes into the configured final codec with preset, capped rate factor, params and GOP") {
             val read = arguments()
             read[13] shouldBe "-vf"
             read[14] shouldBe "vflip"
@@ -92,23 +94,44 @@ class FrameRecorderTest :
             read[18] shouldBe "libsvtav1"
             read[19] shouldBe "-preset"
             read[20] shouldBe "4"
-            read[21] shouldBe "-b:v"
-            read[22] shouldBe "3200k"
-            read[23] shouldBe "-g"
-            read[24] shouldBe "300"
+            read[21] shouldBe "-crf"
+            read[22] shouldBe "28"
+            read[23] shouldBe "-maxrate"
+            read[24] shouldBe "4800k"
+            read[25] shouldBe "-svtav1-params"
+            read[26] shouldBe "tune=0"
+            read[27] shouldBe "-g"
+            read[28] shouldBe "300"
         }
 
         test("captureArguments reads the output pixel format and the output file off the config") {
             val read = arguments()
-            read[25] shouldBe "-pix_fmt"
-            read[26] shouldBe "yuv420p"
-            read[27] shouldBe "-an"
-            read[28] shouldBe target.absolutePathString()
+            read[29] shouldBe "-pix_fmt"
+            read[30] shouldBe "yuv420p"
+            read[31] shouldBe "-an"
+            read[32] shouldBe target.absolutePathString()
         }
 
-        test("a blank preset and bitrate leave both flags out and extra record arguments land verbatim") {
-            val read = arguments(mapOf("preset" to "", "bitrate" to "", "recordArguments" to "-tune vq"))
-            read shouldBe read.without("-preset", "4", "-b:v", "3200k")
+        test("a blank rate factor hands the bitrate over as the average instead of the ceiling") {
+            val read = arguments(mapOf("crf" to ""))
+            read shouldBe read.without("-crf", "28", "-maxrate")
+            read[21] shouldBe "-b:v"
+            read[22] shouldBe "4800k"
+        }
+
+        test("a blank preset, rate factor, bitrate and params leave their flags out and extra record arguments land verbatim") {
+            val read =
+                arguments(
+                    mapOf(
+                        "preset" to "",
+                        "crf" to "",
+                        "bitrate" to "",
+                        "svtav1Params" to "",
+                        "recordArguments" to "-tune vq",
+                    ),
+                )
+            read shouldBe read.without("-preset", "4", "-crf", "28", "-b:v", "-maxrate", "4800k", "-svtav1-params", "tune=0")
+            read[19] shouldBe "-g"
             read[21] shouldBe "-tune"
             read[22] shouldBe "vq"
         }

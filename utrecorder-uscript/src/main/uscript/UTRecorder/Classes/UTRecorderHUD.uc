@@ -4,9 +4,6 @@ var bool bHideWeapon;
 
 simulated function PostRender( canvas Canvas )
 {
-	if (bHideWeapon)
-		return;
-
 	HUDSetup(Canvas);
 
 	if (PawnOwner == None || PlayerOwner == None)
@@ -16,7 +13,11 @@ simulated function PostRender( canvas Canvas )
 		return;
 
 	Canvas.DrawColor = WhiteColor;
-	PawnOwner.Weapon.PostRender(Canvas);
+	if (!bHideWeapon)
+		PawnOwner.Weapon.PostRender(Canvas);
+
+	if (!PawnOwner.Weapon.bOwnsCrosshair)
+		DrawCrossHair(Canvas, 0, 0);
 }
 
 defaultproperties

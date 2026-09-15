@@ -207,6 +207,12 @@ static long long presentCount;
 static long long demoFrames;
 static int *demoFlag;
 static int demoResolved;
+static int clockCyclesVirtual;
+static unsigned char clockCyclesArmed;
+static double clockRealScale;
+static unsigned long long clockCycleCount;
+static unsigned long long clockCycleBase;
+static double clockCyclesPerStep;
 
 static long long clockSteps(void) {
     return clockRate * CLOCK_PREROLL_STEPS;
@@ -287,6 +293,126 @@ static int writeCode(void *target, const unsigned char *code, size_t size) {
     return 1;
 }
 
+/* The frame delta helper inlined into UGameEngine::Tick: rdtsc; mov esi,eax; mov edi,edx; mov ecx,esi. */
+static const unsigned char CYCLE_SITE_ENGINE[] = {0x9B, 0x0F, 0x31, 0x8B, 0xF0, 0x8B, 0xFA, 0x8B, 0xCE};
+
+/* The same helper inlined into the launcher's main loop: rdtsc; mov esi,eax; mov eax,edx; mov [ebp-1Ch],eax. */
+static const unsigned char CYCLE_SITE_LAUNCHER[] = {0x9B, 0x0F, 0x31, 0x8B, 0xF0, 0x8B, 0xC2, 0x89, 0x45, 0xE4, 0x8B, 0xCE};
+
+#define CYCLE_SITE_BYTES 6
+#define CYCLE_THUNK_BYTES 72
+
+static unsigned char *findInSection(unsigned char *start, size_t size, const unsigned char *pattern, size_t length,
+                                    unsigned char *found, int *duplicate) {
+    size_t at;
+    for (at = 0; at + length <= size; at++) {
+        if (memcmp(start + at, pattern, length) != 0) continue;
+        if (found) *duplicate = 1;
+        found = start + at;
+    }
+    return found;
+}
+
+static unsigned char *findUnique(HMODULE module, const unsigned char *pattern, size_t length) {
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *) module;
+    IMAGE_NT_HEADERS *headers;
+    IMAGE_SECTION_HEADER *section;
+    unsigned char *found = 0;
+    int duplicate = 0;
+    WORD index;
+    if (!module) return 0;
+    headers = (IMAGE_NT_HEADERS *) ((char *) module + dos->e_lfanew);
+    section = IMAGE_FIRST_SECTION(headers);
+    for (index = 0; index < headers->FileHeader.NumberOfSections; index++, section++) {
+        if (!(section->Characteristics & IMAGE_SCN_CNT_CODE)) continue;
+        found = findInSection((unsigned char *) module + section->VirtualAddress, section->Misc.VirtualSize, pattern,
+                              length, found, &duplicate);
+    }
+    return duplicate ? 0 : found;
+}
+
+static void putAddress(unsigned char *code, unsigned int address) {
+    memcpy(code, &address, 4);
+}
+
+/*
+ * The replacement for a site's rdtsc and its two register moves. While the clock is armed and the demo plays it loads
+ * the virtual count; otherwise it reads the real counter, never below the virtual count.
+ *
+ *  0: cmp byte ptr [armed], 0     7: je real
+ *  9: cmp dword ptr [demo], 0    16: je real
+ * 18: mov eax, [low]             23: mov edx, [high]         29: jmp tail
+ * 31: real: rdtsc                33: cmp edx, [high]         39: ja tail
+ * 41: jb clamp                   43: cmp eax, [low]          49: jae tail
+ * 51: clamp: mov eax, [low]      56: mov edx, [high]
+ * 62: tail: the site's moves     66: ret
+ */
+static unsigned char *buildCycleThunk(unsigned char *moves) {
+    unsigned char *thunk = (unsigned char *) VirtualAlloc(0, CYCLE_THUNK_BYTES, MEM_COMMIT | MEM_RESERVE,
+                                                          PAGE_EXECUTE_READWRITE);
+    unsigned int low = (unsigned int) (uintptr_t) &clockCycleCount;
+    unsigned int high = low + 4;
+    static const unsigned char layout[] = {
+        0x80, 0x3D, 0, 0, 0, 0, 0x00, 0x74, 0x16,
+        0x83, 0x3D, 0, 0, 0, 0, 0x00, 0x74, 0x0D,
+        0xA1, 0, 0, 0, 0, 0x8B, 0x15, 0, 0, 0, 0, 0xEB, 0x1F,
+        0x0F, 0x31, 0x3B, 0x15, 0, 0, 0, 0, 0x77, 0x15,
+        0x72, 0x08, 0x3B, 0x05, 0, 0, 0, 0, 0x73, 0x0B,
+        0xA1, 0, 0, 0, 0, 0x8B, 0x15, 0, 0, 0, 0,
+        0, 0, 0, 0, 0xC3,
+    };
+    if (!thunk) return 0;
+    memcpy(thunk, layout, sizeof(layout));
+    putAddress(thunk + 2, (unsigned int) (uintptr_t) &clockCyclesArmed);
+    putAddress(thunk + 11, (unsigned int) (uintptr_t) demoFlag);
+    putAddress(thunk + 19, low);
+    putAddress(thunk + 25, high);
+    putAddress(thunk + 35, high);
+    putAddress(thunk + 45, low);
+    putAddress(thunk + 52, low);
+    putAddress(thunk + 58, high);
+    memcpy(thunk + 62, moves, 4);
+    return thunk;
+}
+
+static int patchCycleSite(unsigned char *site) {
+    unsigned char *rdtsc = site + 1;
+    unsigned char *thunk = buildCycleThunk(rdtsc + 2);
+    unsigned char call[CYCLE_SITE_BYTES];
+    int offset;
+    if (!thunk) return 0;
+    offset = (int) ((char *) thunk - (char *) rdtsc - 5);
+    call[0] = 0xE8;
+    memcpy(call + 1, &offset, 4);
+    call[5] = 0x90;
+    return writeCode(rdtsc, call, CYCLE_SITE_BYTES);
+}
+
+static int patchCycles(void) {
+    unsigned char *engine = findUnique(GetModuleHandleA("Engine.dll"), CYCLE_SITE_ENGINE, sizeof(CYCLE_SITE_ENGINE));
+    unsigned char *launcher = findUnique(GetModuleHandleA(0), CYCLE_SITE_LAUNCHER, sizeof(CYCLE_SITE_LAUNCHER));
+    demoResolved = 1;
+    demoFlag = (int *) coreSymbol(SYMBOL_DEMO);
+    if (!engine || !launcher || !demoFlag) return 0;
+    clockRealScale = *clockCycleScaleLong;
+    clockCyclesPerStep = 1.0 / (clockRealScale * (double) clockSteps());
+    return patchCycleSite(engine) && patchCycleSite(launcher);
+}
+
+static void armCycles(void) {
+    if (!clockCyclesVirtual) return;
+    clockCycleBase = readCycles() - (unsigned long long) ((double) clockFrame * clockCyclesPerStep);
+    clockCycleCount = clockCycleBase + (unsigned long long) ((double) clockFrame * clockCyclesPerStep);
+    *clockCycleScaleLong = clockRealScale;
+    if (clockCycleScale) *clockCycleScale = (float) clockRealScale;
+    clockCyclesArmed = 1;
+}
+
+static void stepCycles(void) {
+    if (!clockCyclesArmed) return;
+    clockCycleCount = clockCycleBase + (unsigned long long) ((double) clockFrame * clockCyclesPerStep);
+}
+
 #else
 
 #define SYMBOL_SECONDS "_Z10appSecondsv"
@@ -360,6 +486,16 @@ static int writeCode(void *target, const unsigned char *code, size_t size) {
     return 1;
 }
 
+static int patchCycles(void) {
+    return 0;
+}
+
+static void armCycles(void) {
+}
+
+static void stepCycles(void) {
+}
+
 #endif
 
 static double hookNew(void) {
@@ -420,7 +556,7 @@ static void clearTimestampGates(void) {
 static void scaleCycles(void) {
     unsigned long long now;
     unsigned long long span;
-    if (!CLOCK_INLINED || !clockCycleScaleLong) return;
+    if (!CLOCK_INLINED || !clockCycleScaleLong || clockCyclesArmed || clockFinished) return;
     now = readCycles();
     if (clockCycles) {
         span = now - clockCycles;
@@ -448,6 +584,7 @@ static int demoPlaying(void) {
 
 static void finishCapture(void) {
     clockFinished = 1;
+    clockCyclesArmed = 0;
     pendingSize = 0;
     if (stream != STREAM_CLOSED) {
         closeStream(stream);
@@ -464,6 +601,7 @@ static void trackDemo(void) {
     if (!clockArmed) {
         if (!demoPlaying()) return;
         clockArmed = 1;
+        armCycles();
         fprintf(stderr, "uthooks: demo started at frame %lld\n", presentCount);
         fflush(stderr);
         return;
@@ -545,6 +683,10 @@ static void installClock(void) {
     clockCycleScaleLong = (double *) coreSymbol(SYMBOL_CYCLE_LONG);
     if (CLOCK_INLINED && clockCycleScaleLong && *clockCycleScaleLong > 0.0) {
         clockPreroll = *clockCycleScaleLong / CLOCK_PREROLL_STEPS;
+        clockCyclesVirtual = patchCycles();
+    }
+    if (CLOCK_INLINED && !clockCyclesVirtual) {
+        fprintf(stderr, "uthooks: frame delta sites not found, scaling real cycles instead\n");
     }
     scaleCycles();
     clockRunning = 1;
@@ -557,6 +699,7 @@ static void installClock(void) {
 static void advanceClock(void) {
     if (!clockRunning) return;
     clockFrame += clockArmed ? CLOCK_PREROLL_STEPS : 1;
+    stepCycles();
     scaleCycles();
 }
 

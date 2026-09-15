@@ -9,6 +9,7 @@ import dev.klepto.utrecorder.ut99.UtInstallation
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.deleteIfExists
+import kotlin.time.DurationUnit
 
 /**
  * One recording of a demo: the staged demo, the two passes and the mux, run inside a workspace, finishing at the mp4
@@ -103,8 +104,7 @@ class RecordingSession(
         outcome.failure?.let { throw it }
         val placedTrack =
             track?.let { placed ->
-                val seconds = marks.end.demoTime.inWholeSeconds
-                val demoEnd = seconds.toDouble()
+                val demoEnd = marks.end.demoTime.toDouble(DurationUnit.SECONDS)
                 val placement = SoundPlacement.place(placed, ffmpeg.duration(video), demoEnd, config)
                 placed.copy(offset = placement.offset, length = placement.length)
             }

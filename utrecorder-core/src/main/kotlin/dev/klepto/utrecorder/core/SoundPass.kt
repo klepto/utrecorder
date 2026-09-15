@@ -38,10 +38,11 @@ class SoundPass(
     /**
      * Plays [demo] with sound on and returns the [SoundTrack] the pass produced, placed by its own marks.
      *
-     * Stages the demo into the installation's `System` directory and plays it windowed and sounding under the OpenAL
-     * environment, whose wav [track] places from the run's marks. The wav's duration is probed for the placement and
-     * the wav is moved into [workspace] when the run ends; the staged copy is removed whichever way it does. No OpenAL
-     * environment fails the recording without launching anything.
+     * Stages the demo into the installation's `System` directory beside the console settings the run reads and plays
+     * it windowed and sounding under the OpenAL environment, whose wav [track] places from the run's marks. The wav's
+     * duration is probed for the placement and the wav is moved into [workspace] when the run ends; the staged copy and
+     * the console settings are removed whichever way it does. No OpenAL environment fails the recording without
+     * launching anything.
      *
      * @throws IllegalStateException when the pass was launched with no audio, or the pass produces no wav, no marks, or
      * marks that fall outside its wav.
@@ -54,9 +55,11 @@ class SoundPass(
 
         val demoDuration = UtDemo.read(demo).duration
         val description = PlaybackDescription.of(STAGED_DEMO_PREFIX + IDS.next(), demoDuration, config)
+        val recorderPackage = RecorderPackage(installation)
         val stagedDemo = installation.systemDirectory[description.stagedDemoName + DEMO_EXTENSION]
         try {
             demo.copy(stagedDemo) { "Demo file not found at $demo" }
+            recorderPackage.configure(description.recorderIni())
             val instance =
                 installation.instance(SOUND_PASS) {
                     exec = execScript(description)
@@ -64,7 +67,11 @@ class SoundPass(
                     windowed = true
                     environment += openAlEnvironment
                     gameIni {
-                        PreferredSettings.applyGameIni(ini = this, client = description.client(installation.platform))
+                        PreferredSettings.applyGameIni(
+                            ini = this,
+                            client = description.client(installation.platform),
+                            console = description.console,
+                        )
 
                         gameIni(demoDuration).forEach { (section, values) ->
                             values.forEach { (key, value) -> this[section, key] = value }
@@ -80,6 +87,7 @@ class SoundPass(
             return track.copy(file = placedWav)
         } finally {
             stagedDemo.deleteIfExists()
+            recorderPackage.clear()
             installation.systemDirectory[WAVE_NAME].deleteIfExists()
         }
     }
@@ -88,8 +96,10 @@ class SoundPass(
      * Returns the sound track the pass produced: the wav at [wavFile], placed by the marks its run logged in [log].
      *
      * The wav's length is read for its `opened`-time, the wall-clock time the run opened it at, so the mark wall times
-     * the run logged become offsets into the wav. Marks bounding more demo time than the wav holds, or starting before
-     * the wav, fail the recording. Reached by [record] and by tests standing in for a completed run.
+     * the run logged become offsets into the wav, and the track's length is the wall time between the two marks, the
+     * run's own audio, leaving the wav's head and the run's trailing exit delay outside the track. Marks bounding more
+     * demo time than the wav holds, or starting before the wav, fail the recording. Reached by [record] and by tests
+     * standing in for a completed run.
      *
      * @throws IllegalStateException when [wavFile] holds nothing, [log] holds no start mark, no end mark, or marks
      * outside the wav, naming what was missing.
@@ -103,15 +113,16 @@ class SoundPass(
 
         val marks = DemoMarks.parse(log)
         val opened = wavFile.getLastModifiedTime().toMillis() / 1000.0 - wavDuration
-        val offset = marks.start.wallTime.epochSecond - opened
+        val offset = marks.start.wallTime.toEpochMilli() / 1000.0 - opened
         val span = marks.end.demoTime - marks.start.demoTime
+        val length = (marks.end.wallTime.toEpochMilli() - marks.start.wallTime.toEpochMilli()) / 1000.0
         check(offset >= 0) { "The sound pass's marks fall outside $WAVE_NAME" }
         check(span > Duration.ZERO) { "The sound pass's marks fall outside $WAVE_NAME" }
 
         return SoundTrack(
             file = wavFile,
             offset = offset,
-            length = wavDuration,
+            length = length,
             demoEnd = marks.end.demoTime.toDouble(DurationUnit.SECONDS),
             demoSpan = span.toDouble(DurationUnit.SECONDS),
         )

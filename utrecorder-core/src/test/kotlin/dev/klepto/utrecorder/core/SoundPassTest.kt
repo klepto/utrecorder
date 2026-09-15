@@ -14,6 +14,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
@@ -119,9 +121,11 @@ class SoundPassTest :
                     "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 45 0 98765 300.75",
                 )
 
-            test("the marks of a wav they fall inside place it 6 seconds in, running 12 seconds") {
+            fun wallClock(text: String): Instant = LocalDateTime.parse(text).atZone(ZoneId.systemDefault()).toInstant()
+
+            test("the marks of a wav they fall inside place it 6 seconds in, running the 5 minutes 40 they bound") {
                 val wav = wavFile(home / "audio.wav")
-                Files.setLastModifiedTime(wav, FileTime.from(Instant.parse("2026-09-13T10:30:11Z")))
+                Files.setLastModifiedTime(wav, FileTime.from(wallClock("2026-09-13T10:30:11")))
 
                 val track = pass().track(wav, wavLog, 12.0)
 
@@ -129,7 +133,7 @@ class SoundPassTest :
                     SoundTrack(
                         file = wav,
                         offset = 6.0,
-                        length = 12.0,
+                        length = 340.0,
                         demoEnd = 300.75,
                         demoSpan = 288.25,
                     )
@@ -173,7 +177,7 @@ class SoundPassTest :
 
             test("marks falling outside the wav fail the recording") {
                 val wav = wavFile(home / "audio.wav")
-                Files.setLastModifiedTime(wav, FileTime.from(Instant.parse("2026-09-13T10:30:40Z")))
+                Files.setLastModifiedTime(wav, FileTime.from(wallClock("2026-09-13T10:30:40")))
 
                 val failure = shouldThrow<IllegalStateException> { pass().track(wav, wavLog, 12.0) }
 

@@ -4,11 +4,14 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
-import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
 import kotlin.time.Duration.Companion.seconds
 
 class MarksTest :
     FunSpec({
+        fun wallClock(text: String) = LocalDateTime.parse(text).atZone(ZoneId.systemDefault()).toInstant()
+
         test("both marks present in realistic log lines returns first start and last end") {
             val lines =
                 listOf(
@@ -24,14 +27,14 @@ class MarksTest :
             marks.start shouldBe
                 DemoMark(
                     label = DemoMark.Label.START,
-                    wallTime = Instant.parse("2026-09-13T10:30:05.123Z"),
+                    wallTime = wallClock("2026-09-13T10:30:05.123"),
                     frame = 4567,
                     demoTime = 12.5.seconds,
                 )
             marks.end shouldBe
                 DemoMark(
                     label = DemoMark.Label.END,
-                    wallTime = Instant.parse("2026-09-13T10:35:42.250Z"),
+                    wallTime = wallClock("2026-09-13T10:35:42.250"),
                     frame = 98765,
                     demoTime = 300.75.seconds,
                 )

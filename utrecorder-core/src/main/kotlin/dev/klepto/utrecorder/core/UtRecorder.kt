@@ -34,9 +34,10 @@ class UtRecorder(
      * Plays the demo file at [demo] at normal speed with sound off and returns the demo-time range the game played, as
      * reported by the start and end marks in the run log.
      *
-     * Reads the demo first, so a missing file and an unreadable demo fail before anything is launched. The staged copy
-     * of the demo and `UTRecorder.ini` are removed afterwards whichever way the run ends. A nonzero exit code with both
-     * marks present still returns them.
+     * Reads the demo first, so a missing file and an unreadable demo fail before anything is launched. The recorder's
+     * console package is installed into the installation, so the console the run names as `[Engine.Engine] Console`
+     * resolves. The staged copy of the demo and `UTRecorder.ini` are removed afterwards whichever way the run ends. A
+     * nonzero exit code with both marks present still returns them.
      *
      * @param timeout How long the game may run before it is killed. Derived from the demo just read when `null`.
      * @throws IllegalStateException when the run log lacks either mark, naming the missing mark and carrying the exit
@@ -50,6 +51,8 @@ class UtRecorder(
         val description = PlaybackDescription.of("$STAGED_DEMO_PREFIX${ids.next()}", demoDuration, config)
         val runTimeout = timeout ?: config.timeout(demoDuration)
         val installation = UtInstallation(config.installationDirectory)
+        val recorderPackage = RecorderPackage(installation)
+        recorderPackage.install()
         val instance =
             installation.instance("play-demo") {
                 exec = listOf(description.execLine)
@@ -58,10 +61,9 @@ class UtRecorder(
                 gameIni { this["Engine.Engine", "Console"] = description.console }
             }
         val stagedDemo = installation.systemDirectory[description.stagedDemoName + DEMO_EXTENSION]
-        val recorderIni = installation.systemDirectory[RECORDER_INI_NAME]
         try {
             demo.copy(stagedDemo) { "Demo file not found at $demo" }
-            description.recorderIni().write(recorderIni)
+            recorderPackage.configure(description.recorderIni())
             val result = instance.start().await(runTimeout)
             return try {
                 DemoMarks.parse(result.log)
@@ -70,7 +72,7 @@ class UtRecorder(
             }
         } finally {
             stagedDemo.deleteIfExists()
-            recorderIni.deleteIfExists()
+            recorderPackage.clear()
         }
     }
 
@@ -97,8 +99,9 @@ class UtRecorder(
      *
      * The primitive the URL [record] calls with the demo it fetched and the mp4 name the URL sanitises; the demo is
      * read once and every package it names is fetched into the installation at the GUID the demo recorded, so playback
-     * resolves every package the demo loads, and the two passes and the mux run inside a recording workspace, the
-     * finished mp4 moved out to the output directory before the workspace closes.
+     * resolves every package the demo loads, and the recorder's own console package is installed into it, so the
+     * console the passes name resolves; the two passes and the mux run inside a recording workspace, the finished mp4
+     * moved out to the output directory before the workspace closes.
      *
      * @throws IllegalStateException when the demo cannot be resolved, or when a pass fails the recording, which a
      * failed sound pass always does.
@@ -111,6 +114,7 @@ class UtRecorder(
         val utConfig = UtConfig(directories = directories, gameDirectory = config.installationDirectory)
         UtInstaller(utConfig).install()
         val installation = UtInstallation(config.installationDirectory, directories)
+        RecorderPackage(installation).install()
         UtMapInstaller(installation).install()
         UtPackageInstaller(UtDemo.read(demo).packages, installation, utConfig).install()
         return workspace(RECORD_WORKSPACE, directories = directories) {
@@ -128,11 +132,6 @@ class UtRecorder(
          * The extension a demo file carries.
          */
         private const val DEMO_EXTENSION = ".dem"
-
-        /**
-         * The name the recorder ini of a playback run carries.
-         */
-        private const val RECORDER_INI_NAME = "UTRecorder.ini"
 
         /**
          * The name the recording workspace carries.

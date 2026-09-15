@@ -4,16 +4,20 @@ import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.deleteCatching
+import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.readLinesOrEmpty
 import dev.klepto.utrecorder.common.io.readTextOrEmpty
 import dev.klepto.utrecorder.common.log.logger
 import dev.klepto.utrecorder.common.log.mergeAndThrow
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableProcess
+import dev.klepto.utrecorder.ut99.UtInstance.Companion.KILLED_EXIT_CODE
+import dev.klepto.utrecorder.ut99.UtInstance.Companion.KILL_TIMEOUT
 import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeoutException
 import kotlin.io.path.absolutePathString
+import kotlin.io.path.deleteIfExists
 import kotlin.io.path.name
 import kotlin.io.path.writeLines
 import kotlin.time.Duration
@@ -132,6 +136,7 @@ class UtInstance private constructor(
     private fun writeFiles() {
         copyIni(installation.gameIniPath, gameIniPath, settings.gameIniEdits)
         copyIni(installation.userIniPath, userIniPath, settings.userIniEdits)
+        installation.systemDirectory["Running.ini"].deleteIfExists()
         writeExec()
         installation.executablePath.copy(executablePath) { "UT executable not found at ${installation.executablePath}" }
         executablePath.toFile().setExecutable(true)
