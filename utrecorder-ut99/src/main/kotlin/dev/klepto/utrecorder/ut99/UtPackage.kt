@@ -1,5 +1,7 @@
 package dev.klepto.utrecorder.ut99
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
@@ -120,16 +122,20 @@ class UtPackage private constructor(
          * Returns the packages held directly in [directory]: its regular files whose extension is one of [extensions],
          * compared ignoring case. Empty when [directory] does not exist.
          */
-        fun list(
+        suspend fun list(
             directory: Path,
             extensions: Set<String>,
-        ): List<UtPackage> {
-            if (!directory.isDirectory()) return emptyList()
-            return directory
-                .listDirectoryEntries()
-                .filter { it.isRegularFile() && it.hasExtension(extensions) }
-                .map(::read)
-        }
+        ): List<UtPackage> =
+            withContext(Dispatchers.IO) {
+                if (!directory.isDirectory()) {
+                    emptyList()
+                } else {
+                    directory
+                        .listDirectoryEntries()
+                        .filter { it.isRegularFile() && it.hasExtension(extensions) }
+                        .map(::read)
+                }
+            }
 
         /**
          * Returns `true` when the extension of this path is one of [extensions], compared ignoring case.

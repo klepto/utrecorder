@@ -2,6 +2,8 @@ package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.get
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.exists
 
@@ -60,14 +62,14 @@ class UtInstallation(
     }
 
     /**
-     * Returns an unstarted run of this installation, named [name] and described by [configure]. Building one prunes the
-     * expired leftovers of earlier runs of that name and writes nothing into the installation: [UtInstance.start] adds
-     * the files the run needs, and [UtInstance.await] removes them again.
+     * Returns an unstarted run of this installation, named [name] and described by [configure]. Building one opens the
+     * run's workspace, pruning the expired leftovers of earlier runs of that name, and writes nothing into the
+     * installation: [play] adds the files the run needs and removes them again.
      *
      * @throws IllegalArgumentException if [name] does not match `[A-Za-z0-9._-]+`, or [configure] sets arguments
      * without an executable.
      */
-    fun instance(
+    suspend fun instance(
         name: String,
         configure: UtInstance.Builder.() -> Unit = {},
     ): UtInstance = UtInstance.Builder(this, name, directories).apply(configure).build()
@@ -76,8 +78,10 @@ class UtInstallation(
      * Returns the packages [packageDirectory] of this installation holds, matched by the extension it declares. Empty
      * for a directory that does not exist or declares no extension.
      */
-    fun packages(packageDirectory: UtDirectory): List<UtPackage> =
-        UtPackage.list(directory[packageDirectory], setOfNotNull(packageDirectory.extension))
+    suspend fun packages(packageDirectory: UtDirectory): List<UtPackage> =
+        withContext(Dispatchers.IO) {
+            UtPackage.list(directory[packageDirectory], setOfNotNull(packageDirectory.extension))
+        }
 
     companion object {
         /**

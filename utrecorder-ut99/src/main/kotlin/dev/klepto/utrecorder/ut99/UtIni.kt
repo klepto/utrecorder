@@ -1,5 +1,7 @@
 package dev.klepto.utrecorder.ut99
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.createParentDirectories
 import kotlin.io.path.readText
@@ -126,7 +128,12 @@ class UtIni(
     /**
      * Writes the configuration to the given [path] and returns it.
      */
-    fun write(path: Path): Path = path.createParentDirectories().also { it.writeText(toString(), UtPlatform.CHARSET) }
+    suspend fun write(path: Path): Path {
+        val content = toString()
+        return withContext(Dispatchers.IO) {
+            path.createParentDirectories().also { it.writeText(content, UtPlatform.CHARSET) }
+        }
+    }
 
     /**
      * Returns the contents of the configuration file.
@@ -193,6 +200,6 @@ class UtIni(
         /**
          * Reads the configuration file at the given [path].
          */
-        fun read(path: Path): UtIni = UtIni(path.readText(UtPlatform.CHARSET))
+        suspend fun read(path: Path): UtIni = UtIni(withContext(Dispatchers.IO) { path.readText(UtPlatform.CHARSET) })
     }
 }

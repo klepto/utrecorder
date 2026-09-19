@@ -1,16 +1,28 @@
 package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.log.logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import java.net.ServerSocket
 import java.nio.file.Path
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 
 /**
+ * The host the capture binds on, never leaving the loopback.
+ */
+private const val STREAM_HOST = "127.0.0.1"
+
+/**
+ * The logger [record] reports the listening port through.
+ */
+private val log = logger<FrameRecorder>()
+
+/**
  * The listening side of the frame capture: an ffmpeg process encoding the frames the shim streams over loopback TCP
- * into the final codec, started by [start] and finished by [stop].
+ * into the final codec, run for the duration of [record]'s block.
  *
  * @property config The recording the capture runs for, carrying the codec, the frame size and the backpressure bound.
  * @property target The file the capture encodes into, already in the final codec.
@@ -18,55 +30,30 @@ import kotlin.io.path.exists
  */
 class FrameRecorder(
     private val config: RecorderConfig,
-    private val target: Path,
+    val target: Path,
     private val ffmpeg: FfmpegLike = Ffmpeg(),
 ) {
-    private var port: Int = config.framePort.takeIf { it > 0 } ?: freePort()
-
-    private val completed = CountDownLatch(1)
-
-    @Volatile
-    private var finalised: Boolean = false
+    /**
+     * The port the shim connects to, taken from [RecorderConfig.framePort] or a free one.
+     */
+    val port: Int = config.framePort.takeIf { it > 0 } ?: freePort()
 
     /**
-     * Starts ffmpeg listening on the loopback and returns the port the shim connects to, taken from
-     * [RecorderConfig.framePort] or a free one.
-     *
-     * The capture runs on a daemon thread of its own, blocking until the shim's frames end the stream, so [stop]
-     * decides when the recording is over.
+     * Runs the capture to completion, listening on [port], and returns whether ffmpeg finalised it with code `0`.
+     * Called by [record], which starts this as a child of its own `coroutineScope`; nothing else should call it.
      */
-    fun start(): Int {
-        val worker =
-            Thread {
-                finalised = ffmpeg.capture(*captureArguments(port).toTypedArray())
-                completed.countDown()
-            }.apply {
-                isDaemon = true
-                name = CAPTURE_THREAD
-            }
-        worker.start()
-        log.info { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
-        return port
+    suspend fun capture(): Boolean = ffmpeg.capture(*captureArguments(port).toTypedArray())
+
+    /**
+     * Checks that [target] holds a capture ffmpeg finished. Called by [record] once its block has returned; nothing
+     * else should call it.
+     *
+     * @throws IllegalStateException when [target] does not exist or holds no frames.
+     */
+    suspend fun checkCapture() {
+        check(withContext(Dispatchers.IO) { target.exists() }) { "ffmpeg produced no frame capture" }
+        check(ffmpeg.frames(target) > 0) { "Frame capture holds no frames" }
     }
-
-    /**
-     * Waits for ffmpeg to finalise the capture and returns [target], whose duration is the video's whole length.
-     *
-     * @throws IllegalStateException when ffmpeg never finished, produced no capture or a capture holding no frames.
-     */
-    fun stop(): Path =
-        try {
-            check(completed.await(config.frameTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)) {
-                "ffmpeg never finished the frame capture"
-            }
-            check(finalised) { "ffmpeg failed the frame capture" }
-            check(target.exists()) { "ffmpeg produced no frame capture" }
-            check(ffmpeg.frames(target) > 0) { "Frame capture holds no frames" }
-            target
-        } catch (interrupted: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw IllegalStateException("ffmpeg never finished the frame capture", interrupted)
-        }
 
     /**
      * The arguments the capture runs ffmpeg with, reading the raw frames the shim streams to [port].
@@ -128,20 +115,33 @@ class FrameRecorder(
             else -> "-maxrate"
         }
 
-    companion object {
-        /**
-         * The host the capture binds on, never leaving the loopback.
-         */
-        private const val STREAM_HOST = "127.0.0.1"
-
-        /**
-         * The name the capture thread carries.
-         */
-        private const val CAPTURE_THREAD = "frame-capture"
-
-        /**
-         * The logger.
-         */
-        private val log = logger<FrameRecorder>()
-    }
+    /**
+     * The single capture [record] hands its block: the port the shim connects to, and nothing else. Meaningless away
+     * from [record], which is why it is nested here rather than a type of its own.
+     *
+     * @property port The port ffmpeg is listening on for the shim's frames.
+     */
+    class Capture(
+        val port: Int,
+    )
 }
+
+/**
+ * Runs [block] against a [FrameRecorder.Capture] of the port the shim connects to, ffmpeg listening on the loopback
+ * for the whole duration of the block, and returns the block's own result alongside the finished capture's path.
+ *
+ * The capture runs as a child of this function's own `coroutineScope`, started before [block] and awaited after it
+ * returns, so cancelling the coroutine running this function cancels the capture worker along with [block] and
+ * leaves no ffmpeg process alive.
+ *
+ * @throws IllegalStateException when ffmpeg failed the capture, produced no capture or a capture holding no frames.
+ */
+suspend fun <T> FrameRecorder.record(block: suspend FrameRecorder.Capture.() -> T): Pair<T, Path> =
+    coroutineScope {
+        val worker = async { capture() }
+        log.info { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
+        val value = FrameRecorder.Capture(port).block()
+        check(worker.await()) { "ffmpeg failed the frame capture" }
+        checkCapture()
+        value to target
+    }

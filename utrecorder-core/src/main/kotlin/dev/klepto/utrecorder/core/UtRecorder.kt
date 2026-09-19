@@ -12,6 +12,10 @@ import dev.klepto.utrecorder.ut99.UtMapInstaller
 import dev.klepto.utrecorder.ut99.UtPackageException
 import dev.klepto.utrecorder.ut99.UtPackageInstaller
 import dev.klepto.utrecorder.ut99.demo.UtDemo
+import dev.klepto.utrecorder.ut99.play
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.name
@@ -43,7 +47,7 @@ class UtRecorder(
      * @throws IllegalStateException when the run log lacks either mark, naming the missing mark and carrying the exit
      * code.
      */
-    fun playDemo(
+    suspend fun playDemo(
         demo: Path,
         timeout: Duration? = null,
     ): DemoMarks {
@@ -53,26 +57,28 @@ class UtRecorder(
         val installation = UtInstallation(config.installationDirectory)
         val recorderPackage = RecorderPackage(installation)
         recorderPackage.install()
-        val instance =
-            installation.instance("play-demo") {
-                exec = listOf(description.execLine)
-                sound = false
-                windowed = true
-                gameIni { this["Engine.Engine", "Console"] = description.console }
-            }
         val stagedDemo = installation.systemDirectory[description.stagedDemoName + DEMO_EXTENSION]
         try {
             demo.copy(stagedDemo) { "Demo file not found at $demo" }
             recorderPackage.configure(description.recorderIni())
-            val result = instance.start().await(runTimeout)
+            val instance =
+                installation.instance("play-demo") {
+                    exec = listOf(description.execLine)
+                    sound = false
+                    windowed = true
+                    gameIni { this["Engine.Engine", "Console"] = description.console }
+                }
+            val result = instance.play(runTimeout) { }
             return try {
                 DemoMarks.parse(result.log)
             } catch (failure: IllegalStateException) {
                 throw IllegalStateException("${failure.message} (exit code ${result.exitCode})", failure)
             }
         } finally {
-            stagedDemo.deleteIfExists()
-            recorderPackage.clear()
+            withContext(NonCancellable + Dispatchers.IO) {
+                stagedDemo.deleteIfExists()
+                recorderPackage.clear()
+            }
         }
     }
 
@@ -87,7 +93,7 @@ class UtRecorder(
      * @throws IllegalStateException when the demo cannot be fetched or resolved, or when a pass fails the recording,
      * which a failed sound pass always does.
      */
-    fun record(url: String): Path {
+    suspend fun record(url: String): Path {
         val demo = DemoFetcher(directories).fetch(url)
         return record(demo)
     }
@@ -107,7 +113,7 @@ class UtRecorder(
      * failed sound pass always does.
      * @throws UtPackageException when no source serves one of the packages the demo names at the GUID it recorded.
      */
-    fun record(
+    suspend fun record(
         demo: Path,
         name: String = demo.name.substringBeforeLast(DEMO_EXTENSION),
     ): Path {

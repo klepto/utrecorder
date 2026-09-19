@@ -1,11 +1,18 @@
 package dev.klepto.utrecorder.core
 
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
+import kotlin.io.path.writeBytes
 import kotlin.time.Duration.Companion.seconds
 
 class FfmpegLikeStandIn(
@@ -16,14 +23,14 @@ class FfmpegLikeStandIn(
 
     private val started = mutableListOf<List<String>>()
 
-    override fun capture(vararg arguments: String): Boolean {
+    override suspend fun capture(vararg arguments: String): Boolean {
         started += arguments.toList()
         return captureOutcome
     }
 
-    override fun frames(file: Path): Int = frameCount
+    override suspend fun frames(file: Path): Int = frameCount
 
-    override fun duration(file: Path): Double = durationValue
+    override suspend fun duration(file: Path): Double = durationValue
 
     val durationValue: Double = 8.0
 }
@@ -34,26 +41,28 @@ class FrameRecorderTest :
         val target = home / "capture.mp4"
         val port = 12000
 
-        fun recorder(options: Map<String, String> = emptyMap()): FrameRecorder =
-            FrameRecorder(
-                RecorderConfig(
-                    installationDirectory = Path.of("install"),
-                    startupTimeout = 5.seconds,
-                    fps = 60,
-                    codec = "libsvtav1",
-                    preset = options["preset"] ?: "4",
-                    crf = options["crf"] ?: "28",
-                    bitrate = options["bitrate"] ?: "4800k",
-                    svtav1Params = options["svtav1Params"] ?: "tune=0",
-                    gop = 300,
-                    width = 960,
-                    height = 540,
-                    frameQueue = 32,
-                    recordArguments = options["recordArguments"] ?: "",
-                ),
-                target,
-                FfmpegLikeStandIn(),
+        fun config(options: Map<String, String> = emptyMap()) =
+            RecorderConfig(
+                installationDirectory = Path.of("install"),
+                startupTimeout = 5.seconds,
+                fps = 60,
+                codec = "libsvtav1",
+                preset = options["preset"] ?: "4",
+                crf = options["crf"] ?: "28",
+                bitrate = options["bitrate"] ?: "4800k",
+                svtav1Params = options["svtav1Params"] ?: "tune=0",
+                gop = 300,
+                width = 960,
+                height = 540,
+                frameQueue = 32,
+                recordArguments = options["recordArguments"] ?: "",
             )
+
+        fun recorder(
+            options: Map<String, String> = emptyMap(),
+            captureTarget: Path = target,
+            ffmpeg: FfmpegLike = FfmpegLikeStandIn(),
+        ): FrameRecorder = FrameRecorder(config(options), captureTarget, ffmpeg)
 
         fun arguments(options: Map<String, String> = emptyMap()): List<String> = recorder(options).captureArguments(port)
 
@@ -138,5 +147,61 @@ class FrameRecorderTest :
 
         test("captureArguments holds none of the trim or keyframe flags a capture the shim cuts at the source takes") {
             arguments().filter { it in setOf("-ss", "-t", "-itsscale", "-force_key_frames") } shouldBe emptyList()
+        }
+
+        context("record") {
+            test("fails the finalised check when ffmpeg does not finish the capture") {
+                val failing = recorder(ffmpeg = FfmpegLikeStandIn(captureOutcome = false))
+
+                shouldThrow<IllegalStateException> {
+                    failing.record { }
+                }.message shouldBe "ffmpeg failed the frame capture"
+            }
+
+            test("fails the target-exists check when ffmpeg produces no capture file") {
+                val missing = recorder(captureTarget = home / "missing.mp4")
+
+                shouldThrow<IllegalStateException> {
+                    missing.record { }
+                }.message shouldBe "ffmpeg produced no frame capture"
+            }
+
+            test("fails the frame-count check when the capture holds no frames") {
+                val empty = home / "empty.mp4"
+                empty.writeBytes(byteArrayOf(1))
+                val holdingNone = recorder(captureTarget = empty, ffmpeg = FfmpegLikeStandIn(frameCount = 0))
+
+                shouldThrow<IllegalStateException> {
+                    holdingNone.record { }
+                }.message shouldBe "Frame capture holds no frames"
+            }
+
+            test("cancelling the coroutine running record { } cancels the capture worker") {
+                val workerStarted = CompletableDeferred<Unit>()
+                val workerCancelled = CompletableDeferred<Unit>()
+                val ffmpeg =
+                    object : FfmpegLike {
+                        override suspend fun capture(vararg arguments: String): Boolean =
+                            try {
+                                workerStarted.complete(Unit)
+                                awaitCancellation()
+                            } finally {
+                                workerCancelled.complete(Unit)
+                            }
+
+                        override suspend fun frames(file: Path): Int = 0
+
+                        override suspend fun duration(file: Path): Double = 0.0
+                    }
+                val cancelling = recorder(ffmpeg = ffmpeg)
+
+                coroutineScope {
+                    val job = launch { cancelling.record { awaitCancellation() } }
+                    workerStarted.await()
+                    job.cancelAndJoin()
+                }
+
+                workerCancelled.isCompleted shouldBe true
+            }
         }
     })

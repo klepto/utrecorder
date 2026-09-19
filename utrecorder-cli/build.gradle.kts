@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    implementation(libs.kotlinx.coroutines.core)
     implementation(projects.utrecorderCommon)
     implementation(projects.utrecorderCore)
 }

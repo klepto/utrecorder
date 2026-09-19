@@ -3,5 +3,6 @@ plugins {
 }
 
 dependencies {
+    api(libs.kotlinx.coroutines.core)
     implementation(projects.utrecorderCommon)
 }

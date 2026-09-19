@@ -11,6 +11,11 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.nio.file.Path
 import java.time.Clock
 import java.time.Instant
@@ -67,16 +72,21 @@ class RecordingSessionTest :
             private val soundThreadStarted: CountDownLatch?,
             private val soundThreadReleased: CountDownLatch?,
         ) : FramePassLike {
-            override fun record(
+            override suspend fun record(
                 demo: Path,
                 recorder: FrameRecorder,
                 workspace: Workspace,
+                afterPlay: suspend () -> Unit,
             ): DemoMarks {
-                soundThreadStarted?.await()
-                recorder.start()
-                events.record(framePassPlayed)
-                soundThreadReleased?.countDown()
-                return DemoMarks.parse(frameLog)
+                val (marks, _) =
+                    recorder.record {
+                        soundThreadStarted?.await()
+                        events.record(framePassPlayed)
+                        soundThreadReleased?.countDown()
+                        afterPlay()
+                        DemoMarks.parse(frameLog)
+                    }
+                return marks
             }
         }
 
@@ -87,7 +97,7 @@ class RecordingSessionTest :
             private val outcome: SoundTrack?,
             private val failure: String?,
         ) : SoundPassLike {
-            override fun record(
+            override suspend fun record(
                 demo: Path,
                 workspace: Workspace,
             ): SoundTrack {
@@ -103,7 +113,7 @@ class RecordingSessionTest :
         class FakeMuxer(
             private val events: EventLog,
         ) : MuxerLike {
-            override fun merge(
+            override suspend fun merge(
                 video: Path,
                 track: SoundTrack,
                 target: Path,
@@ -126,19 +136,19 @@ class RecordingSessionTest :
         class CaptureStandIn(
             private val events: EventLog?,
         ) : FfmpegLike {
-            override fun capture(vararg arguments: String): Boolean =
+            override suspend fun capture(vararg arguments: String): Boolean =
                 apply {
                     Path.of(arguments.last()).writeBytes(byteArrayOf(1))
                 }.let { true }
 
-            override fun frames(file: Path): Int =
+            override suspend fun frames(file: Path): Int =
                 events?.let {
                     it.record(soundThreadJoined)
                     it.record(captureStopping)
                     480
                 } ?: 480
 
-            override fun duration(file: Path): Double = 8.0
+            override suspend fun duration(file: Path): Double = 8.0
         }
 
         fun session(
@@ -240,5 +250,70 @@ class RecordingSessionTest :
             }
 
             directories.workspace.listDirectoryEntries().size shouldBe 1
+        }
+
+        test("cancelling the coroutine running a recording stops both passes and deletes the workspace it wrote") {
+            directories.workspace.toFile().deleteRecursively()
+            val framePassStarted = CompletableDeferred<Unit>()
+            val soundPassStarted = CompletableDeferred<Unit>()
+            val framePassCancelled = CompletableDeferred<Unit>()
+            val soundPassCancelled = CompletableDeferred<Unit>()
+
+            val cancellingFramePass =
+                object : FramePassLike {
+                    override suspend fun record(
+                        demo: Path,
+                        recorder: FrameRecorder,
+                        workspace: Workspace,
+                        afterPlay: suspend () -> Unit,
+                    ): DemoMarks =
+                        try {
+                            framePassStarted.complete(Unit)
+                            awaitCancellation()
+                        } finally {
+                            framePassCancelled.complete(Unit)
+                        }
+                }
+            val cancellingSoundPass =
+                object : SoundPassLike {
+                    override suspend fun record(
+                        demo: Path,
+                        workspace: Workspace,
+                    ): SoundTrack =
+                        try {
+                            soundPassStarted.complete(Unit)
+                            awaitCancellation()
+                        } finally {
+                            soundPassCancelled.complete(Unit)
+                        }
+                }
+
+            val cancelledSession =
+                RecordingSession(
+                    RecorderConfig(installationDirectory = installationDirectory),
+                    installation,
+                    directories,
+                    ids = TimestampId(jobClock),
+                    ffmpeg = CaptureStandIn(null),
+                    framePass = cancellingFramePass,
+                    soundPass = cancellingSoundPass,
+                    muxer = FakeMuxer(EventLog()),
+                )
+
+            coroutineScope {
+                val job =
+                    launch {
+                        workspace("record", directories = directories) { recording ->
+                            cancelledSession.record(demoIn(this), "demo-file", this)
+                        }
+                    }
+                framePassStarted.await()
+                soundPassStarted.await()
+                job.cancelAndJoin()
+            }
+
+            framePassCancelled.isCompleted shouldBe true
+            soundPassCancelled.isCompleted shouldBe true
+            directories.workspace.listDirectoryEntries() shouldBe emptyList()
         }
     })

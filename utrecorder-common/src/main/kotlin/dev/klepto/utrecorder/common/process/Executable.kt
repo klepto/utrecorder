@@ -3,14 +3,49 @@ package dev.klepto.utrecorder.common.process
 import dev.klepto.utrecorder.common.config.PropertySource
 import dev.klepto.utrecorder.common.io.workingDirectory
 import dev.klepto.utrecorder.common.os.OperatingSystem
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.TimeSource
 import kotlin.time.toJavaDuration
+
+/**
+ * The default of [ExecutableBuilder.closeTimeout] and [Executable.closeTimeout].
+ */
+private val DEFAULT_CLOSE_TIMEOUT = 5.seconds
+
+/**
+ * The default of [ExecutableBuilder.maxOutputLines] and [Executable.maxOutputLines].
+ */
+private const val DEFAULT_MAX_OUTPUT_LINES = 5000
+
+/**
+ * The number of output lines [ExecutableProcess]'s output flow buffers beyond its replay cache, so a slow collector
+ * of [ExecutableProcess.drain] loses lines to [BufferOverflow.DROP_OLDEST] instead of stalling the pump.
+ */
+private const val EXTRA_OUTPUT_BUFFER = 64
+
+/**
+ * The private marker [ExecutableProcess.pump] emits into the output flow once the process's output stream closes,
+ * ending a [ExecutableProcess.drain] collector deterministically instead of racing it with an external cancellation.
+ */
+private object EndOfStream
 
 /**
  * A mutable description of an executable, built into the immutable value by [Executable.build].
@@ -37,6 +72,17 @@ class ExecutableBuilder(
      * The environment variables the process starts with, layered over the ones it inherits.
      */
     val environment = mutableMapOf<String, String>()
+
+    /**
+     * The time a started process is given to exit on its own before it is terminated forcibly.
+     */
+    var closeTimeout: Duration = DEFAULT_CLOSE_TIMEOUT
+
+    /**
+     * The maximum number of output lines a started process keeps, oldest dropped first. Must not be negative: a
+     * negative value throws [IllegalArgumentException] from the `MutableSharedFlow` backing [ExecutableProcess.drain].
+     */
+    var maxOutputLines: Int = DEFAULT_MAX_OUTPUT_LINES
 
     /**
      * Puts [value] in front of the variable [name], separated by the platform path separator. What follows it is the
@@ -68,7 +114,8 @@ class ExecutableBuilder(
     /**
      * The immutable executable this builder describes.
      */
-    fun build(): Executable = Executable(executablePath, arguments.toList(), workingDirectory, environment.toMap())
+    fun build(): Executable =
+        Executable(executablePath, arguments.toList(), workingDirectory, environment.toMap(), closeTimeout, maxOutputLines)
 }
 
 /**
@@ -80,16 +127,21 @@ class ExecutableBuilder(
  * @property arguments The arguments passed to the program, in the order the program receives them.
  * @property workingDirectory The directory the process starts in.
  * @property environment The environment variables the process starts with, layered over the ones it inherits.
+ * @property closeTimeout The time a started process is given to exit on its own before [ExecutableProcess.close]
+ * terminates it forcibly.
+ * @property maxOutputLines The maximum number of output lines a started process keeps, oldest dropped first.
  */
 data class Executable(
     val executablePath: Path,
     val arguments: List<String>,
     val workingDirectory: Path,
     val environment: Map<String, String>,
+    val closeTimeout: Duration = DEFAULT_CLOSE_TIMEOUT,
+    val maxOutputLines: Int = DEFAULT_MAX_OUTPUT_LINES,
 ) {
     /**
-     * Starts the process using this executable configuration. The error stream is merged into the output stream, which
-     * the returned [ExecutableProcess] starts reading immediately.
+     * Starts the process using this executable configuration. The error stream is merged into the output stream. The
+     * returned [ExecutableProcess] reads none of it until [execute] starts its pump.
      */
     fun start(): ExecutableProcess {
         val builder =
@@ -99,11 +151,6 @@ data class Executable(
         builder.environment().putAll(environment)
         return ExecutableProcess(this, builder.start())
     }
-
-    /**
-     * Starts the process and waits for it to finish. See [ExecutableProcess.await].
-     */
-    fun startAndAwait(timeout: Duration = Duration.INFINITE): ExecutableResult = start().use { it.await(timeout) }
 
     /**
      * The command line of this executable, its path followed by its arguments.
@@ -124,9 +171,11 @@ data class Executable(
 }
 
 /**
- * A running process started from an [Executable], holding its trailing output lines and the thread that reads them.
+ * A running process started from an [Executable], holding the output it emitted and the process it wraps.
  *
- * Use [Executable.start] to start one.
+ * Use [Executable.start] to start one, or [Executable.execute] to run a block against it with its output pump
+ * running. Nothing reads the process output until [pump] runs, so [drain] and [await] on a process [start]ed
+ * directly, without going through [Executable.execute], hang forever: nothing ever completes [streamClosed].
  *
  * @property executable The configuration the process was started from.
  * @property process The process this one reads and waits on.
@@ -142,24 +191,23 @@ class ExecutableProcess(
         get() = process.isAlive
 
     /**
-     * The monitor guarding [output] and [consumer].
+     * The process output followed, once the output stream closes, by [EndOfStream]: replayed to a late collector of
+     * [drain] and capped to the last [Executable.maxOutputLines] lines plus that marker, oldest dropped first. The
+     * marker ends a [drain] collector deterministically instead of racing it against an external cancellation, and
+     * [EXTRA_OUTPUT_BUFFER] lets a slow collector fall behind without stalling [pump]'s `tryEmit`.
      */
-    private val lock = Any()
+    private val outputFlow =
+        MutableSharedFlow<Any>(
+            replay = executable.maxOutputLines + 1,
+            extraBufferCapacity = EXTRA_OUTPUT_BUFFER,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        )
 
     /**
-     * The process output, capped to the last [MAX_OUTPUT_LINES] lines.
+     * Completed by [pump] once the output stream closes, the signal [await] waits on before waiting for the process
+     * to exit.
      */
-    private val output = ArrayDeque<String>()
-
-    /**
-     * The head of the output consumer chain, invoking every consumer registered through [drain] in registration order.
-     */
-    private var consumer: (String) -> Unit = ::appendOutput
-
-    /**
-     * The failure thrown by an output consumer, rethrown by [await] on the calling thread.
-     */
-    @Volatile private var consumerFailure: Throwable? = null
+    private val streamClosed = CompletableDeferred<Unit>()
 
     /**
      * Marks whether [close] has been called.
@@ -167,141 +215,86 @@ class ExecutableProcess(
     @Volatile private var closing = false
 
     /**
-     * The thread that reads the process output until the stream closes, or until a [consumer] throws.
+     * Reads the process output until the stream closes, emitting every line to [outputFlow], then [EndOfStream].
+     * [Executable.execute] starts this as a child of its `coroutineScope`; nothing else should call it. A read that
+     * fails after [close] has been called is the closed stream itself and is discarded.
      */
-    private val daemon: Thread = startOutputReader()
-
-    /**
-     * The started daemon thread running [readOutput], named after the [executable].
-     */
-    private fun startOutputReader(): Thread =
-        Thread(::readOutput).apply {
-            isDaemon = true
-            name = executable.toString()
-            start()
-        }
-
-    /**
-     * Reads the process output until the stream closes, or until a [consumer] throws. A read that fails after [close]
-     * has been called is the closed stream itself and is discarded.
-     */
-    private fun readOutput() {
+    suspend fun pump() {
         try {
-            process.inputStream.bufferedReader().forEachLine(::consumeLine)
+            withContext(Dispatchers.IO) {
+                process.inputStream.bufferedReader().forEachLine { line -> outputFlow.tryEmit(line) }
+            }
         } catch (cause: IOException) {
             if (!closing) throw cause
+        } finally {
+            outputFlow.tryEmit(EndOfStream)
+            streamClosed.complete(Unit)
         }
     }
 
     /**
-     * Delivers the given [line] to the head of the consumer chain.
+     * A cold flow over the process output: it emits the lines already seen, then every line still to come, and
+     * completes once [pump] emits [EndOfStream], so `drain().toList()` returns the whole output even from a
+     * collector that suspends between lines. A collector that starts late still sees the earlier lines, because they
+     * are [outputFlow]'s replay cache. A collector that throws fails only itself.
      */
-    private fun consumeLine(line: String) = synchronized(lock) { notifyConsumer(consumer, line) }
+    fun drain(): Flow<String> = outputFlow.takeWhile { it !== EndOfStream }.map { it as String }
 
     /**
-     * Appends the given [line] to the process [output].
+     * Waits for the process to finish within [timeout] and returns the result, covering both the wait for the output
+     * stream to close and the wait for the process to exit.
+     *
+     * @throws TimeoutException if the process doesn't finish within [timeout].
      */
-    private fun appendOutput(line: String) {
-        if (output.size >= MAX_OUTPUT_LINES) output.removeFirst()
-        output += line
-    }
-
-    /**
-     * Notifies the given [consumer] with the given [line], recording the failure in [consumerFailure] before rethrowing
-     * it to the caller.
-     */
-    private fun notifyConsumer(
-        consumer: (String) -> Unit,
-        line: String,
-    ) {
-        runCatching { consumer(line) }
-            .onFailure { consumerFailure = it }
-            .getOrThrow()
-    }
-
-    /**
-     * Drains the process output to the given [consumer]. Buffered lines are replayed on the calling thread before the
-     * consumer is registered, every line after that is delivered on the process daemon thread. A consumer that throws
-     * fails the process and every other consumer along with it, and is left unregistered if it throws during the
-     * replay.
-     */
-    fun drain(consumer: (String) -> Unit): ExecutableProcess = apply { synchronized(lock) { registerConsumer(consumer) } }
-
-    /**
-     * Replays the buffered [output] to the given [consumer] and appends it to the consumer chain.
-     */
-    private fun registerConsumer(consumer: (String) -> Unit) {
-        output.forEach { line -> notifyConsumer(consumer, line) }
-        this.consumer = chainConsumers(this.consumer, consumer)
-    }
-
-    /**
-     * Returns the consumer that invokes [first] and then [second].
-     */
-    private fun chainConsumers(
-        first: (String) -> Unit,
-        second: (String) -> Unit,
-    ): (String) -> Unit =
-        { line ->
-            first(line)
-            second(line)
+    suspend fun await(timeout: Duration = Duration.INFINITE): ExecutableResult =
+        try {
+            withTimeout(timeout) {
+                streamClosed.await()
+                runInterruptible(Dispatchers.IO) { process.waitFor() }
+                ExecutableResult(executable, outputFlow.replayCache.filterIsInstance<String>(), process.exitValue())
+            }
+        } catch (timedOut: TimeoutCancellationException) {
+            throw TimeoutException("Timed out waiting for process: $executable").apply { initCause(timedOut) }
         }
 
     /**
-     * Waits for the process to finish and returns the result. Throws the cause if an output consumer failed, or a
-     * [TimeoutException] if the process doesn't finish within the given [timeout]. The process is closed on every
-     * failure. Repeated calls return the same result or rethrow the same consumer failure.
-     */
-    fun await(timeout: Duration = Duration.INFINITE): ExecutableResult =
-        runCatching { awaitResult(timeout) }
-            .onFailure { close() }
-            .getOrThrow()
-
-    /**
-     * The result of the process once it finishes within [timeout], leaving the process running on failure.
-     */
-    private fun awaitResult(timeout: Duration): ExecutableResult {
-        val timer = TimeSource.Monotonic.markNow()
-        val drained = daemon.join(timeout.toJavaDuration())
-        consumerFailure?.let { cause ->
-            throw IllegalStateException("Output consumer failed: $executable", cause)
-        }
-
-        if (!drained) {
-            throw TimeoutException("Timed out waiting for output stream: $executable")
-        }
-
-        val remaining = timeout - timer.elapsedNow()
-        if (!process.waitFor(remaining.toJavaDuration())) {
-            throw TimeoutException("Timed out waiting for process: $executable")
-        }
-
-        return ExecutableResult(executable, output.toList(), process.exitValue())
-    }
-
-    /**
-     * Attempts to close the process gracefully. If the process is still running after [CLOSE_TIMEOUT], it will be
-     * forcefully terminated. Ends the output reading thread along with the stream it reads.
+     * Attempts to close the process gracefully. If the process is still running after [Executable.closeTimeout], it
+     * is terminated forcibly. Ends the output stream [pump] reads.
      */
     override fun close() {
         closing = true
         process.destroy()
-        process.waitFor(CLOSE_TIMEOUT.toJavaDuration())
+        process.waitFor(executable.closeTimeout.toJavaDuration())
         if (isRunning) process.destroyForcibly()
     }
-
-    companion object {
-        /**
-         * The time a process is given to exit on its own before it is terminated forcibly.
-         */
-        private val CLOSE_TIMEOUT = 5.seconds
-
-        /**
-         * Maximum number of lines to keep in the process [output] buffer.
-         */
-        private const val MAX_OUTPUT_LINES = 5000
-    }
 }
+
+/**
+ * Starts this executable, runs [block] against the started [ExecutableProcess] and returns what it returns. The
+ * output pump runs as a child of a `coroutineScope` opened for the duration of [block], so a collector of
+ * [ExecutableProcess.drain] sees output produced while [block] runs.
+ *
+ * The process is closed in a `finally` around [block], not around the whole `coroutineScope`: closing destroys the
+ * process, which is what unblocks the pump's read of its output, so closing has to happen before this function
+ * would otherwise wait on the pump to finish reading a process [block] left running. The close runs under
+ * [NonCancellable] so its destroy-then-force grace wait still runs when the caller was cancelled — at the cost of
+ * blocking the thread that cancelled it for that wait.
+ */
+suspend fun <T> Executable.execute(block: suspend ExecutableProcess.() -> T): T =
+    coroutineScope {
+        val process = start()
+        launch { process.pump() }
+        try {
+            process.block()
+        } finally {
+            withContext(NonCancellable) { process.close() }
+        }
+    }
+
+/**
+ * Starts this executable and waits for it to finish. See [ExecutableProcess.await].
+ */
+suspend fun Executable.startAndAwait(timeout: Duration = Duration.INFINITE): ExecutableResult = execute { await(timeout) }
 
 /**
  * The exit code and trailing output of a finished process.

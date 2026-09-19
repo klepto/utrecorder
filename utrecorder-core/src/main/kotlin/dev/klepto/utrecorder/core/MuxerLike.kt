@@ -9,7 +9,7 @@ interface MuxerLike {
     /**
      * Merges [video] with [track] into [target] and returns [target], the video stream copied and the audio placed.
      */
-    fun merge(
+    suspend fun merge(
         video: Path,
         track: SoundTrack,
         target: Path,

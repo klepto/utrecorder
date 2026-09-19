@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.ut99
 
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.process.Executable
+import dev.klepto.utrecorder.common.process.startAndAwait
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.net.InetAddress
@@ -66,7 +67,7 @@ class UtMapInstallerTest :
             return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
         }
 
-        fun fakeCompiler(directory: Path): Path {
+        suspend fun fakeCompiler(directory: Path): Path {
             directory.createDirectories()
             val binary = directory / platform.compilerExecutable
             if (platform != UtPlatform.WINDOWS) {
@@ -84,13 +85,15 @@ class UtMapInstallerTest :
             return binary
         }
 
-        val fakeCompiler by lazy { fakeCompiler(root / "fake-ucc") }
+        var fakeCompilerCache: Path? = null
 
-        fun installation(name: String): UtInstallation {
+        suspend fun fakeCompiler(): Path = fakeCompilerCache ?: fakeCompiler(root / "fake-ucc").also { fakeCompilerCache = it }
+
+        suspend fun installation(name: String): UtInstallation {
             val systemDirectory = root / name / "install" / UtDirectory.System.name
             systemDirectory.createDirectories()
             (systemDirectory / platform.gameExecutable).writeText("")
-            fakeCompiler.copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
+            fakeCompiler().copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
             return UtInstallation(
                 root / name / "install",
                 dev.klepto.utrecorder.common.config

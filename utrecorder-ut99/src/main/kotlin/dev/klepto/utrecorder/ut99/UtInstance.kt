@@ -11,27 +11,41 @@ import dev.klepto.utrecorder.common.log.logger
 import dev.klepto.utrecorder.common.log.mergeAndThrow
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableProcess
-import dev.klepto.utrecorder.ut99.UtInstance.Companion.KILLED_EXIT_CODE
-import dev.klepto.utrecorder.ut99.UtInstance.Companion.KILL_TIMEOUT
+import dev.klepto.utrecorder.common.process.execute
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeoutException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.name
 import kotlin.io.path.writeLines
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
+
+/**
+ * The exit code [play] reports for a run it killed after [Duration] ran out, because the process reported none.
+ */
+private const val KILLED_EXIT_CODE = -1
+
+/**
+ * The logger [play] warns through when a run outlives its timeout.
+ */
+private val log = logger<UtInstance>()
 
 /**
  * One run of an installation: the files it adds to the installation's `System` directory, named by the run's
- * [Workspace] as `<name>-<id>-<file>`, and, once started, the process reading them.
+ * [Workspace] as `<name>-<id>-<file>`, and, while [play] runs it, the process reading them.
  *
- * Built by [UtInstallation.instance]. [start] writes the files and starts the process; [await] waits for it, reads the
- * files back into a [UtInstanceResult] and removes them. A run that throws keeps its files, except the executable copy,
- * in `<home>/workspace/<name>-<id>/`. A run started and never awaited leaves its files in `System` until a later run of
- * the same name prunes them after 7 days.
+ * Built by [UtInstallation.instance]. [play] writes the files, starts the process, runs a block against it, awaits it
+ * and reads the files back into a [UtInstanceResult], removing them. A run that throws keeps its files, except the
+ * executable copy, in `<home>/workspace/<name>-<id>/`. A run that returns or is cancelled has every file removed.
  *
  * @property name The name the run is logged under and its files are named after.
  */
@@ -39,11 +53,9 @@ class UtInstance private constructor(
     val name: String,
     private val installation: UtInstallation,
     private val settings: Settings,
-    directories: Directories,
+    private val workspace: Workspace,
 ) {
     private val systemDirectory: Path = installation.systemDirectory.toAbsolutePath()
-
-    private val workspace: Workspace = Workspace(name, systemDirectory, directories)
 
     /**
      * The copy of the game executable this run launches, whether the run starts it directly or through
@@ -101,39 +113,11 @@ class UtInstance private constructor(
             else -> listOf("-EXEC=${execPath.absolutePathString()}")
         }
 
-    private var process: ExecutableProcess? = null
-
-    private var outcome: Result<UtInstanceResult>? = null
-
-    private val outcomeLock = Any()
-
     /**
-     * `true` from [start] until the process ends.
+     * Writes the configuration copies, the exec script and the executable copy of this run. Called by [play];
+     * nothing else should call it.
      */
-    val isRunning: Boolean get() = process?.isRunning == true
-
-    /**
-     * Writes the files of this run into the installation, starts the process and returns this instance. When writing
-     * the files or starting the process fails, the executable copy is deleted, the other files are moved into
-     * `<home>/workspace/<name>-<id>/`, and the failure is rethrown with any failure of that clean-up suppressed.
-     *
-     * @throws IllegalStateException if the instance is already started.
-     */
-    fun start(): UtInstance =
-        apply {
-            check(process == null) { "Instance $name is already started" }
-            process =
-                runCatching {
-                    writeFiles()
-                    executable.start()
-                }.onFailure { failure -> deleteFiles(failure) }
-                    .getOrThrow()
-        }
-
-    /**
-     * Writes the configuration copies, the exec script and the executable copy of this run.
-     */
-    private fun writeFiles() {
+    suspend fun writeFiles() {
         copyIni(installation.gameIniPath, gameIniPath, settings.gameIniEdits)
         copyIni(installation.userIniPath, userIniPath, settings.userIniEdits)
         installation.systemDirectory["Running.ini"].deleteIfExists()
@@ -142,7 +126,7 @@ class UtInstance private constructor(
         executablePath.toFile().setExecutable(true)
     }
 
-    private fun copyIni(
+    private suspend fun copyIni(
         source: Path,
         target: Path,
         edits: List<UtIni.() -> Unit>,
@@ -161,40 +145,10 @@ class UtInstance private constructor(
     }
 
     /**
-     * Registers [consumer] for every line the run prints, replaying the lines already printed, and returns this
-     * instance.
-     *
-     * @throws IllegalStateException if the instance is not started.
+     * The result of this run exiting with [exitCode], holding the contents of the files it wrote. Called by [play];
+     * nothing else should call it.
      */
-    fun drain(consumer: (String) -> Unit): UtInstance = apply { startedProcess().drain(consumer) }
-
-    /**
-     * The exit code of the run and the contents of every file it wrote, waiting up to [timeout] for the process to end
-     * and killing it once the timeout expires. A result, whatever its exit code and including a killed run, deletes
-     * the executable copy and removes the other files of the run. When waiting or reading fails, the executable copy
-     * is deleted, the other files are moved into `<home>/workspace/<name>-<id>/`, and the failure is rethrown with any
-     * failure of that clean-up suppressed. Every call after the first returns or throws what the first one did.
-     *
-     * @throws IllegalStateException if the instance is not started.
-     * @throws IOException if the executable copy or the other files of a run that returned a result cannot be removed,
-     * the first failure thrown with the other suppressed.
-     */
-    fun await(timeout: Duration = Duration.INFINITE): UtInstanceResult =
-        synchronized(outcomeLock) { outcome ?: captureOutcome(timeout) }.getOrThrow()
-
-    private fun captureOutcome(timeout: Duration): Result<UtInstanceResult> = runCatching { captureResult(timeout) }.also { outcome = it }
-
-    private fun captureResult(timeout: Duration): UtInstanceResult {
-        val process = startedProcess()
-        val result = runCatching { process.use { readResult(exitCode(it, timeout)) } }
-        deleteFiles(result.exceptionOrNull())
-        return result.getOrThrow()
-    }
-
-    /**
-     * The result of this run exiting with [exitCode], holding the contents of the files it wrote.
-     */
-    private fun readResult(exitCode: Int): UtInstanceResult =
+    suspend fun readResult(exitCode: Int): UtInstanceResult =
         UtInstanceResult(
             exitCode = exitCode,
             log = logPath.readLinesOrEmpty(UtPlatform.CHARSET),
@@ -206,12 +160,12 @@ class UtInstance private constructor(
     /**
      * Ends the files of this run: deletes the executable copy, then removes the other files when there is no
      * [failure], or moves them into `<home>/workspace/<name>-<id>/` and adds every failure of that clean-up to
-     * [failure] as suppressed.
+     * [failure] as suppressed. Called by [play]; nothing else should call it.
      *
      * @throws IOException if there is no [failure] and the files cannot be removed, the first failure thrown with the
      * other suppressed.
      */
-    private fun deleteFiles(failure: Throwable?) {
+    suspend fun deleteFiles(failure: Throwable?) {
         when (failure) {
             null -> removeFiles()
             else -> keepFiles().forEach(failure::addSuppressed)
@@ -223,7 +177,7 @@ class UtInstance private constructor(
      *
      * @throws IOException if either cannot be removed, the first failure thrown with the other suppressed.
      */
-    private fun removeFiles() {
+    private suspend fun removeFiles() {
         listOf(deleteExecutableCatching(), runCatching { workspace.delete() })
             .mapNotNull { it.exceptionOrNull() }
             .mergeAndThrow()
@@ -233,41 +187,11 @@ class UtInstance private constructor(
      * Deletes the executable copy, then moves every other file of the run into `<home>/workspace/<name>-<id>/`, trying
      * both, and returns the failures of the two.
      */
-    private fun keepFiles(): List<Throwable> =
+    private suspend fun keepFiles(): List<Throwable> =
         listOf(deleteExecutableCatching(), runCatching { workspace.persistShared() })
             .mapNotNull { it.exceptionOrNull() }
 
-    private fun deleteExecutableCatching(): Result<Unit> = executablePath.deleteCatching(attempts = 10, delay = 100.milliseconds)
-
-    private fun exitCode(
-        process: ExecutableProcess,
-        timeout: Duration,
-    ): Int =
-        runCatching { process.await(timeout).exitCode }
-            .recoverCatching { cause -> killExitCode(process, cause) }
-            .getOrThrow()
-
-    /**
-     * The exit code of a run whose wait failed with [cause]: the code the kill produced when [cause] is a timeout, or
-     * [KILLED_EXIT_CODE] when the killed process reports none within [KILL_TIMEOUT].
-     */
-    private fun killExitCode(
-        process: ExecutableProcess,
-        cause: Throwable,
-    ): Int {
-        if (cause !is TimeoutException) throw cause
-
-        log.warn { "Instance $name outlived its timeout and was killed" }
-        return runCatching { process.await(KILL_TIMEOUT).exitCode }
-            .recover { failure ->
-                when (failure) {
-                    is TimeoutException -> KILLED_EXIT_CODE
-                    else -> throw failure
-                }
-            }.getOrThrow()
-    }
-
-    private fun startedProcess(): ExecutableProcess = checkNotNull(process) { "Instance $name is not started" }
+    private suspend fun deleteExecutableCatching(): Result<Unit> = executablePath.deleteCatching(attempts = 10, delay = 100.milliseconds)
 
     /**
      * A mutable description of one run of [installation], built into a [UtInstance] by [build].
@@ -342,18 +266,19 @@ class UtInstance private constructor(
         }
 
         /**
-         * An unstarted instance of the run this builder describes. Building one prunes the expired leftovers of earlier
-         * runs of the same name and writes nothing into the installation.
+         * An unstarted instance of the run this builder describes. Building one opens the run's workspace, pruning the
+         * expired leftovers of earlier runs of the same name, and writes nothing into the installation.
          *
          * @throws IllegalArgumentException if the name does not match `[A-Za-z0-9._-]+`, or [arguments] are set without
          * an [executable].
          */
-        fun build(): UtInstance {
+        suspend fun build(): UtInstance {
             require(NAME_PATTERN.matches(name)) { "Instance name '$name' does not match ${NAME_PATTERN.pattern}" }
             require(arguments.isEmpty() || executable != null) {
                 "Instance $name takes arguments ahead of the game executable but starts no program to receive them"
             }
-            return UtInstance(name, installation, settings(), directories)
+            val workspace = Workspace.open(name, installation.systemDirectory.toAbsolutePath(), directories)
+            return UtInstance(name, installation, settings(), workspace)
         }
 
         private fun settings(): Settings =
@@ -382,6 +307,19 @@ class UtInstance private constructor(
     }
 
     /**
+     * The single run [play] hands its [block]: the process output, and nothing else. Meaningless away from [play],
+     * which is why it is nested here rather than a type of its own.
+     */
+    class Run(
+        private val process: ExecutableProcess,
+    ) {
+        /**
+         * The process output. See [ExecutableProcess.drain].
+         */
+        fun drain(): Flow<String> = process.drain()
+    }
+
+    /**
      * An immutable snapshot of a [Builder].
      */
     private class Settings(
@@ -396,20 +334,79 @@ class UtInstance private constructor(
 
     companion object {
         /**
-         * The time a killed run is given to report its exit code.
-         */
-        private val KILL_TIMEOUT = 5.seconds
-
-        private const val KILLED_EXIT_CODE = -1
-
-        /**
          * The pattern the name of an instance matches, so that it can be part of a file name.
          */
         private val NAME_PATTERN = Regex("[A-Za-z0-9._-]+")
-
-        private val log = logger<UtInstance>()
     }
 }
+
+/**
+ * Writes this run's files, starts its process, runs [block] against it, awaits it within [timeout] and returns the
+ * result, having removed the run's files. [timeout] covers [block] and the wait together, not the wait alone; a run
+ * that outlives it is killed and reported with [UtInstanceResult.exitCode] `-1` instead of throwing. The process is
+ * closed once [block] and the wait are done, whichever way, forcibly if it outlives [Executable.closeTimeout] past
+ * that.
+ *
+ * A run that throws keeps its files, except the executable copy, in `<home>/workspace/<name>-<id>/`; a run that
+ * returns or whose coroutine is cancelled has every file removed. The clean-up of a cancelled run runs under
+ * [NonCancellable], so cancellation still leaves nothing behind.
+ *
+ * @throws IOException if writing the files, or removing or moving them back, fails.
+ */
+suspend fun <T> UtInstance.play(
+    timeout: Duration = Duration.INFINITE,
+    block: suspend UtInstance.Run.() -> T,
+): UtInstanceResult =
+    try {
+        writeFiles()
+        val result = readResult(playExitCode(timeout, block))
+        deleteFiles(null)
+        result
+    } catch (cancelled: CancellationException) {
+        withContext(NonCancellable) { deleteFiles(null) }
+        throw cancelled
+    } catch (failure: Exception) {
+        deleteFiles(failure)
+        throw failure
+    }
+
+/**
+ * The exit code of running [block] against the started process and awaiting it within [timeout], `-1` when the
+ * process outlived [timeout] and was killed instead.
+ *
+ * [block] and the wait run under separate [withTimeout] calls, sharing [timeout]'s budget through [remaining],
+ * rather than one [withTimeout] wrapping both: nesting [ExecutableProcess.await]'s own [withTimeout] inside this
+ * function's would let this function's [TimeoutCancellationException] be caught by [ExecutableProcess.await]'s
+ * `catch` clause, which matches by type and cannot tell the two apart, misreporting an outer timeout as its own.
+ */
+private suspend fun <T> UtInstance.playExitCode(
+    timeout: Duration,
+    block: suspend UtInstance.Run.() -> T,
+): Int =
+    try {
+        executable.execute {
+            val process = this
+            val mark = TimeSource.Monotonic.markNow()
+            try {
+                withTimeout(timeout) { UtInstance.Run(process).block() }
+            } catch (timedOut: TimeoutCancellationException) {
+                throw TimeoutException("Instance $name outlived its timeout and was killed").apply { initCause(timedOut) }
+            }
+            process.await(remaining(timeout, mark)).exitCode
+        }
+    } catch (timedOut: TimeoutException) {
+        log.warn(timedOut) { timedOut.message.orEmpty() }
+        KILLED_EXIT_CODE
+    }
+
+/**
+ * The remainder of [timeout]'s budget left after [mark], never less than one millisecond so it never fails
+ * [withTimeout]'s own positivity check.
+ */
+private fun remaining(
+    timeout: Duration,
+    mark: TimeSource.Monotonic.ValueTimeMark,
+): Duration = (timeout - mark.elapsedNow()).coerceAtLeast(1.milliseconds)
 
 /**
  * The exit code of a finished [UtInstance] and the contents of the files it wrote, read before they were removed.

@@ -15,6 +15,8 @@ import dev.klepto.utrecorder.ut99.UtDirectory.System
 import dev.klepto.utrecorder.ut99.UtDirectory.System400
 import dev.klepto.utrecorder.ut99.UtDirectory.Textures
 import dev.klepto.utrecorder.ut99.UtDirectory.Web
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
@@ -47,7 +49,7 @@ class UtInstaller(
     /**
      * Runs UT iso installer, UT patch installer and creates a version file.
      */
-    override fun install() {
+    override suspend fun install() {
         if (isInstalled()) {
             log.info { "UT installation detected, skipping..." }
             return
@@ -57,8 +59,8 @@ class UtInstaller(
         workspace("ut-installer", directories = config.directories) { staging ->
             installIso(staging)
             installPatch(staging)
-            staging.move(directory)
-            versionFile.writeText(config.patchFileName)
+            staging.move(this@UtInstaller.directory)
+            withContext(Dispatchers.IO) { versionFile.writeText(config.patchFileName) }
         }
         log.info { "UT installation complete" }
     }
@@ -66,7 +68,7 @@ class UtInstaller(
     /**
      * Downloads the original UT iso and extracts it to the given [directory].
      */
-    private fun installIso(directory: Path) {
+    private suspend fun installIso(directory: Path) {
         val isoPath = config.directories.cache[ISO_FILE]
         Downloader(config.isoUrl, config.isoMd5, directories = config.directories).download(isoPath)
         isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }
@@ -79,7 +81,7 @@ class UtInstaller(
     /**
      * Downloads the latest patch and extracts it to the given [directory].
      */
-    private fun installPatch(directory: Path) {
+    private suspend fun installPatch(directory: Path) {
         val patchPath = config.directories.cache[config.patchFileName]
         val patchUrl = "${config.patchUrl}/v${config.patchVersion}/${config.patchFileName}"
         Downloader(patchUrl, directories = config.directories).download(patchPath)
@@ -89,12 +91,13 @@ class UtInstaller(
     /**
      * Deletes the UT installation directory.
      */
-    override fun uninstall() = directory.deleteRecursively()
+    override suspend fun uninstall() = withContext(Dispatchers.IO) { directory.deleteRecursively() }
 
     /**
      * Checks if the UT installation is complete by checking [versionFile] for the current patch version.
      */
-    override fun isInstalled() = versionFile.exists() && versionFile.readText().trim() == config.patchFileName
+    override suspend fun isInstalled() =
+        withContext(Dispatchers.IO) { versionFile.exists() && versionFile.readText().trim() == config.patchFileName }
 
     companion object {
         /**

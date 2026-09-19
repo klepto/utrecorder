@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.process.Executable
+import dev.klepto.utrecorder.common.process.startAndAwait
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -79,7 +80,7 @@ class UtCompilerTest :
             return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
         }
 
-        fun fakeCompiler(directory: Path): Path {
+        suspend fun fakeCompiler(directory: Path): Path {
             directory.createDirectories()
             val binary = directory / compilerName
             if (platform != UtPlatform.WINDOWS) {
@@ -97,9 +98,11 @@ class UtCompilerTest :
             return binary
         }
 
-        val fakeCompiler by lazy { fakeCompiler(root / "fake-ucc") }
+        var fakeCompilerCache: Path? = null
 
-        fun installation(
+        suspend fun fakeCompiler(): Path = fakeCompilerCache ?: fakeCompiler(root / "fake-ucc").also { fakeCompilerCache = it }
+
+        suspend fun installation(
             name: String,
             compiler: Boolean = true,
             fails: Boolean = false,
@@ -109,7 +112,7 @@ class UtCompilerTest :
             (systemDirectory / platform.gameExecutable).writeText("")
             (systemDirectory / "Default.ini").writeText("[Editor.EditorEngine]\nEditPackages=Core")
             if (compiler) {
-                val target = fakeCompiler.copyTo(systemDirectory / compilerName)
+                val target = fakeCompiler().copyTo(systemDirectory / compilerName)
                 target.toFile().setExecutable(true)
             }
             if (fails) {

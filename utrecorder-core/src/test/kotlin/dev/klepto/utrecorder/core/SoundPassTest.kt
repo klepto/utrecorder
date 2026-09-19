@@ -1,7 +1,6 @@
 package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
 import io.kotest.assertions.throwables.shouldThrow
@@ -43,8 +42,6 @@ class SoundPassTest :
             settings: RecorderConfig = config,
             environment: Map<String, String> = openAlEnvironment,
         ) = SoundPass(settings, installation, openAlEnvironment = environment)
-
-        fun workspace() = Workspace("sound-pass", directories = Directories(home))
 
         fun wavFile(path: Path): Path {
             val seconds = 0.5

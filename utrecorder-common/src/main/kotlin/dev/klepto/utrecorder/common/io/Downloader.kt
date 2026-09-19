@@ -10,6 +10,8 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.copyAndClose
 import io.ktor.utils.io.streams.asByteWriteChannel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
@@ -50,7 +52,7 @@ class Downloader(
      *
      * @throws HashMismatchException if the downloaded file hash does not match the expected value.
      */
-    fun download(
+    suspend fun download(
         outputPath: Path,
         listener: DownloadListener? = null,
     ) {
@@ -67,7 +69,7 @@ class Downloader(
                 verifyHash(temporary)
                 temporary.move(outputPath)
             } finally {
-                temporary.deleteIfExists()
+                withContext(Dispatchers.IO) { temporary.deleteIfExists() }
             }
         }
     }
@@ -75,25 +77,27 @@ class Downloader(
     /**
      * Reports the file already held by [outputPath] to [listener] as a download that is complete.
      */
-    private fun reportDownloaded(
+    private suspend fun reportDownloaded(
         outputPath: Path,
         listener: DownloadListener?,
     ) {
         log.debug { "File $outputPath was already downloaded" }
-        val size = outputPath.fileSize()
+        val size = withContext(Dispatchers.IO) { outputPath.fileSize() }
         listener?.invoke(size, size)
     }
 
     /**
      * Fetches the file into [target], reporting progress to [listener].
      */
-    private fun fetch(
+    private suspend fun fetch(
         target: Path,
         listener: DownloadListener?,
     ) {
-        target.outputStream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
-            val channel = output.asByteWriteChannel()
-            useHttpClient(timeout) { copyTo(channel, listener) }
+        withContext(Dispatchers.IO) {
+            target.outputStream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
+                val channel = output.asByteWriteChannel()
+                useHttpClient(timeout) { copyTo(channel, listener) }
+            }
         }
     }
 
@@ -113,7 +117,7 @@ class Downloader(
      * Throws a [HashMismatchException] if the hash of [file] differs from the configured one. Does nothing when this
      * downloader carries no hash.
      */
-    private fun verifyHash(file: Path) {
+    private suspend fun verifyHash(file: Path) {
         val expected = normalizedHash ?: return
         val actual = file.digest(algorithm)
         if (actual != expected) {
@@ -125,18 +129,18 @@ class Downloader(
      * Returns `true` when [outputPath] already holds the file this downloader would fetch: its hash matches, or without
      * a hash, its size matches the size the server reports.
      */
-    private fun isUpToDate(outputPath: Path): Boolean {
-        if (!outputPath.exists()) return false
+    private suspend fun isUpToDate(outputPath: Path): Boolean {
+        if (!withContext(Dispatchers.IO) { outputPath.exists() }) return false
         if (normalizedHash != null) return outputPath.digest(algorithm) == normalizedHash
 
         val remoteSize = remoteSize() ?: return false
-        return outputPath.fileSize() == remoteSize
+        return withContext(Dispatchers.IO) { outputPath.fileSize() } == remoteSize
     }
 
     /**
      * The size the server reports for the file, or `null` when it reports none or cannot be asked.
      */
-    private fun remoteSize(): Long? = headCatching(url, timeout).getOrNull()?.takeIf { it >= 0 }
+    private suspend fun remoteSize(): Long? = headCatching(url, timeout).getOrNull()?.takeIf { it >= 0 }
 
     companion object {
         private val log = logger<Downloader>()

@@ -3,6 +3,8 @@ package dev.klepto.utrecorder.core
 import dev.klepto.utrecorder.common.io.EmbeddedArtifacts
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.ut99.UtInstallation
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.writeText
@@ -22,25 +24,33 @@ class RecordingProvision(
     private val config: RecorderConfig,
 ) {
     /**
-     * The instance workspace the hook artifacts and the wave configuration are extracted into.
+     * The instance workspace the hook artifacts and the wave configuration are extracted into, opened on first use
+     * since opening one is disk IO and this class is constructed outside a suspend context.
      */
-    private val workspace: Workspace = Workspace(PROVISION, installation.systemDirectory)
+    private var workspaceInstance: Workspace? = null
+
+    /**
+     * Returns the instance workspace, opening it the first time either [hooks] or [openAl] is called.
+     */
+    private suspend fun workspace(): Workspace =
+        workspaceInstance ?: Workspace.open(PROVISION, installation.systemDirectory).also { workspaceInstance = it }
 
     /**
      * Extracts the `uthooks` shim and, on Windows, the `utinject` launcher into the instance workspace and returns
      * their paths, with the OpenAL wave configuration written beside the game binary.
      */
-    fun hooks(): List<Path> = ARTIFACTS.extractTo(workspace.directory)
+    suspend fun hooks(): List<Path> = ARTIFACTS.extractTo(workspace().directory)
 
     /**
      * Writes the OpenAL wave configuration into the instance workspace and returns the environment the sound pass
      * runs under, empty when the recording carries no audio.
      */
-    fun openAl(): Map<String, String> {
+    suspend fun openAl(): Map<String, String> {
         if (!config.audio) return emptyMap()
-        workspace.file(WAVE_CONF).writeText(WAVE_CONF_CONTENT)
+        val confPath = workspace().file(WAVE_CONF)
+        withContext(Dispatchers.IO) { confPath.writeText(WAVE_CONF_CONTENT) }
         return mapOf(
-            "ALSOFT_CONF" to workspace.file(WAVE_CONF).absolutePathString(),
+            "ALSOFT_CONF" to confPath.absolutePathString(),
             "ALSOFT_DRIVERS" to "wave",
             "ALSOFT_LOGLEVEL" to "2",
         )

@@ -4,6 +4,8 @@ import dev.klepto.utrecorder.common.io.EmbeddedArtifacts
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtInstallation
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
 
@@ -31,20 +33,20 @@ class RecorderPackage(
      * Writes every artifact of the package into the installation's `System` directory, over whatever an earlier run
      * left there, and returns the paths written.
      */
-    fun install(): List<Path> = ARTIFACTS.extractTo(installation.systemDirectory)
+    suspend fun install(): List<Path> = ARTIFACTS.extractTo(installation.systemDirectory)
 
     /**
      * Writes [ini] as the settings the installed console reads and returns the file written, so that the runs after
      * it play through the recorder console.
      */
-    fun configure(ini: UtIni): Path = iniPath.also { ini.write(it) }
+    suspend fun configure(ini: UtIni): Path = iniPath.also { ini.write(it) }
 
     /**
      * Removes the settings file of the installed console from the installation, so that a game the recorder did not
      * launch is not configured by a run that has ended.
      */
-    fun clear() {
-        iniPath.deleteIfExists()
+    suspend fun clear() {
+        withContext(Dispatchers.IO) { iniPath.deleteIfExists() }
     }
 
     companion object {

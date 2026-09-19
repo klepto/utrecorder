@@ -7,15 +7,15 @@ interface Installer {
     /**
      * Materializes the dependency on disk.
      */
-    fun install()
+    suspend fun install()
 
     /**
      * Removes what [install] materialized.
      */
-    fun uninstall()
+    suspend fun uninstall()
 
     /**
      * `true` if the dependency is materialized on disk.
      */
-    fun isInstalled(): Boolean
+    suspend fun isInstalled(): Boolean
 }

@@ -3,6 +3,7 @@ plugins {
 }
 
 dependencies {
+    api(libs.kotlinx.coroutines.core)
     implementation(libs.bundles.archives)
     implementation(libs.bundles.ktor.client)
 }

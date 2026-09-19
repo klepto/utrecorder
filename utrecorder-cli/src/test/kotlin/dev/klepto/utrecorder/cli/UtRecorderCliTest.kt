@@ -1,13 +1,21 @@
 package dev.klepto.utrecorder.cli
 
+import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.config.Directories
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.div
 import kotlin.io.path.exists
+import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.writeText
 
 class UtRecorderCliTest :
@@ -34,5 +42,36 @@ class UtRecorderCliTest :
 
         test("a failure of the fetch or the recording reaches the caller as the thrown error") {
             shouldThrow<Exception> { UtRecorderCli.main("http://127.0.0.1:1/demos/never.dem", directories) }
+        }
+
+        test("cancelling the coroutine running main(url, directories) leaves no child process alive and no workspace directory behind") {
+            directories.workspace.toFile().deleteRecursively()
+            val requestReceived = CompletableDeferred<Unit>()
+            val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+            server.createContext("/") {
+                requestReceived.complete(Unit)
+                // Never responds: the fetch stays suspended on the network read until it is cancelled.
+            }
+            server.start()
+
+            try {
+                val url = "http://${server.address.hostString}:${server.address.port}/demos/hangs.dem"
+
+                coroutineScope {
+                    val job = launch { UtRecorderCli.main(url, directories) }
+                    requestReceived.await()
+                    job.cancelAndJoin()
+                }
+
+                val leftWorkspaceFiles =
+                    if (directories.workspace.exists()) {
+                        directories.workspace.listDirectoryEntries()
+                    } else {
+                        emptyList()
+                    }
+                leftWorkspaceFiles shouldBe emptyList()
+            } finally {
+                server.stop(0)
+            }
         }
     })

@@ -3,6 +3,8 @@ package dev.klepto.utrecorder.cli
 import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.core.DemoFetcher
 import dev.klepto.utrecorder.core.UtRecorder
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
@@ -33,7 +35,7 @@ object UtRecorderCli {
     /**
      * The demo the [url] names, downloaded into the [directories]' demo cache when the cache holds none.
      */
-    fun cachedDemo(
+    suspend fun cachedDemo(
         url: String,
         directories: Directories = Directories.DEFAULT,
     ): Path = DemoFetcher(directories).fetch(url)
@@ -44,7 +46,7 @@ object UtRecorderCli {
      *
      * @throws IllegalStateException when the demo cannot be fetched, resolved or recorded.
      */
-    fun main(
+    suspend fun main(
         url: String,
         directories: Directories = Directories.DEFAULT,
     ) {
@@ -54,6 +56,12 @@ object UtRecorderCli {
 
     /**
      * Runs the CLI against [arguments], printing usage and exiting when [arguments] hold no URL.
+     *
+     * The one permanent `runBlocking` this function keeps: `@JvmStatic fun main(Array<String>)` cannot itself be
+     * `suspend`. A shutdown hook cancels the job `runBlocking` runs under and waits for it to finish, so Ctrl+C
+     * during a recording destroys the child process and deletes the workspace instead of leaking both — the same
+     * cancellation path `RecordingSession.record` and `UtInstance.play` already clean up after. The other of the
+     * task's two sanctioned entry-point bridges is `UtCli.main(Array<String>)`.
      */
     @JvmStatic
     fun main(arguments: Array<String>) {
@@ -61,7 +69,16 @@ object UtRecorderCli {
             System.err.println("Usage: utrecorder-cli <demo-url>")
             exitProcess(EXIT_FAILURE)
         }
-        main(arguments.first())
+        val job = Job()
+        Runtime.getRuntime().addShutdownHook(
+            Thread {
+                job.cancel()
+                runBlocking { job.join() }
+            },
+        )
+        runBlocking(job) {
+            main(arguments.first())
+        }
     }
 
     /**

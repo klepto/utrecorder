@@ -1,6 +1,8 @@
 package dev.klepto.utrecorder.ut99.demo
 
 import dev.klepto.utrecorder.ut99.UtPackage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.readBytes
 import kotlin.time.Duration
@@ -39,7 +41,7 @@ data class UtDemo(
         /**
          * Reads the demo file at the given [path].
          */
-        fun read(path: Path): UtDemo = read(path.readBytes())
+        suspend fun read(path: Path): UtDemo = read(withContext(Dispatchers.IO) { path.readBytes() })
 
         /**
          * Reads the demo held in [bytes]. Reading stops at the first record that does not decode and keeps the records

@@ -10,7 +10,7 @@ interface SoundPassLike {
     /**
      * Plays [demo] with sound on and returns the [SoundTrack] the pass produced, placed by its own marks.
      */
-    fun record(
+    suspend fun record(
         demo: Path,
         workspace: Workspace,
     ): SoundTrack

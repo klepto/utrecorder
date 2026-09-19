@@ -10,6 +10,10 @@ import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtInstance
 import dev.klepto.utrecorder.ut99.demo.UtDemo
+import dev.klepto.utrecorder.ut99.play
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.Locale
 import kotlin.io.path.absolutePathString
@@ -32,20 +36,22 @@ class FramePass(
     private val directories: Directories = Directories.DEFAULT,
 ) : FramePassLike {
     /**
-     * Plays [demo] through the shim into [recorder], whose capture the shim cut at the source, and returns the marks
-     * the pass logged, read for the audio placement.
+     * Plays [demo] through the shim, the capture driven by [recorder]'s own [FrameRecorder.record] block, whose
+     * capture the shim cuts at the source, and returns the marks the pass logged, read for the audio placement.
      *
-     * Starts the capture listening, stages the demo into the installation's `System` directory beside the console
-     * settings the run reads, and plays it windowed and soundless under the shim's environment, killed once
-     * [RecorderConfig.frameTimeout] has passed. The staged copy and the console settings are removed whichever way the
-     * run ends.
+     * Stages the demo into the installation's `System` directory beside the console settings the run reads, and
+     * plays it windowed and soundless under the shim's environment, killed once [RecorderConfig.frameTimeout] has
+     * passed — the timeout covers both [launch]'s block and its wait. [afterPlay] runs once the game has finished
+     * playing, still inside [recorder]'s block, before the capture is finalised. The staged copy and the console
+     * settings are removed whichever way the run ends.
      *
      * @throws IllegalStateException when the pass logs no marks, naming the missing mark and carrying the exit code.
      */
-    override fun record(
+    override suspend fun record(
         demo: Path,
         recorder: FrameRecorder,
         workspace: Workspace,
+        afterPlay: suspend () -> Unit,
     ): DemoMarks {
         val demoDuration = UtDemo.read(demo).duration
         val description = PlaybackDescription.of(STAGED_DEMO_PREFIX + IDS.next(), demoDuration, config)
@@ -53,16 +59,23 @@ class FramePass(
         val stagedDemo = installation.systemDirectory[description.stagedDemoName + DEMO_EXTENSION]
         try {
             demo.copy(stagedDemo) { "Demo file not found at $demo" }
-            recorderPackage.configure(description.recorderIni())
-            val result = launch(workspace, description, recorder.start()).start().await(config.frameTimeout)
+            withContext(Dispatchers.IO) { recorderPackage.configure(description.recorderIni()) }
+            val (result, _) =
+                recorder.record {
+                    val played = launch(workspace, description, port).play(config.frameTimeout) { }
+                    afterPlay()
+                    played
+                }
             return try {
                 DemoMarks.parse(result.log)
             } catch (failure: IllegalStateException) {
                 throw IllegalStateException("${failure.message} (exit code ${result.exitCode})", failure)
             }
         } finally {
-            stagedDemo.deleteIfExists()
-            recorderPackage.clear()
+            withContext(NonCancellable + Dispatchers.IO) {
+                stagedDemo.deleteIfExists()
+                recorderPackage.clear()
+            }
         }
     }
 
@@ -88,9 +101,9 @@ class FramePass(
     /**
      * The unstarted run the pass plays its demo through: the injector wrapping the game executable copy on Windows,
      * the executable copy itself on Linux, the exec script the console plays and the windowed run. Reached the way
-     * [UtInstance] is reached everywhere; [record] starts and awaits it, tests read the run it describes.
+     * [UtInstance] is reached everywhere; [record] plays it, tests read the run it describes.
      */
-    fun launch(
+    suspend fun launch(
         workspace: Workspace,
         description: PlaybackDescription,
         port: Int,

@@ -36,10 +36,10 @@ class FramePassTest :
 
         fun pass(settings: RecorderConfig = config) = FramePass(settings, installation, hooks)
 
-        fun instance(settings: RecorderConfig = config) =
+        suspend fun instance(settings: RecorderConfig = config) =
             run {
                 val description = PlaybackDescription.of("staged-demo", Duration.ZERO, settings)
-                val workspace = Workspace("frame-pass", directories = Directories(home))
+                val workspace = Workspace.open("frame-pass", directories = Directories(home))
                 pass(settings).launch(workspace, description, 100)
             }
 

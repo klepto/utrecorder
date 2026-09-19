@@ -10,6 +10,12 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldMatch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Path
@@ -21,9 +27,12 @@ import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
+import kotlin.io.path.readLines
 import kotlin.io.path.writeText
-import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class UtInstanceTest :
     FunSpec({
@@ -110,6 +119,29 @@ class UtInstanceTest :
             exit "${'$'}{EXIT_CODE:-0}"
             """.trimIndent()
 
+        val windowsHeartbeatScript =
+            """
+            @echo off
+            setlocal enabledelayedexpansion
+            set "HEARTBEAT=%~1"
+            for /l %%i in (1,1,50) do (
+              echo %%i>>"%HEARTBEAT%"
+              ping -n 2 127.0.0.1 >nul
+            )
+            """.trimIndent()
+
+        val linuxHeartbeatScript =
+            """
+            #!/bin/sh
+            HEARTBEAT="${'$'}1"
+            i=0
+            while [ ${'$'}i -lt 50 ]; do
+              i=${'$'}((i + 1))
+              echo "${'$'}i" >> "${'$'}HEARTBEAT"
+              sleep 1
+            done
+            """.trimIndent()
+
         data class Shell(
             val executable: Path,
             val arguments: List<String>,
@@ -140,9 +172,39 @@ class UtInstanceTest :
                 }
             }
 
+        fun heartbeatShell(heartbeat: Path): Shell =
+            when (UtPlatform.current()) {
+                UtPlatform.WINDOWS -> {
+                    Shell(
+                        executable = Path.of(System.getenv("ComSpec") ?: """C:\Windows\System32\cmd.exe"""),
+                        arguments = listOf("/c", writeScript("heartbeat.cmd", windowsHeartbeatScript), "$heartbeat"),
+                        sleepSeconds = "",
+                    )
+                }
+
+                UtPlatform.LINUX -> {
+                    Shell(
+                        executable = Path.of("/bin/sh"),
+                        arguments = listOf(writeScript("heartbeat.sh", linuxHeartbeatScript), "$heartbeat"),
+                        sleepSeconds = "",
+                    )
+                }
+            }
+
         val shell = writeShell()
 
         afterSpec { root.toFile().deleteRecursively() }
+
+        suspend fun waitUntil(
+            timeout: Duration = 2.seconds,
+            condition: () -> Boolean,
+        ) {
+            val deadline = TimeSource.Monotonic.markNow() + timeout
+            while (!condition()) {
+                check(deadline.hasNotPassedNow()) { "Timed out waiting for condition" }
+                delay(20.milliseconds)
+            }
+        }
 
         fun createFakeInstall(
             name: String,
@@ -179,7 +241,7 @@ class UtInstanceTest :
                 .listDirectoryEntries()
                 .single { it.name.matches(Regex("""${Regex.escape(name)}-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}""")) }
 
-        fun scriptInstance(
+        suspend fun scriptInstance(
             installation: UtInstallation,
             name: String,
             configure: UtInstance.Builder.() -> Unit = {},
@@ -380,28 +442,14 @@ class UtInstanceTest :
             }
         }
 
-        context("start and await") {
+        context("play") {
             val okInstallation = createFakeInstall("ok-install", userIni = "user-config")
             val failInstallation = createFakeInstall("fail-install", exitCode = 9)
 
-            test("throws when the instance is already started") {
-                val instance = scriptInstance(okInstallation, "double-start").start()
-
-                shouldThrow<IllegalStateException> { instance.start() }
-
-                instance.await()
-            }
-
-            test("throws when awaited before start") {
-                val instance = scriptInstance(okInstallation, "await-before-start")
-
-                shouldThrow<IllegalStateException> { instance.await() }
-            }
-
             test("starts the process in the system directory with the run's default game, ini and log arguments") {
-                val instance = scriptInstance(okInstallation, "argv").start()
+                val instance = scriptInstance(okInstallation, "argv")
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 val expectedArguments =
                     listOf(
@@ -421,30 +469,30 @@ class UtInstanceTest :
                 val instance =
                     scriptInstance(okInstallation, "exec-argument") {
                         exec = listOf("SETRES 1920x1080", "PLAYDEMO test.demo")
-                    }.start()
+                    }
                 val execArgument = "-EXEC=${instance.execPath.absolutePathString()}"
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 strippedGameArgLines(result) shouldContain execArgument
                 result.exec shouldBe listOf("SETRES 1920x1080", "PLAYDEMO test.demo")
             }
 
             test("passes no -EXEC argument and returns an empty exec result when exec is empty") {
-                val instance = scriptInstance(okInstallation, "no-exec").start()
+                val instance = scriptInstance(okInstallation, "no-exec")
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 gameArgLines(result).none { it.contains("-EXEC=") } shouldBe true
                 result.exec shouldBe emptyList()
             }
 
-            test("deletes the exec file along with the run's other files after await") {
+            test("deletes the exec file along with the run's other files after play returns") {
                 val before = snapshot(okInstallation.systemDirectory)
-                val instance = scriptInstance(okInstallation, "exec-cleanup") { exec = listOf("line") }.start()
+                val instance = scriptInstance(okInstallation, "exec-cleanup") { exec = listOf("line") }
                 val execPath = instance.execPath
 
-                instance.await()
+                instance.play { }
 
                 execPath.exists() shouldBe false
                 snapshot(okInstallation.systemDirectory) shouldBe before
@@ -454,9 +502,9 @@ class UtInstanceTest :
                 val instance =
                     scriptInstance(okInstallation, "environment") {
                         environment[testEnvVar] = "hello-world"
-                    }.start()
+                    }
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 result.log.first { it.startsWith("envtest=") } shouldBe "envtest=hello-world"
             }
@@ -477,9 +525,9 @@ class UtInstanceTest :
                     scriptInstance(iniEditInstallation, "ini-edits") {
                         gameIni { set("Engine.Engine", "BuilderKey", "BuilderValue") }
                         userIni { set("Engine.Engine", "BuilderUserKey", "BuilderUserValue") }
-                    }.start()
+                    }
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 result.gameIni shouldContain "InstallerKey=InstallerValue"
                 result.gameIni shouldContain "BuilderKey=BuilderValue"
@@ -490,9 +538,9 @@ class UtInstanceTest :
             }
 
             test("sets the platform's library path variable to the System directory, unset when the platform has none") {
-                val instance = scriptInstance(okInstallation, "library-path").start()
+                val instance = scriptInstance(okInstallation, "library-path")
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 val envLine = result.log.first { it.startsWith("env=") }
                 if (OperatingSystem.current().libraryPathVariable != null) {
@@ -503,9 +551,9 @@ class UtInstanceTest :
             }
 
             test("returns the exit code, the ini contents and an empty exec script for a clean run") {
-                val instance = scriptInstance(okInstallation, "clean-result").start()
+                val instance = scriptInstance(okInstallation, "clean-result")
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 result.exitCode shouldBe 0
                 result.gameIni shouldBe "0"
@@ -520,26 +568,26 @@ class UtInstanceTest :
                 encodingInstallation.gameIniPath.writeText(gameIniContent, Charsets.ISO_8859_1)
                 encodingInstallation.userIniPath.writeText(userIniContent, Charsets.ISO_8859_1)
 
-                val instance = scriptInstance(encodingInstallation, "encoding-result").start()
+                val instance = scriptInstance(encodingInstallation, "encoding-result")
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 result.gameIni shouldBe gameIniContent
                 result.userIni shouldBe userIniContent
             }
 
             test("returns the exit code of a failing run") {
-                val instance = scriptInstance(failInstallation, "failing-result").start()
+                val instance = scriptInstance(failInstallation, "failing-result")
 
-                val result = instance.await()
+                val result = instance.play { }
 
                 result.exitCode shouldBe 9
             }
 
-            test("leaves System as it was and no workspace directory for the run after a clean run is awaited") {
+            test("leaves System as it was and no workspace directory for the run after a clean run is played") {
                 val before = snapshot(okInstallation.systemDirectory)
 
-                scriptInstance(okInstallation, "clean-cleanup").start().await()
+                scriptInstance(okInstallation, "clean-cleanup").play { }
 
                 snapshot(okInstallation.systemDirectory) shouldBe before
                 (root / "home" / "workspace")
@@ -547,38 +595,32 @@ class UtInstanceTest :
                     .none { it.name.startsWith("clean-cleanup-") } shouldBe true
             }
 
-            test("does not touch the files of another instance started against the same installation") {
-                val first = scriptInstance(okInstallation, "first").start()
-                val second = scriptInstance(okInstallation, "second").start()
+            test("does not touch the files of another instance played concurrently against the same installation") {
+                val second = scriptInstance(okInstallation, "second", sleepingConfig)
 
-                first.await()
+                coroutineScope {
+                    val secondJob = launch { second.play(longTimeout) { } }
+                    waitUntil { second.executablePath.exists() }
 
-                second.executablePath.exists() shouldBe true
-                second.gameIniPath.exists() shouldBe true
-                second.userIniPath.exists() shouldBe true
+                    scriptInstance(okInstallation, "first").play { }
 
-                second.await()
+                    second.executablePath.exists() shouldBe true
+                    second.gameIniPath.exists() shouldBe true
+                    second.userIniPath.exists() shouldBe true
+
+                    secondJob.join()
+                }
             }
 
-            test("returns the same result instance from a second await, without re-reading the deleted files") {
-                val instance = scriptInstance(okInstallation, "second-await").start()
-
-                val first = instance.await()
-                val second = instance.await()
-
-                (first === second) shouldBe true
-            }
-
-            test("throws the failure of deleting an executable copy held open, and throws it again from a second await")
+            test("throws the failure of deleting an executable copy held open")
                 .config(enabledIf = { OperatingSystem.current() == OperatingSystem.WINDOWS }) {
-                    val instance = scriptInstance(okInstallation, "held-executable").start()
-                    val stream = FileOutputStream(instance.executablePath.toFile(), true)
+                    val instance = scriptInstance(okInstallation, "held-executable")
+                    lateinit var stream: FileOutputStream
 
                     try {
-                        val first = shouldThrow<IOException> { instance.await() }
-                        val second = shouldThrow<IOException> { instance.await() }
-
-                        (first === second) shouldBe true
+                        shouldThrow<IOException> {
+                            instance.play { stream = FileOutputStream(instance.executablePath.toFile(), true) }
+                        }
                     } finally {
                         stream.close()
                         instance.executablePath.deleteIfExists()
@@ -586,42 +628,42 @@ class UtInstanceTest :
                 }
 
             test("returns a result rather than throwing when a run outlives its timeout, still carrying the inis") {
-                val instance = scriptInstance(okInstallation, "timeout-result", sleepingConfig).start()
+                val instance = scriptInstance(okInstallation, "timeout-result", sleepingConfig)
 
-                val result = instance.await(shortTimeout)
+                val result = instance.play(shortTimeout) { }
 
                 result.log.isNotEmpty() shouldBe true
                 result.gameIni shouldBe "0"
                 result.userIni shouldBe "user-config"
-                instance.isRunning shouldBe false
+                result.exitCode shouldBe -1
             }
 
-            test("leaves System as it was after a run that outlives its timeout is awaited") {
+            test("leaves System as it was after a run that outlives its timeout is played") {
                 val before = snapshot(okInstallation.systemDirectory)
 
-                scriptInstance(okInstallation, "timeout-cleanup", sleepingConfig).start().await(shortTimeout)
+                scriptInstance(okInstallation, "timeout-cleanup", sleepingConfig).play(shortTimeout) { }
 
                 snapshot(okInstallation.systemDirectory) shouldBe before
             }
 
-            test("leaves System as it was after a run exiting with a non-zero code is awaited") {
+            test("leaves System as it was after a run exiting with a non-zero code is played") {
                 val before = snapshot(failInstallation.systemDirectory)
 
-                scriptInstance(failInstallation, "non-zero-cleanup").start().await()
+                scriptInstance(failInstallation, "non-zero-cleanup").play { }
 
                 snapshot(failInstallation.systemDirectory) shouldBe before
             }
 
-            test("removes the inis and log of a run whose held executable copy fails the await, and throws it again")
+            test("removes the inis and log of a run whose held executable copy fails to delete")
                 .config(enabledIf = { OperatingSystem.current() == OperatingSystem.WINDOWS }) {
-                    val instance = scriptInstance(okInstallation, "held-executable-removal").start()
-                    val stream = FileOutputStream(instance.executablePath.toFile(), true)
+                    val instance = scriptInstance(okInstallation, "held-executable-removal")
+                    lateinit var stream: FileOutputStream
 
                     try {
-                        val first = shouldThrow<IOException> { instance.await() }
-                        val second = shouldThrow<IOException> { instance.await() }
+                        shouldThrow<IOException> {
+                            instance.play { stream = FileOutputStream(instance.executablePath.toFile(), true) }
+                        }
 
-                        (first === second) shouldBe true
                         instance.gameIniPath.exists() shouldBe false
                         instance.userIniPath.exists() shouldBe false
                         instance.logPath.exists() shouldBe false
@@ -635,9 +677,8 @@ class UtInstanceTest :
                 val before = snapshot(okInstallation.systemDirectory)
                 val instance = scriptInstance(okInstallation, "read-failure")
                 instance.logPath.createDirectories()
-                instance.start()
 
-                shouldThrow<IOException> { instance.await() }
+                shouldThrow<IOException> { instance.play { } }
 
                 snapshot(okInstallation.systemDirectory) shouldBe before
                 val kept = keptDirectory("read-failure")
@@ -647,17 +688,6 @@ class UtInstanceTest :
                 (kept / UtPlatform.current().gameExecutable).exists() shouldBe false
             }
 
-            test("throws the same failure to read the run's files back from a second await") {
-                val instance = scriptInstance(okInstallation, "read-failure-again")
-                instance.logPath.createDirectories()
-                instance.start()
-
-                val first = shouldThrow<IOException> { instance.await() }
-                val second = shouldThrow<IOException> { instance.await() }
-
-                (first === second) shouldBe true
-            }
-
             test("rethrows a failure to start a program that does not exist and keeps the inis but no executable copy") {
                 val before = snapshot(okInstallation.systemDirectory)
                 val instance =
@@ -665,7 +695,7 @@ class UtInstanceTest :
                         executable = root / "missing-program" / "program.exe"
                     }
 
-                shouldThrow<IOException> { instance.start() }
+                shouldThrow<IOException> { instance.play { } }
 
                 snapshot(okInstallation.systemDirectory) shouldBe before
                 val kept = keptDirectory("launch-failure")
@@ -680,26 +710,37 @@ class UtInstanceTest :
                 val before = snapshot(missingUserIniInstallation.systemDirectory)
                 val instance = scriptInstance(missingUserIniInstallation, "write-failure")
 
-                shouldThrow<IllegalStateException> { instance.start() }.message shouldContain "User.ini"
+                shouldThrow<IllegalStateException> { instance.play { } }.message shouldContain "User.ini"
 
                 snapshot(missingUserIniInstallation.systemDirectory) shouldBe before
                 (keptDirectory("write-failure") / "UnrealTournament.ini").exists() shouldBe true
             }
         }
 
-        context("isRunning") {
-            val okInstallation = createFakeInstall("running-install", userIni = "user-config")
+        context("cancellation") {
+            test("cancelling the coroutine running play { } leaves no process alive and removes the run's files") {
+                val heartbeat = root / "cancel-heartbeat.txt"
+                heartbeat.deleteIfExists()
+                val shellCancel = heartbeatShell(heartbeat)
+                val instance =
+                    installation.instance("cancel-play") {
+                        executable = shellCancel.executable
+                        arguments += shellCancel.arguments
+                    }
 
-            test("is false before start, true while the run is in flight and false once it ends") {
-                val instance = scriptInstance(okInstallation, "is-running", sleepingConfig)
+                coroutineScope {
+                    val job = launch { instance.play { } }
+                    waitUntil { heartbeat.exists() }
+                    job.cancelAndJoin()
+                }
 
-                instance.isRunning shouldBe false
+                val beatsAtCancel = heartbeat.readLines().size
+                delay(1500.milliseconds)
+                heartbeat.readLines().size shouldBe beatsAtCancel
 
-                instance.start()
-                instance.isRunning shouldBe true
-
-                instance.await(longTimeout)
-                instance.isRunning shouldBe false
+                instance.executablePath.exists() shouldBe false
+                instance.gameIniPath.exists() shouldBe false
+                instance.userIniPath.exists() shouldBe false
             }
         }
 
@@ -707,19 +748,26 @@ class UtInstanceTest :
             val okInstallation = createFakeInstall("drain-install", userIni = "user-config")
 
             test("receives output while the run is in progress") {
-                val instance = scriptInstance(okInstallation, "drain-live", sleepingConfig).start()
+                val instance = scriptInstance(okInstallation, "drain-live", sleepingConfig)
                 val received = mutableListOf<String>()
 
-                instance.drain(received::add)
-                instance.await(longTimeout)
+                instance.play(longTimeout) { drain().collect { received += it } }
 
                 received.any { it.contains("start-marker") } shouldBe true
             }
 
-            test("throws when drained before start") {
-                val instance = scriptInstance(okInstallation, "drain-before-start")
+            test(
+                "a collector that starts inside the block after lines were already written still sees them, through the replay guarantee",
+            ) {
+                val instance = scriptInstance(okInstallation, "drain-replay")
+                val received = mutableListOf<String>()
 
-                shouldThrow<IllegalStateException> { instance.drain {} }
+                instance.play {
+                    delay(200.milliseconds)
+                    received += drain().toList()
+                }
+
+                received.any { it.contains("start-marker") } shouldBe true
             }
         }
     })

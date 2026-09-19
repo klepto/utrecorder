@@ -8,6 +8,10 @@ import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.time.TimestampId
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.demo.UtDemo
+import dev.klepto.utrecorder.ut99.play
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.time.Instant
 import java.util.Locale
@@ -47,7 +51,7 @@ class SoundPass(
      * @throws IllegalStateException when the pass was launched with no audio, or the pass produces no wav, no marks, or
      * marks that fall outside its wav.
      */
-    override fun record(
+    override suspend fun record(
         demo: Path,
         workspace: Workspace,
     ): SoundTrack {
@@ -59,7 +63,7 @@ class SoundPass(
         val stagedDemo = installation.systemDirectory[description.stagedDemoName + DEMO_EXTENSION]
         try {
             demo.copy(stagedDemo) { "Demo file not found at $demo" }
-            recorderPackage.configure(description.recorderIni())
+            withContext(Dispatchers.IO) { recorderPackage.configure(description.recorderIni()) }
             val instance =
                 installation.instance(SOUND_PASS) {
                     exec = execScript(description)
@@ -79,16 +83,18 @@ class SoundPass(
                     }
                     userIni { PreferredSettings.applyUserIni(this) }
                 }
-            val result = instance.start().await(config.timeout(demoDuration))
+            val result = instance.play(config.timeout(demoDuration)) { }
             val wav = installation.systemDirectory[WAVE_NAME]
             val track = track(wav, result.log, Ffmpeg().duration(wav))
             val placedWav = workspace.file(WAVE_NAME)
             wav.move(placedWav)
             return track.copy(file = placedWav)
         } finally {
-            stagedDemo.deleteIfExists()
-            recorderPackage.clear()
-            installation.systemDirectory[WAVE_NAME].deleteIfExists()
+            withContext(NonCancellable + Dispatchers.IO) {
+                stagedDemo.deleteIfExists()
+                recorderPackage.clear()
+                installation.systemDirectory[WAVE_NAME].deleteIfExists()
+            }
         }
     }
 
@@ -104,15 +110,15 @@ class SoundPass(
      * @throws IllegalStateException when [wavFile] holds nothing, [log] holds no start mark, no end mark, or marks
      * outside the wav, naming what was missing.
      */
-    fun track(
+    suspend fun track(
         wavFile: Path,
         log: List<String>,
         wavDuration: Double,
     ): SoundTrack {
-        check(wavFile.exists()) { "The sound pass produced no $WAVE_NAME" }
+        check(withContext(Dispatchers.IO) { wavFile.exists() }) { "The sound pass produced no $WAVE_NAME" }
 
         val marks = DemoMarks.parse(log)
-        val opened = wavFile.getLastModifiedTime().toMillis() / 1000.0 - wavDuration
+        val opened = withContext(Dispatchers.IO) { wavFile.getLastModifiedTime() }.toMillis() / 1000.0 - wavDuration
         val offset = marks.start.wallTime.toEpochMilli() / 1000.0 - opened
         val span = marks.end.demoTime - marks.start.demoTime
         val length = (marks.end.wallTime.toEpochMilli() - marks.start.wallTime.toEpochMilli()) / 1000.0

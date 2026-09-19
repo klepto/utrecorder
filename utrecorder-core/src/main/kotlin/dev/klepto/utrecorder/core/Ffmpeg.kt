@@ -3,7 +3,8 @@ package dev.klepto.utrecorder.core
 import dev.klepto.utrecorder.common.config.PropertySource
 import dev.klepto.utrecorder.common.os.OperatingSystem
 import dev.klepto.utrecorder.common.process.Executable
-import dev.klepto.utrecorder.common.process.ExecutableProcess
+import dev.klepto.utrecorder.common.process.ExecutableResult
+import dev.klepto.utrecorder.common.process.startAndAwait
 import org.bytedeco.ffmpeg.ffmpeg
 import org.bytedeco.ffmpeg.ffprobe
 import org.bytedeco.javacpp.Loader
@@ -31,20 +32,17 @@ class Ffmpeg(
     /**
      * Runs ffmpeg with [arguments] and returns whether it exited with code `0`.
      */
-    override fun capture(vararg arguments: String): Boolean = run(*arguments)
+    override suspend fun capture(vararg arguments: String): Boolean = run(*arguments)
 
     /**
      * Runs ffmpeg with [arguments] and returns whether it exited with code `0`.
      */
-    fun run(vararg arguments: String): Boolean =
-        runCommandProcess(executablePath, arguments.toList())
-            .await()
-            .isSuccess
+    suspend fun run(vararg arguments: String): Boolean = runCommandProcess(executablePath, arguments.toList()).isSuccess
 
     /**
      * Returns how many seconds long [file] is, `0.0` when ffprobe reports nothing.
      */
-    override fun duration(file: Path): Double =
+    override suspend fun duration(file: Path): Double =
         readProbe(
             listOf(
                 "-show_entries",
@@ -58,7 +56,7 @@ class Ffmpeg(
     /**
      * Returns how many video frames [file] holds, `0` when ffprobe reports none.
      */
-    override fun frames(file: Path): Int =
+    override suspend fun frames(file: Path): Int =
         readProbe(
             listOf(
                 "-select_streams",
@@ -91,23 +89,23 @@ class Ffmpeg(
      * The lines the bundled ffprobe prints for the given probe [arguments], running from the directory its binary
      * holds.
      */
-    private fun readProbe(arguments: List<String>): List<String> =
+    private suspend fun readProbe(arguments: List<String>): List<String> =
         builder(probePath, probePath.parent, arguments)
             .copy(workingDirectory = probePath.parent)
             .startAndAwait()
             .output
 
     /**
-     * The process running the program at [path] with the given [arguments], working from the directory its binary
-     * holds.
+     * Runs the program at [path] with the given [arguments] to completion, working from the directory its binary
+     * holds, and returns the result.
      */
-    private fun runCommandProcess(
+    private suspend fun runCommandProcess(
         path: Path,
         arguments: List<String>,
-    ): ExecutableProcess =
+    ): ExecutableResult =
         builder(path, path.parent, arguments)
             .copy(workingDirectory = path.parent)
-            .start()
+            .startAndAwait()
 
     /**
      * The classpath location the loader extracts the bundled program [type] into.

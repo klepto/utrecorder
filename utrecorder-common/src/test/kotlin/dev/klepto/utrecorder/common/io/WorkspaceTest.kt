@@ -10,6 +10,11 @@ import io.kotest.matchers.paths.shouldNotExist
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldMatch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import java.io.FileOutputStream
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
@@ -99,12 +104,25 @@ class WorkspaceTest :
                 directory.shouldNotExist()
             }
 
-            test("removes the directory when the block returns from the enclosing function") {
-                fun leaveEarly(): Path {
-                    workspace("early", directories = Directories(root / "early")) { return it }
+            test("still removes the directory when the surrounding coroutine, not just the block, is cancelled") {
+                lateinit var directory: Path
+                val wroteFile = CompletableDeferred<Unit>()
+
+                coroutineScope {
+                    val job =
+                        launch {
+                            workspace("real-cancel", directories = Directories(root / "real-cancel")) {
+                                directory = it
+                                (it / "make.log").writeText("log")
+                                wroteFile.complete(Unit)
+                                awaitCancellation()
+                            }
+                        }
+                    wroteFile.await()
+                    job.cancelAndJoin()
                 }
 
-                leaveEarly().shouldNotExist()
+                directory.shouldNotExist()
             }
 
             test("gives two workspaces of the same name different directories") {

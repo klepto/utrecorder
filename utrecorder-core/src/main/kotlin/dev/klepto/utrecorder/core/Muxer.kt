@@ -1,5 +1,7 @@
 package dev.klepto.utrecorder.core
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 
 /**
@@ -17,12 +19,12 @@ class Muxer(
      *
      * @throws IllegalStateException when ffmpeg fails.
      */
-    override fun merge(
+    override suspend fun merge(
         video: Path,
         track: SoundTrack,
         target: Path,
     ): Path {
-        target.toAbsolutePath().toFile().delete()
+        withContext(Dispatchers.IO) { target.toAbsolutePath().toFile().delete() }
         if (ffmpeg.run(*arguments(video, track, target).toTypedArray())) {
             return target
         }

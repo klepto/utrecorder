@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.io.toAbsolutePath
 import dev.klepto.utrecorder.common.log.logger
+import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.system.exitProcess
 
@@ -51,7 +52,7 @@ class UtCli(
     /**
      * Runs the command the arguments name and returns the exit code of the process, `1` when the command fails.
      */
-    fun run(): Int =
+    suspend fun run(): Int =
         try {
             command().run(this)
             0
@@ -72,7 +73,7 @@ class UtCli(
     /**
      * Provisions the installation, and returns it.
      */
-    private fun install(): UtInstallation {
+    private suspend fun install(): UtInstallation {
         UtInstaller(config).install()
         return UtInstallation(config.gameDirectory, config.directories)
     }
@@ -81,7 +82,7 @@ class UtCli(
      * Compiles the package the `--sources` option names into the file the `--output` option names, provisioning the
      * installation it compiles with first.
      */
-    private fun make() {
+    private suspend fun make() {
         val sourcesPath = requireNotNull(path("sources")) { "Missing --sources" }
         val outputPath = requireNotNull(path("output")) { "Missing --output" }
         val editPackages = options["edit-packages"].orEmpty().split(',').filter { it.isNotBlank() }
@@ -107,19 +108,19 @@ class UtCli(
         val commandName: String,
     ) {
         INSTALL("install") {
-            override fun run(cli: UtCli) {
+            override suspend fun run(cli: UtCli) {
                 cli.install()
             }
         },
         MAKE("make") {
-            override fun run(cli: UtCli) = cli.make()
+            override suspend fun run(cli: UtCli) = cli.make()
         },
         ;
 
         /**
          * Runs this command against [cli].
          */
-        abstract fun run(cli: UtCli)
+        abstract suspend fun run(cli: UtCli)
     }
 
     companion object {
@@ -139,7 +140,14 @@ class UtCli(
 
         private val log = logger<UtCli>()
 
+        /**
+         * Runs this entry point as a process and exits with its result code.
+         *
+         * The one permanent `runBlocking` this function keeps: `@JvmStatic fun main(Array<String>)` cannot itself be
+         * `suspend`, and `JavaExec` — which is how `compileUscript` forks this class — can only call a real one. The
+         * other of the task's two sanctioned entry-point bridges is `UtRecorderCli.main(Array<String>)`.
+         */
         @JvmStatic
-        fun main(args: Array<String>): Unit = exitProcess(UtCli(args.toList()).run())
+        fun main(args: Array<String>): Unit = exitProcess(runBlocking { UtCli(args.toList()).run() })
     }
 }

@@ -9,6 +9,8 @@ import dev.klepto.utrecorder.common.io.headCatching
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.log.logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
@@ -53,7 +55,7 @@ class UtPackageInstaller(
      *
      * @throws UtPackageException when no source holds one of them at the GUID the demo names.
      */
-    override fun install() {
+    override suspend fun install() {
         for (required in packages) {
             if (installedPackage(required) != null) continue
             val source = localPackage(required) ?: fetchedPackage(required) ?: throw UtPackageException(required.name, sources)
@@ -64,42 +66,47 @@ class UtPackageInstaller(
     /**
      * Deletes the packages this installer fetched from the installation, leaving the ones it already held.
      */
-    override fun uninstall() {
-        fetched.forEach { it.path?.deleteIfExists() }
+    override suspend fun uninstall() {
+        withContext(Dispatchers.IO) {
+            fetched.forEach { it.path?.deleteIfExists() }
+        }
         fetched.clear()
     }
 
     /**
      * Returns `true` when the installation holds every named package at the GUID the demo names.
      */
-    override fun isInstalled(): Boolean = packages.all { installedPackage(it) != null }
+    override suspend fun isInstalled(): Boolean = packages.all { installedPackage(it) != null }
 
     /**
      * Returns the package the installation holds satisfying [required], or `null` when it holds none.
      */
-    private fun installedPackage(required: UtPackage): UtPackage? =
+    private suspend fun installedPackage(required: UtPackage): UtPackage? =
         UtDirectory.PACKAGES.firstNotNullOfOrNull { directory ->
-            installation.packages(directory).firstOrNull { it.satisfies(required) }
+            val candidates = installation.packages(directory)
+            withContext(Dispatchers.IO) { candidates.firstOrNull { it.satisfies(required) } }
         }
 
     /**
      * Returns the package the packages directory holds satisfying [required], or `null` when it holds none.
      */
-    private fun localPackage(required: UtPackage): UtPackage? =
-        UtPackage.list(config.directories.packages, UtDirectory.PACKAGE_EXTENSIONS).firstOrNull { it.satisfies(required) }
+    private suspend fun localPackage(required: UtPackage): UtPackage? {
+        val candidates = UtPackage.list(config.directories.packages, UtDirectory.PACKAGE_EXTENSIONS)
+        return withContext(Dispatchers.IO) { candidates.firstOrNull { it.satisfies(required) } }
+    }
 
     /**
      * Returns the package [required] fetched from the first redirect serving it into the packages directory, or
      * `null` when no redirect serves one at the GUID the demo recorded.
      */
-    private fun fetchedPackage(required: UtPackage): UtPackage? = config.redirectUrls.firstNotNullOfOrNull { fetch(it, required) }
+    private suspend fun fetchedPackage(required: UtPackage): UtPackage? = config.redirectUrls.firstNotNullOfOrNull { fetch(it, required) }
 
     /**
      * Returns the package [required] fetched from the redirect [base] into the packages directory under the first
      * package extension the redirect serves, or `null` when it serves none, or serves one at another GUID than the
      * demo recorded and the fetched file is discarded.
      */
-    private fun fetch(
+    private suspend fun fetch(
         base: String,
         required: UtPackage,
     ): UtPackage? {
@@ -114,16 +121,16 @@ class UtPackageInstaller(
         workspace("uz-installer", directories = config.directories) { staging ->
             val archive = staging["${target.fileName}.uz"]
             Downloader(url, directories = config.directories).download(archive)
-            val extracted = installation.compiler.extract(archive, staging["${target.fileName}"])
-            archive.deleteIfExists()
+            val extracted = withContext(Dispatchers.IO) { installation.compiler.extract(archive, staging["${target.fileName}"]) }
+            withContext(Dispatchers.IO) { archive.deleteIfExists() }
             extracted.move(target)
         }
 
         val fetched = UtPackage.read(target)
-        if (fetched.satisfies(required)) return fetched
+        if (withContext(Dispatchers.IO) { fetched.satisfies(required) }) return fetched
 
         log.warn { "Discarding ${target.fileName}, its GUID ${fetched.guid} does not match the recorded ${required.guid}" }
-        target.deleteIfExists()
+        withContext(Dispatchers.IO) { target.deleteIfExists() }
         return null
     }
 
@@ -131,7 +138,7 @@ class UtPackageInstaller(
      * Copies [source] into the directory of the installation its extension maps to, replacing whatever the
      * installation holds under that name, and returns the package the installation now holds.
      */
-    private fun copyIntoInstallation(source: UtPackage): UtPackage {
+    private suspend fun copyIntoInstallation(source: UtPackage): UtPackage {
         val path = checkNotNull(source.path) { "No file holds the package ${source.name}" }
         return UtPackage.read(path.copy(installationPath(path), overwrite = true))
     }

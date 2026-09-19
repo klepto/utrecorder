@@ -1,6 +1,8 @@
 package dev.klepto.utrecorder.common.io
 
 import com.github.stephenc.javaisotools.loopfs.iso9660.Iso9660FileSystem
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
@@ -88,18 +90,19 @@ private fun Path.markExecutable() {
  *
  * @throws IllegalStateException if the archive extension matches none of the supported formats.
  */
-fun Path.extract(
+suspend fun Path.extract(
     target: Path = this.toAbsolutePath().parent,
     filter: (String) -> Boolean = { true },
-) {
-    val name = fileName.toString().lowercase()
-    when {
-        name.endsWith(".iso") -> extractIso(target, filter)
-        name.endsWith(".zip") -> extractZip(target, filter)
-        name.endsWith(".tar.bz2") -> extractTarBzip2(target, filter)
-        else -> error("Unsupported archive format: $fileName")
+): Unit =
+    withContext(Dispatchers.IO) {
+        val name = fileName.toString().lowercase()
+        when {
+            name.endsWith(".iso") -> extractIso(target, filter)
+            name.endsWith(".zip") -> extractZip(target, filter)
+            name.endsWith(".tar.bz2") -> extractTarBzip2(target, filter)
+            else -> error("Unsupported archive format: $fileName")
+        }
     }
-}
 
 private fun Path.extractIso(
     target: Path,

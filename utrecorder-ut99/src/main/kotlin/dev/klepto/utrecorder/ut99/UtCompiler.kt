@@ -8,6 +8,9 @@ import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableResult
+import dev.klepto.utrecorder.common.process.startAndAwait
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.absolutePathString
@@ -48,7 +51,7 @@ class UtCompiler(
     /**
      * Runs the compiler with the given [arguments] and returns the result without inspecting its exit code.
      */
-    private fun run(vararg arguments: String): ExecutableResult =
+    private suspend fun run(vararg arguments: String): ExecutableResult =
         Executable
             .build(executablePath.toAbsolutePath()) {
                 workingDirectory = directory
@@ -60,7 +63,7 @@ class UtCompiler(
      * Extracts the `.uz` archive into given [outputPath]. If [outputPath] is not specified, the archive will be
      * extracted in the same directory as the `.uz` file.
      */
-    fun extract(
+    suspend fun extract(
         uzPath: Path,
         outputPath: Path? = null,
     ): Path {
@@ -69,7 +72,7 @@ class UtCompiler(
 
         run("decompress", uzPath.absolutePathString()).orThrow()
         val resultPath = directory[fileName]
-        check(resultPath.exists()) { "UCC failed to extract $uzPath" }
+        withContext(Dispatchers.IO) { check(resultPath.exists()) { "UCC failed to extract $uzPath" } }
         if (resultPath != targetPath) {
             resultPath.move(targetPath)
         }
@@ -86,12 +89,12 @@ class UtCompiler(
      * @throws IllegalStateException if [sourcesPath] is not a directory, or if the compiler fails.
      */
     @OptIn(ExperimentalPathApi::class)
-    fun make(
+    suspend fun make(
         sourcesPath: Path,
         outputPath: Path,
         configure: UtIni.() -> Unit = {},
     ): Path {
-        check(sourcesPath.isDirectory()) { "UT package sources not found at $sourcesPath" }
+        withContext(Dispatchers.IO) { check(sourcesPath.isDirectory()) { "UT package sources not found at $sourcesPath" } }
 
         val packageName = sourcesPath.fileName.toString()
         val packageFileName = "$packageName.u"
@@ -107,18 +110,20 @@ class UtCompiler(
 
             val result =
                 try {
-                    stagedPath.deleteRecursively()
-                    sourcesPath.copyToRecursively(stagedPath, followLinks = false, overwrite = true)
-                    producedPath.deleteIfExists()
+                    withContext(Dispatchers.IO) {
+                        stagedPath.deleteRecursively()
+                        sourcesPath.copyToRecursively(stagedPath, followLinks = false, overwrite = true)
+                        producedPath.deleteIfExists()
+                    }
                     run("make", "-nobind", "-bytehax", "-packages=$packageName", "-ini=${iniPath.absolutePathString()}")
                 } finally {
                     stagedPath.deleteCatching()
                 }
 
-            file(MAKE_LOG).writeText(result.output.joinToString(System.lineSeparator()))
+            withContext(Dispatchers.IO) { file(MAKE_LOG).writeText(result.output.joinToString(System.lineSeparator())) }
             result.orThrow()
 
-            check(producedPath.exists()) { "UCC failed to compile $packageName, see ${file(MAKE_LOG)}" }
+            withContext(Dispatchers.IO) { check(producedPath.exists()) { "UCC failed to compile $packageName, see ${file(MAKE_LOG)}" } }
             producedPath.move(file(packageFileName))
 
             file(packageFileName).copy(outputPath, overwrite = true)
@@ -128,9 +133,9 @@ class UtCompiler(
     /**
      * Reads the default configuration of the installation.
      */
-    private fun defaultConfig(): UtIni {
+    private suspend fun defaultConfig(): UtIni {
         val defaultPath = installation.defaultIniPath
-        check(defaultPath.exists()) { "UT default configuration not found at $defaultPath" }
+        withContext(Dispatchers.IO) { check(defaultPath.exists()) { "UT default configuration not found at $defaultPath" } }
         return UtIni.read(defaultPath)
     }
 

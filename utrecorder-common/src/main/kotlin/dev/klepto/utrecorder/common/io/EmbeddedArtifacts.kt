@@ -1,5 +1,7 @@
 package dev.klepto.utrecorder.common.io
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URL
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
@@ -48,22 +50,24 @@ class EmbeddedArtifacts(
      *
      * @throws IllegalStateException if the classpath holds no such artifact.
      */
-    fun read(name: String): ByteArray {
-        val path = "$namespace/$name"
-        val stream = classLoader.getResourceAsStream(path) ?: error("Embedded artifact not found at $path")
-        return stream.use { it.readBytes() }
-    }
+    suspend fun read(name: String): ByteArray =
+        withContext(Dispatchers.IO) {
+            val path = "$namespace/$name"
+            val stream = classLoader.getResourceAsStream(path) ?: error("Embedded artifact not found at $path")
+            stream.use { it.readBytes() }
+        }
 
     /**
      * Writes every artifact this namespace holds into [directory], overwriting the files already there, and returns
      * the paths written.
      */
-    fun extractTo(directory: Path): List<Path> {
-        directory.createDirectories()
-        return names.map { name ->
-            directory[name].also { path -> path.createParentDirectories().writeBytes(read(name)) }
+    suspend fun extractTo(directory: Path): List<Path> =
+        withContext(Dispatchers.IO) {
+            directory.createDirectories()
+            names.map { name ->
+                directory[name].also { path -> path.createParentDirectories().writeBytes(read(name)) }
+            }
         }
-    }
 
     companion object {
         /**

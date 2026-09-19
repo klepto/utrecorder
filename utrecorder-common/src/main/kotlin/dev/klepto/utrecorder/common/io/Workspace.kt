@@ -5,6 +5,9 @@ import dev.klepto.utrecorder.common.io.Workspace.Companion.RETENTION
 import dev.klepto.utrecorder.common.log.logger
 import dev.klepto.utrecorder.common.log.mergeAndThrow
 import dev.klepto.utrecorder.common.time.TimestampId
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.Queue
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -25,14 +28,14 @@ import kotlin.time.toKotlinInstant
  * shared [rootDirectory].
  *
  * Use [workspace] to run a block in one, which removes the workspace when the block returns and keeps it for inspection
- * when the block throws. Constructing a workspace removes the entries earlier workspaces left behind more than 7 days
- * ago.
+ * when the block throws. [open] creates the workspace directory and removes the entries earlier workspaces left behind
+ * more than 7 days ago.
  *
  * @property name The name the directory or the files of this workspace start with, followed by its id.
  * @property rootDirectory The shared directory this workspace names its files in, or `null` for a directory of its own.
  * @property directories The directories holding the workspace directory.
  */
-class Workspace(
+class Workspace private constructor(
     val name: String,
     val rootDirectory: Path? = null,
     private val directories: Directories = Directories.DEFAULT,
@@ -60,8 +63,9 @@ class Workspace(
 
     /**
      * The directory the block of this workspace works in: [rootDirectory] when shared, its own directory otherwise.
+     * [open] creates it on disk.
      */
-    val directory: Path = (rootDirectory ?: workspaceDirectory).createDirectories()
+    val directory: Path = rootDirectory ?: workspaceDirectory
 
     /**
      * The prefix of every file this workspace names, empty for a directory of its own.
@@ -78,19 +82,15 @@ class Workspace(
      */
     private val sharedEntryPattern = Regex("""^${Regex.escape(name)}-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-""")
 
-    init {
-        runCatching { prune() }.onFailure { log.warn(it) { "Failed to prune expired workspace entries" } }
-    }
-
     /**
      * Returns a new empty file in [directory].
      */
-    fun tempFile(): Path = createTempFile(directory, filePrefix).also(::track)
+    suspend fun tempFile(): Path = withContext(Dispatchers.IO) { createTempFile(directory, filePrefix) }.also(::track)
 
     /**
      * Returns a new empty directory in [directory].
      */
-    fun tempDirectory(): Path = createTempDirectory(directory, filePrefix).also(::track)
+    suspend fun tempDirectory(): Path = withContext(Dispatchers.IO) { createTempDirectory(directory, filePrefix) }.also(::track)
 
     /**
      * Returns the path of the file [name] in [directory], prefixed with the name and id of this workspace when shared.
@@ -102,14 +102,15 @@ class Workspace(
      * Returns the directory [name] in [directory], prefixed with the name and id of this workspace when shared, creating
      * it.
      */
-    fun directory(name: String): Path = directory["$filePrefix$name"].createDirectories().also(::track)
+    suspend fun directory(name: String): Path =
+        withContext(Dispatchers.IO) { directory["$filePrefix$name"].createDirectories() }.also(::track)
 
     /**
      * Removes this workspace: its own directory, or the files it named in the shared root.
      *
      * @throws java.io.IOException if an entry cannot be removed, once every entry has been tried.
      */
-    fun delete() {
+    suspend fun delete() {
         if (!shared) {
             directory.deleteCatching().getOrThrow()
             return
@@ -126,11 +127,11 @@ class Workspace(
      *
      * @throws java.io.IOException if a file cannot be moved, once every file has been tried.
      */
-    fun persistShared() {
+    suspend fun persistShared() {
         if (!shared) return
-        workspaceDirectory.createDirectories()
-        outputs
-            .filter { it.exists() }
+        withContext(Dispatchers.IO) { workspaceDirectory.createDirectories() }
+        val toPersist = withContext(Dispatchers.IO) { outputs.filter { it.exists() } }
+        toPersist
             .mapNotNull { persistCatching(it).exceptionOrNull() }
             .mergeAndThrow()
     }
@@ -138,7 +139,7 @@ class Workspace(
     /**
      * Moves the shared file at [path] into [workspaceDirectory], without its prefix.
      */
-    private fun persistCatching(path: Path): Result<Unit> =
+    private suspend fun persistCatching(path: Path): Result<Unit> =
         runCatching { path.move(workspaceDirectory[path.fileName.toString().removePrefix(filePrefix)]) }
 
     /**
@@ -154,7 +155,7 @@ class Workspace(
      *
      * @throws java.io.IOException if an entry cannot be read or removed, once every entry has been tried.
      */
-    private fun prune() {
+    private suspend fun prune() {
         val deadline = Clock.System.now() - RETENTION
         pruneCandidates()
             .mapNotNull { pruneCatching(it, deadline).exceptionOrNull() }
@@ -165,11 +166,12 @@ class Workspace(
      * Returns the entries [prune] considers: every entry of [Directories.workspace], and the files of the shared root
      * whose name matches [sharedEntryPattern].
      */
-    private fun pruneCandidates(): List<Path> {
-        val owned = directories.workspace.createDirectories().listDirectoryEntries()
-        val sharedEntries = rootDirectory?.listDirectoryEntries().orEmpty()
-        return owned + sharedEntries.filter { sharedEntryPattern.containsMatchIn(it.fileName.toString()) }
-    }
+    private suspend fun pruneCandidates(): List<Path> =
+        withContext(Dispatchers.IO) {
+            val owned = directories.workspace.createDirectories().listDirectoryEntries()
+            val sharedEntries = rootDirectory?.listDirectoryEntries().orEmpty()
+            owned + sharedEntries.filter { sharedEntryPattern.containsMatchIn(it.fileName.toString()) }
+        }
 
     companion object {
         /**
@@ -188,13 +190,28 @@ class Workspace(
         private val log = logger<Workspace>()
 
         /**
+         * Creates the workspace directory of a new [Workspace] of [name], prunes the entries [directories] and
+         * [rootDirectory] hold that are older than [RETENTION], and returns it.
+         */
+        suspend fun open(
+            name: String,
+            rootDirectory: Path? = null,
+            directories: Directories = Directories.DEFAULT,
+        ): Workspace {
+            val workspace = Workspace(name, rootDirectory, directories)
+            withContext(Dispatchers.IO) { workspace.directory.createDirectories() }
+            runCatching { workspace.prune() }.onFailure { log.warn(it) { "Failed to prune expired workspace entries" } }
+            return workspace
+        }
+
+        /**
          * Removes the entry at [path] when it was last modified before [deadline].
          */
-        private fun pruneCatching(
+        private suspend fun pruneCatching(
             path: Path,
             deadline: Instant,
         ): Result<Unit> =
-            runCatching { path.getLastModifiedTime().toInstant().toKotlinInstant() < deadline }
+            runCatching { withContext(Dispatchers.IO) { path.getLastModifiedTime() }.toInstant().toKotlinInstant() < deadline }
                 .mapCatching { expired -> if (expired) path.deleteCatching().getOrThrow() }
     }
 }
@@ -204,26 +221,27 @@ class Workspace(
  *
  * The block receives the workspace and its [Workspace.directory]. Without a [rootDirectory], the workspace is a
  * directory of its own under [Directories.workspace]. With one, it names its files inside [rootDirectory]. The
- * workspace is removed when the block returns, returns from the enclosing function, or is cancelled. When the block
- * throws, a workspace of its own is kept in place and the files of a shared one are moved into a directory under
- * [Directories.workspace], and the exception is rethrown. A block producing a file the caller keeps moves or copies it
- * out before it returns.
+ * workspace is removed when the block returns or is cancelled. When the block throws, a workspace of its own is kept
+ * in place and the files of a shared one are moved into a directory under [Directories.workspace], and the exception
+ * is rethrown. A block producing a file the caller keeps moves or copies it out before it returns.
  *
  * @throws java.io.IOException if the workspace cannot be removed after the block returned.
  */
-inline fun <T> workspace(
+suspend fun <T> workspace(
     name: String = "task",
     rootDirectory: Path? = null,
     directories: Directories = Directories.DEFAULT,
-    block: Workspace.(Path) -> T,
+    block: suspend Workspace.(Path) -> T,
 ): T {
-    val workspace = Workspace(name, rootDirectory, directories)
+    val workspace = Workspace.open(name, rootDirectory, directories)
     var ended = false
     try {
         return block(workspace, workspace.directory)
     } catch (cancelled: CancellationException) {
         ended = true
-        runCatching { workspace.delete() }.onFailure(cancelled::addSuppressed)
+        withContext(NonCancellable) {
+            runCatching { workspace.delete() }.onFailure(cancelled::addSuppressed)
+        }
         throw cancelled
     } catch (cause: Exception) {
         ended = true

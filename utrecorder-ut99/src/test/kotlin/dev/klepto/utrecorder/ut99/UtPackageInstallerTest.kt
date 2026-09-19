@@ -3,6 +3,7 @@ package dev.klepto.utrecorder.ut99
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.process.Executable
+import dev.klepto.utrecorder.common.process.startAndAwait
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -121,7 +122,7 @@ class UtPackageInstallerTest :
             return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
         }
 
-        fun fakeCompiler(directory: Path): Path {
+        suspend fun fakeCompiler(directory: Path): Path {
             directory.createDirectories()
             val binary = directory / platform.compilerExecutable
             if (platform != UtPlatform.WINDOWS) {
@@ -139,11 +140,13 @@ class UtPackageInstallerTest :
             return binary
         }
 
-        val fakeCompiler by lazy { fakeCompiler(root / "fake-ucc") }
+        var fakeCompilerCache: Path? = null
+
+        suspend fun fakeCompiler(): Path = fakeCompilerCache ?: fakeCompiler(root / "fake-ucc").also { fakeCompilerCache = it }
 
         fun packagesDirectory(name: String): Path = Directories(root / name).packages
 
-        fun installation(
+        suspend fun installation(
             name: String,
             compilerFails: Boolean = false,
         ): UtInstallation {
@@ -151,7 +154,7 @@ class UtPackageInstallerTest :
             systemDirectory.createDirectories()
             packagesDirectory(name).createDirectories()
             (systemDirectory / platform.gameExecutable).writeText("")
-            fakeCompiler.copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
+            fakeCompiler().copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
             if (compilerFails) {
                 (systemDirectory / "ucc.fail").writeText("")
             }
