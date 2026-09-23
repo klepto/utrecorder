@@ -168,7 +168,7 @@ class RecordingSessionTest :
         }
 
         test(
-            "a recording whose frame pass and sound track both succeed produces the mp4 at output/<job-id>/<name>.mp4 and leaves the wav deleted",
+            "a recording whose frame pass and sound track both succeed produces the mp4 at output/<job-id>/<name>.mp4 and keeps the wav",
         ) {
             val cacheAudio =
                 (directories.cache / "audio.wav").also { file ->
@@ -185,7 +185,7 @@ class RecordingSessionTest :
             produced.fileName.toString() shouldBe "demo-file.mp4"
             produced.parent shouldBe directories.workspace.listDirectoryEntries().single()
             produced.exists() shouldBe true
-            cacheAudio.exists() shouldBe false
+            cacheAudio.exists() shouldBe true
         }
 
         test("a sound pass that fails propagates as a failed recording, never a silent video-only mp4") {

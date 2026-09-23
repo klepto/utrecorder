@@ -136,7 +136,7 @@ class FramePassTest :
             execArgument shouldBe "-EXEC=${files.exec.absolutePathString()}"
         }
 
-        test("the exec script holds the staged demo, the stepped clock and the configured frame rate") {
+        test("the exec script holds the staged demo, the stepped clock, the configured frame rate and hidden messages") {
             val tunedConfig = config.copy(fps = 30)
             val description = PlaybackDescription.of("staged-demo", Duration.ZERO, tunedConfig)
 
@@ -144,6 +144,7 @@ class FramePassTest :
                 listOf(
                     "demoplay staged-demo?timebased",
                     "DemoFrames 30.000000",
+                    "HideMessages",
                 )
         }
 

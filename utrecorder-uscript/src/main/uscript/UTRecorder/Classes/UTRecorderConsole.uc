@@ -23,6 +23,11 @@ class UTRecorderConsole extends UTConsole
 const SHOW_PLAYERCTRL = 0x00000800;
 const SHOW_REALTIME = 0x00004000;
 
+// A tick shorter than this counts as settled for RewindStart.
+const SETTLED_DELTA = 0.05;
+// Settled ticks in a row RewindStart waits for before seeking back.
+const SETTLED_TICKS = 10;
+
 // Master switch. Off by default so the class is harmless if it is left
 // installed while the machine is used for normal play.
 var config bool  bAutoExit;
@@ -48,6 +53,7 @@ var config int SpawnHealth;
 var config float SpawnTimeout;
 
 var bool bNoRendering;
+var bool bHideMessages;
 var bool bSignalledSpawn;
 var bool bSeenPlayer;
 var bool bSeenDead;
@@ -56,6 +62,9 @@ var float LastStreamTime;
 var int RenderedFrames;
 var bool bMarkedStart;
 var bool bMarkedEnd;
+var bool bRewindStart;    // seek back to the demo's start once ticks settle
+var bool bRewound;        // the rewind seek has been issued
+var int SettledTicks;     // settled ticks in a row before the rewind
 
 var float Elapsed;        // seconds since this console was created
 var float SinceEnd;       // seconds since the demo last looked finished
@@ -70,6 +79,9 @@ event Tick(float Delta)
 {
 	if (bNoRendering)
 		StopRendering();
+
+	if (bHideMessages)
+		ClearHUDMessages();
 
 	if (PlaybackFrameRate > 0.0)
 		CheckSpawn(Delta);
@@ -122,6 +134,85 @@ function StopRendering()
 
 	Player = Viewport.Actor;
 	Player.ShowFlags = Player.ShowFlags & ~(SHOW_REALTIME | SHOW_PLAYERCTRL);
+}
+
+// Chat and BTPog lines reach the HUD through the InterceptHUD udemo gives the
+// linked player, and BTPog's stats block is a progress message. Swapping that
+// HUD for one that drops string messages, and expiring the progress timeout
+// every tick, keeps them off the HUD while the timer and the rest of it still
+// draw.
+exec function HideMessages()
+{
+	bHideMessages = True;
+	Log("UTRecorder: hiding HUD messages", 'UTRecorder');
+}
+
+function ClearHUDMessages()
+{
+	local DemoPlaybackSpec Spec;
+	local PlayerPawn Linked;
+
+	if (Viewport == None)
+		return;
+
+	Spec = DemoPlaybackSpec(Viewport.Actor);
+	if (Spec == None)
+		return;
+
+	Spec.ProgressTimeOut = 0;
+	Linked = Spec.PlayerLinked;
+	if (Linked == None)
+		return;
+
+	Linked.ProgressTimeOut = 0;
+	if (InterceptHUD(Linked.myHUD) != None && UTRecorderHUD(Linked.myHUD) == None)
+		MuteHUD(Spec, Linked);
+}
+
+// udemo steals the HUD again only when the linked player changes, so the swap
+// holds until then and the next tick repeats it.
+function MuteHUD(DemoPlaybackSpec Spec, PlayerPawn Linked)
+{
+	local UTRecorderHUD HUD;
+
+	HUD = Spec.Spawn(class'UTRecorderHUD', Linked);
+	HUD.Real = Spec;
+	Linked.myHUD.Destroy();
+	Linked.myHUD = HUD;
+	Log("UTRecorder: muted the HUD of" @ Linked.PlayerReplicationInfo.PlayerName, 'UTRecorder');
+}
+
+// Timebased playback advances the demo by each tick's delta, so the first demo
+// tick, which carries the map load, skips the demo's opening seconds along with
+// their sounds. This seeks back to the start once ticks settle, before the start
+// mark.
+exec function RewindStart()
+{
+	bRewindStart = True;
+	Log("UTRecorder: rewinding to the demo start once ticks settle", 'UTRecorder');
+}
+
+// True while the rewind RewindStart asked for is pending or still seeking.
+function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
+{
+	if (!bRewindStart)
+		return False;
+
+	if (bRewound)
+		return Spec.SeekTick > 0 || Spec.bSeeking;
+
+	if (Delta < SETTLED_DELTA)
+		SettledTicks++;
+	else
+		SettledTicks = 0;
+
+	if (SettledTicks < SETTLED_TICKS)
+		return True;
+
+	bRewound = True;
+	Log("UTRecorder: rewinding from" @ Spec.Driver.GetCurrentTime(), 'UTRecorder');
+	Spec.SeekTo("0");
+	return True;
 }
 
 exec function DemoFrames(float Rate)
@@ -262,6 +353,9 @@ function CheckPlayback(float Delta)
 		return;
 
 	LastStreamTime = Spec.Driver.GetCurrentTime();
+
+	if (Rewinding(Spec, Delta))
+		return;
 
 	Total = Spec.Driver.GetTotalFrames();
 	Cur   = Spec.Driver.GetCurrentFrame();

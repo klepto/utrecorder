@@ -168,12 +168,14 @@ class FramePass(
 
     /**
      * The lines of the exec script the pass plays: the [PlaybackDescription.execLine] pinned to the stepped clock
-     * with `?timebased`, and the console's trim command holding `DemoFrames <fps>`.
+     * with `?timebased`, the console's trim command holding `DemoFrames <fps>`, and `HideMessages` keeping chat and
+     * progress messages off the recorded HUD.
      */
     fun execScript(description: PlaybackDescription): List<String> =
         listOf(
             "${description.execLine}?timebased",
             "DemoFrames ${config.fps.toDouble().format()}",
+            HIDE_MESSAGES,
         )
 
     /**
@@ -182,6 +184,11 @@ class FramePass(
     private fun Double.format(): String = String.format(Locale.ROOT, "%.6f", this)
 
     companion object {
+        /**
+         * The console command that keeps chat and progress messages off the recorded HUD.
+         */
+        private const val HIDE_MESSAGES = "HideMessages"
+
         /**
          * The name the frame pass's instance workspace carries.
          */

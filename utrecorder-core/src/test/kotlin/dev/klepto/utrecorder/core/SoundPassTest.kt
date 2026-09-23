@@ -133,10 +133,10 @@ class SoundPassTest :
         }
 
         context("execScript") {
-            test("the exec script holds the staged demo at real speed") {
+            test("the exec script holds the staged demo at real speed, rewound to its start") {
                 val description = PlaybackDescription.of("staged-demo", Duration.ZERO, config)
 
-                pass().execScript(description) shouldBe listOf("demoplay staged-demo?timebased")
+                pass().execScript(description) shouldBe listOf("demoplay staged-demo?timebased", "RewindStart")
             }
 
             test("the exec script appends DisableRendering only when rendering is disabled") {
@@ -145,6 +145,7 @@ class SoundPassTest :
                 pass(config.copy(soundRender = false)).execScript(description) shouldBe
                     listOf(
                         "demoplay staged-demo?timebased",
+                        "RewindStart",
                         "DisableRendering",
                     )
             }

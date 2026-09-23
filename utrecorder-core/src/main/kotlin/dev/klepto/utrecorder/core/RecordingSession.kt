@@ -7,10 +7,8 @@ import dev.klepto.utrecorder.ut99.UtInstallation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
-import kotlin.io.path.deleteIfExists
 import kotlin.time.DurationUnit
 
 /**
@@ -59,7 +57,7 @@ class RecordingSession(
      * of the frame pass and awaited before the capture stops; a failed sound pass fails the recording, never leaving
      * it the video alone, and cancelling the coroutine running this call cancels both passes in turn. The mux reads
      * the video length back off the finished capture, places the sound track on the frame pass's end mark, and writes
-     * the finished mp4 as `<name>.mp4` in the workspace, the wav deleted behind it.
+     * the finished mp4 as `<name>.mp4` in the workspace, the wav kept beside it.
      *
      * @throws IllegalStateException when the frame pass or, when [RecorderConfig.audio] holds, the sound pass fails.
      */
@@ -93,7 +91,6 @@ class RecordingSession(
         val target = workspace[name + MP4_EXTENSION]
         val required = checkNotNull(placedTrack) { "The sound pass of $video produced no track" }
         muxer.merge(video, required, target)
-        withContext(Dispatchers.IO) { track?.file?.deleteIfExists() }
         return target
     }
 

@@ -169,10 +169,11 @@ class SoundPass(
 
     /**
      * Returns the lines of the exec script the pass plays: the [PlaybackDescription.execLine] pinned to the demo's own
-     * clock with `?timebased`, and `DisableRendering` when the config turns the sound pass's rendering off.
+     * clock with `?timebased`, `RewindStart` seeking back to the demo's start once the run's ticks settle, and
+     * `DisableRendering` when the config turns the sound pass's rendering off.
      */
     fun execScript(description: PlaybackDescription): List<String> {
-        val lines = mutableListOf("${description.execLine}?timebased")
+        val lines = mutableListOf("${description.execLine}?timebased", REWIND_START)
         if (!config.soundRender) lines += DISABLE_RENDERING
         return lines
     }
@@ -214,6 +215,11 @@ class SoundPass(
          * The render device section the sound pass caps.
          */
         private const val RENDER_DEVICE = "OpenGLDrv.OpenGLRenderDevice"
+
+        /**
+         * The console command seeking the sound pass back to the demo's start once its ticks settle.
+         */
+        private const val REWIND_START = "RewindStart"
 
         /**
          * The console command turning the sound pass's rendering off.
