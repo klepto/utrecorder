@@ -546,6 +546,17 @@ class UtDemoTest :
                 UtDemo.read(bytes).cap shouldBe null
             }
 
+            test("length past the largest int") {
+                val payload = byteArrayOf(0x7F, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x0F) + ByteArray(30) { 0x41 }
+                val bytes =
+                    demo(
+                        controlRecord(0f, "WELCOME LEVEL=TestMap LONE=0"),
+                        record(77f, packet { bunch(1, payload) }),
+                    )
+
+                UtDemo.read(bytes).cap shouldBe null
+            }
+
             test("name encoding") {
                 val name = "fiérd_1"
                 val bytes = capDemo(btSpawn(2.5f, "CAPID1"), btCapped(77f, name), btCapMarker(77f, "CAPID1"))

@@ -64,6 +64,8 @@ class Muxer(
             "-ac",
             "2",
             "-shortest",
+            "-movflags",
+            "+faststart",
             target.toString(),
         )
 

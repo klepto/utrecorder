@@ -85,8 +85,7 @@ class UtDemoRecord private constructor(
             ): String? {
                 val length = compactIndexAt(data, index) ?: return null
                 val start = index + length.size
-                val end = start + length.value
-                val framed = length.value >= MIN_STRING_BYTES && end <= data.size && data.isFramedString(start, end)
+                val framed = length.value in MIN_STRING_BYTES..data.size - start && data.isFramedString(start, start + length.value)
 
                 return when {
                     framed -> stringAt(data, start, length.value)

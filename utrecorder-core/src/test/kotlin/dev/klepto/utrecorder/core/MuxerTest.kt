@@ -51,6 +51,8 @@ class MuxerTest :
                     "-ac",
                     "2",
                     "-shortest",
+                    "-movflags",
+                    "+faststart",
                     "out.mp4",
                 )
         }

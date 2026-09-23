@@ -13,6 +13,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.name
+import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 
 class UtMapInstallerTest :
@@ -28,8 +29,9 @@ class UtMapInstallerTest :
             """
             #!/bin/sh
             DIRECTORY=${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)
-            NAME=${'$'}(basename "${'$'}2" .uz)
-            cp "${'$'}2" "${'$'}DIRECTORY/${'$'}NAME"
+            LENGTH=${'$'}(od -An -tu1 -j4 -N1 "${'$'}2" | tr -d ' ')
+            NAME=${'$'}(dd if="${'$'}2" bs=1 skip=5 count=${'$'}((LENGTH - 1)) 2>/dev/null)
+            tail -c +${'$'}((LENGTH + 6)) "${'$'}2" > "${'$'}DIRECTORY/${'$'}NAME"
             echo "FAKE UCC: decompressed ${'$'}NAME"
             exit 0
             """.trimIndent()
@@ -44,13 +46,12 @@ class UtMapInstallerTest :
                 static int Main(string[] arguments)
                 {
                     string directory = AppDomain.CurrentDomain.BaseDirectory;
-                    string name = Path.GetFileName(arguments[1]);
-                    if (name.EndsWith(".uz", StringComparison.OrdinalIgnoreCase))
-                    {
-                        name = name.Substring(0, name.Length - 3);
-                    }
-
-                    File.Copy(arguments[1], Path.Combine(directory, name), true);
+                    byte[] archive = File.ReadAllBytes(arguments[1]);
+                    string name = System.Text.Encoding.ASCII.GetString(archive, 5, archive[4] - 1);
+                    int body = 5 + archive[4];
+                    byte[] content = new byte[archive.Length - body];
+                    Array.Copy(archive, body, content, 0, content.Length);
+                    File.WriteAllBytes(Path.Combine(directory, name), content);
                     Console.WriteLine("FAKE UCC: decompressed " + name);
                     return 0;
                 }
@@ -99,6 +100,11 @@ class UtMapInstallerTest :
 
         fun emptyFile(path: Path): Path = path.createParentDirectories().also { it.writeText("") }
 
+        fun archive(path: Path): Path {
+            val name = path.name.removeSuffix(".uz").toByteArray() + byteArrayOf(0)
+            return path.createParentDirectories().also { it.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, name.size.toByte()) + name) }
+        }
+
         context("compressed") {
             test("lists the .uz archives a maps directory holds") {
                 val installation = installation("compressed-lists")
@@ -129,7 +135,7 @@ class UtMapInstallerTest :
             test("writes the archive's map into the maps directory under its own name without the .uz suffix") {
                 val installation = installation("extract-target")
                 val mapsDirectory = installation.directory / UtDirectory.Maps.name
-                emptyFile(mapsDirectory / "CTF-BT-Test.unr.uz")
+                archive(mapsDirectory / "CTF-BT-Test.unr.uz")
                 val installer = installer(installation)
 
                 val extract = installer.extract(mapsDirectory / "CTF-BT-Test.unr.uz")
@@ -141,7 +147,7 @@ class UtMapInstallerTest :
             test("leaves the archive it extracted in place") {
                 val installation = installation("extract-archive-kept")
                 val mapsDirectory = installation.directory / UtDirectory.Maps.name
-                val archive = emptyFile(mapsDirectory / "CTF-BT-Test.unr.uz")
+                val archive = archive(mapsDirectory / "CTF-BT-Test.unr.uz")
                 val installer = installer(installation)
 
                 installer.extract(archive)
@@ -154,8 +160,8 @@ class UtMapInstallerTest :
             test("decompresses every archive holding no map and removes the archive once its map exists") {
                 val installation = installation("install-fresh")
                 val mapsDirectory = installation.directory / UtDirectory.Maps.name
-                emptyFile(mapsDirectory / "CTF-BT-Test.unr.uz")
-                emptyFile(mapsDirectory / "CTF-BT-II.unr.uz")
+                archive(mapsDirectory / "CTF-BT-Test.unr.uz")
+                archive(mapsDirectory / "CTF-BT-II.unr.uz")
                 val installer = installer(installation)
 
                 installer.install()
@@ -170,7 +176,7 @@ class UtMapInstallerTest :
             test("leaves an archive whose decompressed map already exists alone and stays listed") {
                 val installation = installation("install-map-exists")
                 val mapsDirectory = installation.directory / UtDirectory.Maps.name
-                emptyFile(mapsDirectory / "CTF-BT-Test.unr.uz")
+                archive(mapsDirectory / "CTF-BT-Test.unr.uz")
                 emptyFile(mapsDirectory / "CTF-BT-Test.unr")
                 val installer = installer(installation)
 

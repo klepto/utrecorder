@@ -14,6 +14,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 
 class UtCompilerTest :
@@ -36,6 +37,12 @@ class UtCompilerTest :
             if [ -f "${'$'}DIRECTORY/ucc.fail" ]; then
                 echo "FAKE UCC: simulated failure"
                 exit 3
+            fi
+            if [ "${'$'}1" = "decompress" ]; then
+                LENGTH=${'$'}(od -An -tu1 -j4 -N1 "${'$'}2" | tr -d ' ')
+                NAME=${'$'}(dd if="${'$'}2" bs=1 skip=5 count=${'$'}((LENGTH - 1)) 2>/dev/null)
+                touch "${'$'}DIRECTORY/${'$'}NAME"
+                exit 0
             fi
             for ARGUMENT in "${'$'}@"; do
                 case "${'$'}ARGUMENT" in
@@ -60,6 +67,14 @@ class UtCompilerTest :
                     {
                         Console.WriteLine("FAKE UCC: simulated failure");
                         return 3;
+                    }
+
+                    if (arguments.Length > 1 && arguments[0] == "decompress")
+                    {
+                        byte[] archive = File.ReadAllBytes(arguments[1]);
+                        string name = System.Text.Encoding.ASCII.GetString(archive, 5, archive[4] - 1);
+                        File.WriteAllText(Path.Combine(directory, name), "");
+                        return 0;
                     }
 
                     foreach (string argument in arguments)
@@ -193,6 +208,22 @@ class UtCompilerTest :
                 (workspace / "make.log").exists() shouldBe true
                 (workspace / "PackageFive.u").exists() shouldBe false
                 (root / "failure" / "PackageFive").exists() shouldBe false
+            }
+        }
+
+        context("extract") {
+            test("moves the file named by the archive header to outputPath, whatever the archive is named") {
+                val compiler = installation("extract").compiler
+                val archive = root / "archives" / "Map-V1.unr.uz"
+                archive.parent.createDirectories()
+                archive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 8) + "Map.unr".toByteArray() + byteArrayOf(0))
+                val outputPath = root / "out" / "Map-V1.unr"
+
+                val result = compiler.extract(archive, outputPath)
+
+                result shouldBe outputPath
+                outputPath.exists() shouldBe true
+                (root / "extract" / "System" / "Map.unr").exists() shouldBe false
             }
         }
     })

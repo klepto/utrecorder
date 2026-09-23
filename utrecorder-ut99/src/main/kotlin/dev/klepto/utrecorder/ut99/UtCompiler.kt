@@ -17,6 +17,7 @@ import kotlin.io.path.copyToRecursively
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.exists
+import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 import kotlin.io.path.writeText
 
@@ -64,7 +65,7 @@ class UtCompiler(
 
     /**
      * Extracts the `.uz` archive into given [outputPath]. If [outputPath] is not specified, the archive will be
-     * extracted in the same directory as the `.uz` file.
+     * extracted in the same directory as the `.uz` file, named after the archive without its `.uz` suffix.
      */
     suspend fun extract(
         uzPath: Path,
@@ -74,7 +75,7 @@ class UtCompiler(
         val targetPath = outputPath ?: uzPath.toAbsolutePath().parent[fileName]
 
         run("decompress", uzPath.absolutePathString()).orThrow()
-        val resultPath = directory[fileName]
+        val resultPath = directory[archivedName(uzPath)]
         withContext(Dispatchers.IO) { check(resultPath.exists()) { "UCC failed to extract $uzPath" } }
         if (resultPath != targetPath) {
             resultPath.move(targetPath)
@@ -140,6 +141,33 @@ class UtCompiler(
     }
 
     /**
+     * Returns the file name the header of the `.uz` archive at [uzPath] holds, which is the name the compiler
+     * extracts the archive under: a signature, then a string of a compact index giving its length and that many bytes
+     * ending in a null.
+     */
+    private suspend fun archivedName(uzPath: Path): String {
+        val header =
+            withContext(Dispatchers.IO) {
+                uzPath.inputStream().use { it.readNBytes(UZ_HEADER_BYTES) }
+            }
+        var position = Int.SIZE_BYTES
+        var length = 0
+        var bits = 0
+        var more = true
+        while (more) {
+            check(position < header.size) { "UT archive header of $uzPath ends before its file name" }
+            val next = header[position++].toUByte().toInt()
+            val first = bits == 0
+            check(!first || next and SIGN_BIT == 0) { "UT archive header of $uzPath holds a UTF-16 file name" }
+            length = length or ((next and if (first) FIRST_VALUE_MASK else VALUE_MASK) shl bits)
+            more = next and (if (first) FIRST_CONTINUATION_BIT else CONTINUATION_BIT) != 0
+            bits += if (first) FIRST_VALUE_BITS else VALUE_BITS
+        }
+        check(length in 1..header.size - position) { "UT archive header of $uzPath holds no file name" }
+        return String(header, position, length - 1, UtPlatform.CHARSET)
+    }
+
+    /**
      * Reads the default configuration of the installation.
      */
     private suspend fun defaultConfig(): UtIni {
@@ -173,5 +201,14 @@ class UtCompiler(
          * The name the log the compiler itself writes is written under.
          */
         private const val UCC_LOG = "ucc.log"
+
+        private const val UZ_HEADER_BYTES = 1024
+        private const val SIGN_BIT = 0x80
+        private const val FIRST_CONTINUATION_BIT = 0x40
+        private const val FIRST_VALUE_MASK = 0x3F
+        private const val FIRST_VALUE_BITS = 6
+        private const val CONTINUATION_BIT = 0x80
+        private const val VALUE_MASK = 0x7F
+        private const val VALUE_BITS = 7
     }
 }

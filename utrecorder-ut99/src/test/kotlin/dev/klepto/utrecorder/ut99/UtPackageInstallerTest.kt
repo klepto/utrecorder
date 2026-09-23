@@ -80,8 +80,9 @@ class UtPackageInstallerTest :
                 echo "FAKE UCC: simulated failure"
                 exit 3
             fi
-            NAME=${'$'}(basename "${'$'}2" .uz)
-            cp "${'$'}2" "${'$'}DIRECTORY/${'$'}NAME"
+            LENGTH=${'$'}(od -An -tu1 -j4 -N1 "${'$'}2" | tr -d ' ')
+            NAME=${'$'}(dd if="${'$'}2" bs=1 skip=5 count=${'$'}((LENGTH - 1)) 2>/dev/null)
+            tail -c +${'$'}((LENGTH + 6)) "${'$'}2" > "${'$'}DIRECTORY/${'$'}NAME"
             echo "FAKE UCC: decompressed ${'$'}NAME"
             exit 0
             """.trimIndent()
@@ -102,13 +103,12 @@ class UtPackageInstallerTest :
                         return 3;
                     }
 
-                    string name = Path.GetFileName(arguments[1]);
-                    if (name.EndsWith(".uz", StringComparison.OrdinalIgnoreCase))
-                    {
-                        name = name.Substring(0, name.Length - 3);
-                    }
-
-                    File.Copy(arguments[1], Path.Combine(directory, name), true);
+                    byte[] archive = File.ReadAllBytes(arguments[1]);
+                    string name = System.Text.Encoding.ASCII.GetString(archive, 5, archive[4] - 1);
+                    int body = 5 + archive[4];
+                    byte[] content = new byte[archive.Length - body];
+                    Array.Copy(archive, body, content, 0, content.Length);
+                    File.WriteAllBytes(Path.Combine(directory, name), content);
                     Console.WriteLine("FAKE UCC: decompressed " + name);
                     return 0;
                 }
@@ -183,6 +183,14 @@ class UtPackageInstallerTest :
             header.putInt(0x9E2A83C1.toInt()).putShort(68)
             guid.chunked(8).forEachIndexed { index, word -> header.putInt(36 + index * 4, word.toLong(16).toInt()) }
             return header.array()
+        }
+
+        fun archive(
+            name: String,
+            content: ByteArray,
+        ): ByteArray {
+            val header = name.toByteArray() + byteArrayOf(0)
+            return byteArrayOf(0xD2.toByte(), 0x04, 0, 0, header.size.toByte()) + header + content
         }
 
         fun writePackage(
@@ -279,7 +287,7 @@ class UtPackageInstallerTest :
         context("install from a redirect") {
             test("fetches a package named CTF-BT +Fun from a redirect that serves it only at its encoded name") {
                 val installation = installation("encoded-name")
-                served["/first/CTF-BT%20%2BFun.unr.uz"] = "CTF-BT +Fun".toByteArray()
+                served["/first/CTF-BT%20%2BFun.unr.uz"] = archive("CTF-BT +Fun.unr", "CTF-BT +Fun".toByteArray())
                 val installer = installer(installation, UtPackage.named("CTF-BT +Fun", ""))
 
                 installer.install()
@@ -289,7 +297,7 @@ class UtPackageInstallerTest :
 
             test("tries the redirects in the configured order, and uses the second when the first serves nothing") {
                 val installation = installation("second-redirect")
-                served["/second/BTPog.u.uz"] = "BTPog".toByteArray()
+                served["/second/BTPog.u.uz"] = archive("BTPog.u", "BTPog".toByteArray())
                 val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
@@ -300,7 +308,7 @@ class UtPackageInstallerTest :
 
             test("probes every package extension in UtDirectory.PACKAGE_EXTENSIONS order and takes the first hit") {
                 val installation = installation("extension-order")
-                served["/first/CTF-BT-Test.unr.uz"] = "CTF-BT-Test".toByteArray()
+                served["/first/CTF-BT-Test.unr.uz"] = archive("CTF-BT-Test.unr", "CTF-BT-Test".toByteArray())
                 val installer = installer(installation, UtPackage.named("CTF-BT-Test", ""))
 
                 installer.install()
@@ -317,7 +325,7 @@ class UtPackageInstallerTest :
             test("discards a local file of the right name at the wrong GUID and tries the next source") {
                 val installation = installation("wrong-guid-locally")
                 writePackage(packagesDirectory("wrong-guid-locally") / "BTPog.u", otherGuid)
-                served["/first/BTPog.u.uz"] = packageBytes(guid)
+                served["/first/BTPog.u.uz"] = archive("BTPog.u", packageBytes(guid))
                 val installer = installer(installation, UtPackage.named("BTPog", guid))
 
                 installer.install()
@@ -329,8 +337,8 @@ class UtPackageInstallerTest :
 
             test("fails naming the package when no redirect serves it at the demo's GUID") {
                 val installation = installation("mismatched-everywhere")
-                served["/first/BTPog.u.uz"] = packageBytes(otherGuid)
-                served["/second/BTPog.u.uz"] = packageBytes(otherGuid)
+                served["/first/BTPog.u.uz"] = archive("BTPog.u", packageBytes(otherGuid))
+                served["/second/BTPog.u.uz"] = archive("BTPog.u", packageBytes(otherGuid))
                 val installer = installer(installation, UtPackage.named("BTPog", guid))
 
                 val exception = shouldThrow<UtPackageException> { installer.install() }
@@ -343,7 +351,7 @@ class UtPackageInstallerTest :
 
             test("does not check the GUID of a package it fetched for a demo entry that carries none") {
                 val installation = installation("empty-guid-fetched")
-                served["/first/BTPog.u.uz"] = packageBytes(otherGuid)
+                served["/first/BTPog.u.uz"] = archive("BTPog.u", packageBytes(otherGuid))
                 val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 installer.install()
@@ -355,7 +363,7 @@ class UtPackageInstallerTest :
 
             test("leaves nothing in the packages directory when the decompression fails") {
                 val installation = installation("decompression-fails", compilerFails = true)
-                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
+                served["/first/BTPog.u.uz"] = archive("BTPog.u", "BTPog".toByteArray())
                 val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 shouldThrow<IllegalStateException> { installer.install() }
@@ -380,7 +388,7 @@ class UtPackageInstallerTest :
             test("keeps what it already fetched, on disk and in installed, and fetches nothing after the failure") {
                 val installation = installation("fails-partway")
                 emptyFile(packagesDirectory("fails-partway") / "Engine.u")
-                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
+                served["/first/BTPog.u.uz"] = archive("BTPog.u", "BTPog".toByteArray())
                 val installer =
                     installer(
                         installation,
