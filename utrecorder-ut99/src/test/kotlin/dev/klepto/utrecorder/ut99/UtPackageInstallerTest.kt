@@ -222,6 +222,18 @@ class UtPackageInstallerTest :
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 
+            test("leaves the package it copied in the packages directory") {
+                val installation = installation("packages-directory-kept")
+                writePackage(packagesDirectory("packages-directory-kept") / "BTPog.u", guid)
+                val installer = installer(installation, UtPackage.named("BTPog", guid))
+
+                installer.install()
+                installer.uninstall()
+
+                UtPackage.read(packagesDirectory("packages-directory-kept") / "BTPog.u").guid shouldBe
+                    "123456789ABCDEF0876543210BADF00D"
+            }
+
             test("matches a name the packages directory holds in another case") {
                 val installation = installation("packages-directory-case")
                 emptyFile(packagesDirectory("packages-directory-case") / "btpog.u")
@@ -295,6 +307,17 @@ class UtPackageInstallerTest :
                 installationPath(installation, UtDirectory.Maps, "CTF-BT +Fun.unr").readText() shouldBe "CTF-BT +Fun"
             }
 
+            test("writes a package it fetched into the installation and nothing into the packages directory") {
+                val installation = installation("fetched-into-installation")
+                served["/first/BTPog.u.uz"] = archive("BTPog.u", "BTPog".toByteArray())
+                val installer = installer(installation, UtPackage.named("BTPog", ""))
+
+                installer.install()
+
+                installationPath(installation, UtDirectory.System, "BTPog.u").readText() shouldBe "BTPog"
+                packagesDirectory("fetched-into-installation").listDirectoryEntries() shouldBe emptyList()
+            }
+
             test("tries the redirects in the configured order, and uses the second when the first serves nothing") {
                 val installation = installation("second-redirect")
                 served["/second/BTPog.u.uz"] = archive("BTPog.u", "BTPog".toByteArray())
@@ -361,13 +384,14 @@ class UtPackageInstallerTest :
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 
-            test("leaves nothing in the packages directory when the decompression fails") {
+            test("leaves nothing in the installation or the packages directory when the decompression fails") {
                 val installation = installation("decompression-fails", compilerFails = true)
                 served["/first/BTPog.u.uz"] = archive("BTPog.u", "BTPog".toByteArray())
                 val installer = installer(installation, UtPackage.named("BTPog", ""))
 
                 shouldThrow<IllegalStateException> { installer.install() }
 
+                installationPath(installation, UtDirectory.System, "BTPog.u").exists() shouldBe false
                 packagesDirectory("decompression-fails").listDirectoryEntries() shouldBe emptyList()
                 installer.installed shouldBe emptyList()
             }

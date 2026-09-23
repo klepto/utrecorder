@@ -35,7 +35,7 @@ class UtPackageInstallerIntegrationTest :
 
                     installer.installed.map { it.name } shouldBe listOf(packageName)
                     installer.isInstalled() shouldBe true
-                    fetched.exists() shouldBe true
+                    fetched.exists() shouldBe false
                     installed.exists() shouldBe true
                     UtPackage.read(installed).guid shouldBe packageGuid
                 } finally {

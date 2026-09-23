@@ -212,6 +212,7 @@ static unsigned char clockCyclesArmed;
 static double clockRealScale;
 static unsigned long long clockCycleCount;
 static unsigned long long clockCycleBase;
+static unsigned long long clockCycleOffset;
 static double clockCyclesPerStep;
 
 static long long clockSteps(void) {
@@ -300,7 +301,7 @@ static const unsigned char CYCLE_SITE_ENGINE[] = {0x9B, 0x0F, 0x31, 0x8B, 0xF0, 
 static const unsigned char CYCLE_SITE_LAUNCHER[] = {0x9B, 0x0F, 0x31, 0x8B, 0xF0, 0x8B, 0xC2, 0x89, 0x45, 0xE4, 0x8B, 0xCE};
 
 #define CYCLE_SITE_BYTES 6
-#define CYCLE_THUNK_BYTES 72
+#define CYCLE_THUNK_BYTES 12
 
 static unsigned char *findInSection(unsigned char *start, size_t size, const unsigned char *pattern, size_t length,
                                     unsigned char *found, int *duplicate) {
@@ -331,47 +332,42 @@ static unsigned char *findUnique(HMODULE module, const unsigned char *pattern, s
     return duplicate ? 0 : found;
 }
 
-static void putAddress(unsigned char *code, unsigned int address) {
-    memcpy(code, &address, 4);
+/* Hands every site back to the real counter, shifted to carry on from the virtual count instead of waiting for it. */
+static void releaseCycles(void) {
+    unsigned long long now;
+    if (!clockCyclesArmed) return;
+    now = readCycles();
+    if (clockCycleCount > now) clockCycleOffset = clockCycleCount - now;
+    clockCyclesArmed = 0;
 }
 
 /*
- * The replacement for a site's rdtsc and its two register moves. While the clock is armed and the demo plays it loads
- * the virtual count; otherwise it reads the real counter, never below the virtual count.
- *
- *  0: cmp byte ptr [armed], 0     7: je real
- *  9: cmp dword ptr [demo], 0    16: je real
- * 18: mov eax, [low]             23: mov edx, [high]         29: jmp tail
- * 31: real: rdtsc                33: cmp edx, [high]         39: ja tail
- * 41: jb clamp                   43: cmp eax, [low]          49: jae tail
- * 51: clamp: mov eax, [low]      56: mov edx, [high]
- * 62: tail: the site's moves     66: ret
+ * The count every patched site reads in place of rdtsc: the virtual count while the clock is armed and the demo plays,
+ * the shifted real counter otherwise. The release happens here, on the first read after the demo stops, because the
+ * engine presents no frame while it reads a count that does not move.
+ */
+static unsigned long long __cdecl readSiteCycles(void) {
+    if (clockCyclesArmed && !*demoFlag) releaseCycles();
+    if (clockCyclesArmed) return clockCycleCount;
+    return readCycles() + clockCycleOffset;
+}
+
+/*
+ * The replacement for a site's rdtsc and its two register moves: push ecx; call readSiteCycles; pop ecx; the site's
+ * moves; ret.
  */
 static unsigned char *buildCycleThunk(unsigned char *moves) {
     unsigned char *thunk = (unsigned char *) VirtualAlloc(0, CYCLE_THUNK_BYTES, MEM_COMMIT | MEM_RESERVE,
                                                           PAGE_EXECUTE_READWRITE);
-    unsigned int low = (unsigned int) (uintptr_t) &clockCycleCount;
-    unsigned int high = low + 4;
-    static const unsigned char layout[] = {
-        0x80, 0x3D, 0, 0, 0, 0, 0x00, 0x74, 0x16,
-        0x83, 0x3D, 0, 0, 0, 0, 0x00, 0x74, 0x0D,
-        0xA1, 0, 0, 0, 0, 0x8B, 0x15, 0, 0, 0, 0, 0xEB, 0x1F,
-        0x0F, 0x31, 0x3B, 0x15, 0, 0, 0, 0, 0x77, 0x15,
-        0x72, 0x08, 0x3B, 0x05, 0, 0, 0, 0, 0x73, 0x0B,
-        0xA1, 0, 0, 0, 0, 0x8B, 0x15, 0, 0, 0, 0,
-        0, 0, 0, 0, 0xC3,
-    };
+    int offset;
     if (!thunk) return 0;
-    memcpy(thunk, layout, sizeof(layout));
-    putAddress(thunk + 2, (unsigned int) (uintptr_t) &clockCyclesArmed);
-    putAddress(thunk + 11, (unsigned int) (uintptr_t) demoFlag);
-    putAddress(thunk + 19, low);
-    putAddress(thunk + 25, high);
-    putAddress(thunk + 35, high);
-    putAddress(thunk + 45, low);
-    putAddress(thunk + 52, low);
-    putAddress(thunk + 58, high);
-    memcpy(thunk + 62, moves, 4);
+    offset = (int) ((char *) (void *) readSiteCycles - (char *) (thunk + 6));
+    thunk[0] = 0x51;
+    thunk[1] = 0xE8;
+    memcpy(thunk + 2, &offset, 4);
+    thunk[6] = 0x59;
+    memcpy(thunk + 7, moves, 4);
+    thunk[11] = 0xC3;
     return thunk;
 }
 
@@ -496,6 +492,9 @@ static void armCycles(void) {
 static void stepCycles(void) {
 }
 
+static void releaseCycles(void) {
+}
+
 #endif
 
 static double hookNew(void) {
@@ -583,14 +582,14 @@ static int demoPlaying(void) {
 }
 
 /*
- * Ends the capture, leaving the virtual clock armed and stepping. Disarming it here would hand the engine back to the
- * real counter, and the cycle thunk clamps that counter to never fall below the virtual count: on a machine that
- * renders faster than real time the virtual count is ahead of the real one, so every site would read the same clamped
- * value, the engine would tick a zero delta and the exiting console would never count its exit delay down. The clock
- * keeps stepping instead, so the run exits on its own as soon as the demo ends.
+ * Ends the capture and releases the cycle sites to the real counter, when the sites have not released themselves
+ * already. A machine that renders faster than real time leaves the virtual count ahead of the real one, and the release
+ * offset carries the real counter on from there, so the run exits as soon as the demo ends instead of waiting for real
+ * time to catch up.
  */
 static void finishCapture(void) {
     clockFinished = 1;
+    releaseCycles();
     pendingSize = 0;
     if (stream != STREAM_CLOSED) {
         closeStream(stream);

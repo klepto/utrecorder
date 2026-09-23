@@ -47,4 +47,5 @@ bin/
 .claude/settings.local.json
 
 ### utrecorder ###
-.utrecorder/
+.utrecorder/*
+!.utrecorder/packages/
