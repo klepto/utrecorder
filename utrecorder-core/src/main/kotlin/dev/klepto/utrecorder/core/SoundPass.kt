@@ -1,24 +1,26 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
+import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.time.TimestampId
 import dev.klepto.utrecorder.ut99.UtInstallation
+import dev.klepto.utrecorder.ut99.UtProcess
 import dev.klepto.utrecorder.ut99.demo.UtDemo
-import dev.klepto.utrecorder.ut99.play
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
-import java.time.Instant
 import java.util.Locale
+import kotlin.io.path.absolutePathString
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.exists
 import kotlin.io.path.getLastModifiedTime
 import kotlin.io.path.name
+import kotlin.io.path.writeText
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 
@@ -29,24 +31,21 @@ import kotlin.time.DurationUnit
  * @property config The recording the pass runs for, carrying the sound-pass viewport, its frame rate cap and the
  * audio toggle.
  * @property installation The installation the pass runs in.
- * @property openAlEnvironment The OpenAL environment the pass's run starts with, naming the wave configuration and
- * the wave driver; empty when the recording carries no audio.
  * @property directories The directories the pass stages its demo in and reads its output from.
  */
 class SoundPass(
     private val config: RecorderConfig,
     private val installation: UtInstallation,
-    private val openAlEnvironment: Map<String, String> = emptyMap(),
-    private val directories: Directories = Directories.DEFAULT,
+    private val directories: DirectoriesConfig = DirectoriesConfig(),
 ) : SoundPassLike {
     /**
      * Plays [demo] with sound on and returns the [SoundTrack] the pass produced, placed by its own marks.
      *
      * Stages the demo into the installation's `System` directory beside the console settings the run reads and plays
-     * it windowed and sounding under the OpenAL environment, whose wav [track] places from the run's marks. The wav's
-     * duration is probed for the placement and the wav is moved into [workspace] when the run ends; the staged copy and
-     * the console settings are removed whichever way it does. No OpenAL environment fails the recording without
-     * launching anything.
+     * it windowed and sounding under the OpenAL environment [openAl] writes into a workspace of the pass, whose wav
+     * [track] places from the run's marks. The wav's duration is probed for the placement and the wav is moved into
+     * [workspace] when the run ends; the staged copy and the console settings are removed whichever way it does. A
+     * recording without audio fails without launching anything.
      *
      * @throws IllegalStateException when the pass was launched with no audio, or the pass produces no wav, no marks, or
      * marks that fall outside its wav.
@@ -55,48 +54,71 @@ class SoundPass(
         demo: Path,
         workspace: Workspace,
     ): SoundTrack {
-        check(openAlEnvironment.isNotEmpty()) { "The recording carries no audio, not launching the sound pass" }
+        check(config.audio) { "The recording carries no audio, not launching the sound pass" }
 
         val demoDuration = UtDemo.read(demo).duration
         val description = PlaybackDescription.of(STAGED_DEMO_PREFIX + IDS.next(), demoDuration, config)
         val recorderPackage = RecorderPackage(installation)
         val stagedDemo = installation.systemDirectory[description.stagedDemoName + DEMO_EXTENSION]
-        try {
-            demo.copy(stagedDemo) { "Demo file not found at $demo" }
-            withContext(Dispatchers.IO) { recorderPackage.configure(description.recorderIni()) }
-            val instance =
-                installation.instance(SOUND_PASS) {
-                    exec = execScript(description)
-                    sound = true
-                    windowed = true
-                    environment += openAlEnvironment
-                    gameIni {
-                        PreferredSettings.applyGameIni(
-                            ini = this,
-                            client = description.client(installation.platform),
-                            console = description.console,
-                        )
-
-                        gameIni(demoDuration).forEach { (section, values) ->
-                            values.forEach { (key, value) -> this[section, key] = value }
-                        }
-                    }
-                    userIni { PreferredSettings.applyUserIni(this) }
+        return workspace(SOUND_PASS, installation.systemDirectory, directories) { pass ->
+            try {
+                demo.copy(stagedDemo) { "Demo file not found at $demo" }
+                withContext(Dispatchers.IO) { recorderPackage.configure(description.recorderIni()) }
+                val result = process(description, demoDuration, openAl(pass)).launch(config.timeout(demoDuration))
+                val wav = pass[WAVE_NAME]
+                val track = track(wav, result.log, Ffmpeg().duration(wav))
+                track.copy(file = wav.move(workspace[WAVE_NAME]))
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    stagedDemo.deleteIfExists()
+                    recorderPackage.clear()
                 }
-            val result = instance.play(config.timeout(demoDuration)) { }
-            val wav = installation.systemDirectory[WAVE_NAME]
-            val track = track(wav, result.log, Ffmpeg().duration(wav))
-            val placedWav = workspace.file(WAVE_NAME)
-            wav.move(placedWav)
-            return track.copy(file = placedWav)
-        } finally {
-            withContext(NonCancellable + Dispatchers.IO) {
-                stagedDemo.deleteIfExists()
-                recorderPackage.clear()
-                installation.systemDirectory[WAVE_NAME].deleteIfExists()
             }
         }
     }
+
+    /**
+     * Writes the OpenAL wave configuration into [pass] and returns the environment the pass's run starts with, naming
+     * that configuration and the wave driver.
+     *
+     * The configuration names the wav as [pass] names it in the installation's `System` directory, relative to the
+     * game binary the run starts in.
+     */
+    suspend fun openAl(pass: Workspace): Map<String, String> {
+        val conf = pass[WAVE_CONF]
+        withContext(Dispatchers.IO) { conf.writeText(waveConf(pass[WAVE_NAME].name)) }
+        return mapOf(
+            "ALSOFT_CONF" to conf.absolutePathString(),
+            "ALSOFT_DRIVERS" to "wave",
+            "ALSOFT_LOGLEVEL" to "2",
+        )
+    }
+
+    /**
+     * Returns the sound run of [description] under [openAlEnvironment]: windowed and sounding, playing the exec script
+     * with the game ini of the pass.
+     */
+    private fun process(
+        description: PlaybackDescription,
+        demoDuration: Duration,
+        openAlEnvironment: Map<String, String>,
+    ): UtProcess =
+        installation.process(SOUND_PASS) {
+            exec = execScript(description)
+            sound = true
+            windowed = true
+            environment += openAlEnvironment
+            baseGameIni = RecorderSettings.gameIni
+            baseUserIni = RecorderSettings.userIni
+            gameIni {
+                this["Engine.Engine", "ViewportManager"] = description.client(installation.platform)
+                this["Engine.Engine", "Console"] = description.console
+
+                gameIni(demoDuration).forEach { (section, values) ->
+                    values.forEach { (key, value) -> this[section, key] = value }
+                }
+            }
+        }
 
     /**
      * Returns the sound track the pass produced: the wav at [wavFile], placed by the marks its run logged in [log].
@@ -202,6 +224,18 @@ class SoundPass(
          * The name the OpenAL wave output writes.
          */
         private const val WAVE_NAME = "audio.wav"
+
+        /**
+         * The name of the OpenAL configuration the sound pass reads.
+         */
+        private const val WAVE_CONF = "alsoft.conf"
+
+        /**
+         * Returns the OpenAL wave configuration writing stereo int16 output to [wavName], a path relative to the game
+         * binary.
+         */
+        private fun waveConf(wavName: String): String =
+            "[general]\ndrivers = wave\nfrequency = 44100\nchannels = stereo\nsample-type = int16\n\n[wave]\nfile = $wavName\n"
 
         /**
          * The name the sound pass stages a demo under.

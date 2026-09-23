@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.common.os
 
-import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.config.ConfigReader
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.toAbsolutePath
 import java.nio.file.Path
@@ -8,7 +8,7 @@ import java.nio.file.Path
 /**
  * An operating system family, and the conventions a program follows on it.
  *
- * Use [OperatingSystem.current] for the operating system a [PropertySource] names.
+ * Use [OperatingSystem.current] for the operating system a [ConfigReader] names.
  */
 enum class OperatingSystem {
     WINDOWS {
@@ -16,25 +16,27 @@ enum class OperatingSystem {
 
         override val libraryPathVariable: String? = null
 
-        override fun dataDirectory(properties: PropertySource): Path =
-            properties.environmentVariable("LOCALAPPDATA")?.toAbsolutePath()
-                ?: homeDirectory(properties)["AppData"]["Local"]
+        override val dataDirectory: Path by lazy {
+            System.getenv("LOCALAPPDATA")?.toAbsolutePath()
+                ?: homeDirectory["AppData"]["Local"]
+        }
     },
     LINUX {
         override val executableSuffix: String = ""
 
         override val libraryPathVariable: String = "LD_LIBRARY_PATH"
 
-        override fun dataDirectory(properties: PropertySource): Path =
-            properties.environmentVariable("XDG_DATA_HOME")?.toAbsolutePath()
-                ?: homeDirectory(properties)[".local"]["share"]
+        override val dataDirectory: Path by lazy {
+            System.getenv("XDG_DATA_HOME")?.toAbsolutePath()
+                ?: homeDirectory[".local"]["share"]
+        }
     },
     UNKNOWN {
         override val executableSuffix: String = LINUX.executableSuffix
 
         override val libraryPathVariable: String? = LINUX.libraryPathVariable
 
-        override fun dataDirectory(properties: PropertySource): Path = LINUX.dataDirectory(properties)
+        override val dataDirectory: Path by lazy { LINUX.dataDirectory }
     },
     ;
 
@@ -50,16 +52,16 @@ enum class OperatingSystem {
     abstract val libraryPathVariable: String?
 
     /**
-     * The directory this operating system holds per-application data under, read from [properties].
+     * The directory this operating system holds per-application data under, read from [reader].
      */
-    abstract fun dataDirectory(properties: PropertySource = PropertySource.DEFAULT): Path
+    abstract val dataDirectory: Path
 
     companion object {
         /**
-         * The operating system named by the `os.name` property [properties] holds.
+         * The operating system named by the `os.name` property [reader] holds.
          */
-        fun current(properties: PropertySource = PropertySource.DEFAULT): OperatingSystem {
-            val name = properties.systemProperty("os.name").orEmpty().lowercase()
+        fun current(): OperatingSystem {
+            val name = System.getProperty("os.name").orEmpty().lowercase()
             return when {
                 name.contains("windows") -> WINDOWS
                 name.contains("linux") -> LINUX
@@ -68,11 +70,12 @@ enum class OperatingSystem {
         }
 
         /**
-         * The home directory of the user, read from the `user.home` property [properties] holds.
+         * The home directory of the user, read from the `user.home` property [reader] holds.
          *
-         * @throws IllegalStateException if [properties] holds no `user.home`.
+         * @throws IllegalStateException if [reader] holds no `user.home`.
          */
-        private fun homeDirectory(properties: PropertySource): Path =
-            checkNotNull(properties.systemProperty("user.home")) { "No user.home system property" }.toAbsolutePath()
+        private val homeDirectory: Path by lazy {
+            checkNotNull(System.getProperty("user.home")) { "No user.home system property" }.toAbsolutePath()
+        }
     }
 }

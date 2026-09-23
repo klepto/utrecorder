@@ -1,4 +1,5 @@
 import dev.klepto.utrecorder.build.embedded.EmbeddedArtifactsExtension
+import dev.klepto.utrecorder.build.lib
 import dev.klepto.utrecorder.build.registerLayoutTasks
 import dev.klepto.utrecorder.build.uscript.CompileUscriptTask
 import dev.klepto.utrecorder.build.uscript.UCC_SERVICE
@@ -47,6 +48,8 @@ val unrealScriptCompilerClasspath =
 
 dependencies {
     unrealScriptCompiler.name(project(COMPILER_PROJECT))
+    // `utrecorder-ut99` is a library and binds no logging backend, so the forked compiler would log to nothing.
+    unrealScriptCompiler.name(lib("logback.classic"))
 }
 
 // The version the compiler defaults to is compiled into the jar, so the classpath already invalidates on a bump. An

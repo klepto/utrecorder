@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.config.SystemConfigReader
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Path
@@ -10,11 +10,11 @@ import kotlin.time.Duration.Companion.seconds
 
 class RecorderConfigTest :
     FunSpec({
-        fun properties(values: Map<String, String>) = PropertySource(properties = values::get, environment = { null })
+        fun properties(values: Map<String, String>) = SystemConfigReader(properties = values::get, environment = { null })
 
         test("fromProperties honours every core key") {
             val installation = Path.of("custom-install").toAbsolutePath()
-            val properties =
+            val reader =
                 properties(
                     mapOf(
                         "utrecorder.core.installation_directory" to installation.toString(),
@@ -25,7 +25,7 @@ class RecorderConfigTest :
                     ),
                 )
 
-            val config = RecorderConfig.fromProperties(properties, Directories(Path.of("home")))
+            val config = RecorderConfig.fromProperties(reader, DirectoriesConfig(Path.of("home")))
 
             config shouldBe
                 RecorderConfig(
@@ -38,7 +38,7 @@ class RecorderConfigTest :
         }
 
         test("fromProperties falls back to ut99 under the installs directory and the default durations") {
-            val config = RecorderConfig.fromProperties(properties(emptyMap()), Directories(Path.of("home")))
+            val config = RecorderConfig.fromProperties(properties(emptyMap()), DirectoriesConfig(Path.of("home")))
 
             config shouldBe
                 RecorderConfig(
@@ -62,7 +62,7 @@ class RecorderConfigTest :
             config.timeout(10.minutes) shouldBe 630.seconds
         }
         test("parsing a property source that sets the record keys produces a config carrying them typed") {
-            val properties =
+            val reader =
                 properties(
                     mapOf(
                         "utrecorder.record.fps" to "90",
@@ -93,7 +93,7 @@ class RecorderConfigTest :
                     ),
                 )
 
-            val config = RecorderConfig.fromProperties(properties, Directories(Path.of("home")))
+            val config = RecorderConfig.fromProperties(reader, DirectoriesConfig(Path.of("home")))
 
             config shouldBe
                 RecorderConfig(
@@ -125,8 +125,8 @@ class RecorderConfigTest :
                     renderNoError = true,
                 )
         }
-        test("parsing a property source that sets none produces the literal defaults") {
-            val config = RecorderConfig.fromProperties(properties(emptyMap()), Directories(Path.of("home")))
+        test("parsing a property source that sets none produces the defaults") {
+            val config = RecorderConfig.fromProperties(properties(emptyMap()), DirectoriesConfig(Path.of("home")))
 
             config shouldBe
                 RecorderConfig(
@@ -155,9 +155,9 @@ class RecorderConfigTest :
         }
 
         test("parsing a duration record key with its unit produces the frame timeout") {
-            val properties = properties(mapOf("utrecorder.record.frame_timeout" to "PT20M"))
+            val reader = properties(mapOf("utrecorder.record.frame_timeout" to "PT20M"))
 
-            val config = RecorderConfig.fromProperties(properties, Directories(Path.of("home")))
+            val config = RecorderConfig.fromProperties(reader, DirectoriesConfig(Path.of("home")))
 
             config.frameTimeout shouldBe 20.minutes
         }

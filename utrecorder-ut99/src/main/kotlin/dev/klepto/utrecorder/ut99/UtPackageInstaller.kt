@@ -2,7 +2,6 @@ package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.install.Installer
 import dev.klepto.utrecorder.common.io.Downloader
-import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.encodeUrlPathSegment
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.headCatching
@@ -28,7 +27,7 @@ import kotlin.io.path.extension
 class UtPackageInstaller(
     private val packages: List<UtPackage>,
     private val installation: UtInstallation,
-    private val config: UtConfig = UtConfig.DEFAULT,
+    private val config: UtConfig = UtConfig(),
 ) : Installer {
     /**
      * The packages fetched so far, in the order they were fetched.
@@ -39,7 +38,7 @@ class UtPackageInstaller(
      * The sources a package is looked for in, in the order they are tried, as the failure names them.
      */
     private val sources: List<String>
-        get() = listOf("${installation.directory}", "${config.directories.packages}") + config.redirectUrls
+        get() = listOf("${installation.directory}", "${config.directoriesConfig.packages}") + config.redirectUrls
 
     /**
      * The packages this installer fetched, in the order it fetched them. Empty before [install] runs, and empty after
@@ -91,7 +90,7 @@ class UtPackageInstaller(
      * Returns the package the packages directory holds satisfying [required], or `null` when it holds none.
      */
     private suspend fun localPackage(required: UtPackage): UtPackage? {
-        val candidates = UtPackage.list(config.directories.packages, UtDirectory.PACKAGE_EXTENSIONS)
+        val candidates = UtPackage.list(config.directoriesConfig.packages, UtDirectory.PACKAGE_EXTENSIONS)
         return withContext(Dispatchers.IO) { candidates.firstOrNull { it.satisfies(required) } }
     }
 
@@ -115,14 +114,14 @@ class UtPackageInstaller(
                 .asSequence()
                 .map { it to redirectUrl(base, required.name, it) }
                 .firstOrNull { (_, url) -> headCatching(url).isSuccess } ?: return null
-        val target = config.directories.packages["${required.name}.$extension"]
+        val target = config.directoriesConfig.packages["${required.name}.$extension"]
         log.info { "Fetching ${required.name} from $url" }
 
-        workspace("uz-installer", directories = config.directories) { staging ->
-            val archive = staging["${target.fileName}.uz"]
-            Downloader(url, directories = config.directories).download(archive)
-            val extracted = withContext(Dispatchers.IO) { installation.compiler.extract(archive, staging["${target.fileName}"]) }
-            withContext(Dispatchers.IO) { archive.deleteIfExists() }
+        workspace("uz-installer", config = config.directoriesConfig) { workspace ->
+            val archive = workspace["${target.fileName}.uz"]
+            Downloader(url, config = config.directoriesConfig).download(archive)
+            val extracted = installation.compiler.extract(archive, workspace["${target.fileName}"])
+            archive.deleteIfExists()
             extracted.move(target)
         }
 
@@ -140,7 +139,7 @@ class UtPackageInstaller(
      */
     private suspend fun copyIntoInstallation(source: UtPackage): UtPackage {
         val path = checkNotNull(source.path) { "No file holds the package ${source.name}" }
-        return UtPackage.read(path.copy(installationPath(path), overwrite = true))
+        return UtPackage.read(path.move(installationPath(path)))
     }
 
     /**

@@ -144,4 +144,19 @@ class EmbeddedArtifactsTest :
             written shouldBe listOf(target / "sub" / "thing.u")
             (target / "sub" / "thing.u").readText() shouldBe "nested content"
         }
+
+        test("writes each artifact to the path the target names for it") {
+            val cp = classpathRoot("extract-named")
+            writeIndex(cp, content = "a.txt\nb.txt")
+            writeArtifact(cp, "a.txt", "A content".toByteArray())
+            writeArtifact(cp, "b.txt", "B content".toByteArray())
+            val target = root / "extract-named-target"
+
+            val artifacts = EmbeddedArtifacts(artifactsNamespace, loaderOf(cp))
+            val written = artifacts.extractTo { name -> target / "run-$name" }
+
+            written shouldBe listOf(target / "run-a.txt", target / "run-b.txt")
+            (target / "run-a.txt").readText() shouldBe "A content"
+            (target / "run-b.txt").readText() shouldBe "B content"
+        }
     })

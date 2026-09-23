@@ -2,19 +2,13 @@ package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.install.Installer
 import dev.klepto.utrecorder.common.io.Downloader
+import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.extract
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.log.logger
-import dev.klepto.utrecorder.ut99.UtDirectory.Help
-import dev.klepto.utrecorder.ut99.UtDirectory.Maps
-import dev.klepto.utrecorder.ut99.UtDirectory.Music
-import dev.klepto.utrecorder.ut99.UtDirectory.Sounds
-import dev.klepto.utrecorder.ut99.UtDirectory.System
-import dev.klepto.utrecorder.ut99.UtDirectory.System400
-import dev.klepto.utrecorder.ut99.UtDirectory.Textures
-import dev.klepto.utrecorder.ut99.UtDirectory.Web
+import dev.klepto.utrecorder.ut99.UtDirectory.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -34,17 +28,22 @@ import kotlin.io.path.writeText
  */
 @OptIn(ExperimentalPathApi::class)
 class UtInstaller(
-    private val config: UtConfig = UtConfig.DEFAULT,
+    private val config: UtConfig,
 ) : Installer {
+    /**
+     * The directory where cached files are stored.
+     */
+    private val cacheDirectory: Path = config.directoriesConfig.cache
+
     /**
      * The directory the installation is materialized in.
      */
-    private val directory: Path = config.gameDirectory
+    private val gameDirectory: Path = config.gameDirectory
 
     /**
      * The version file of the current UT installation.
      */
-    private val versionFile = directory[VERSION_FILE]
+    private val versionFile: Path = gameDirectory[VERSION_FILE]
 
     /**
      * Runs UT iso installer, UT patch installer and creates a version file.
@@ -56,11 +55,11 @@ class UtInstaller(
         }
 
         log.info { "Installing UT..." }
-        workspace("ut-installer", directories = config.directories) { staging ->
-            installIso(staging)
-            installPatch(staging)
-            staging.move(this@UtInstaller.directory)
-            withContext(Dispatchers.IO) { versionFile.writeText(config.patchFileName) }
+        workspace("ut-installer") {
+            installIso()
+            installPatch()
+            move(gameDirectory)
+            versionFile.writeText(config.patchFileName)
         }
         log.info { "UT installation complete" }
     }
@@ -68,10 +67,12 @@ class UtInstaller(
     /**
      * Downloads the original UT iso and extracts it to the given [directory].
      */
-    private suspend fun installIso(directory: Path) {
-        val isoPath = config.directories.cache[ISO_FILE]
-        Downloader(config.isoUrl, config.isoMd5, directories = config.directories).download(isoPath)
-        isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }
+    private suspend fun Workspace.installIso() {
+        val isoPath = cacheDirectory[ISO_FILE]
+        Downloader(config.isoUrl, config.isoMd5, config = config.directoriesConfig).download(isoPath)
+
+        log.info { "Extracting UT iso..." }
+        isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }.forEach(::track)
 
         val target = directory[System]
         val source = directory[System400].takeIf { it.isDirectory() } ?: return
@@ -81,17 +82,19 @@ class UtInstaller(
     /**
      * Downloads the latest patch and extracts it to the given [directory].
      */
-    private suspend fun installPatch(directory: Path) {
-        val patchPath = config.directories.cache[config.patchFileName]
+    private suspend fun Workspace.installPatch() {
+        val patchPath = cacheDirectory[config.patchFileName]
         val patchUrl = "${config.patchUrl}/v${config.patchVersion}/${config.patchFileName}"
-        Downloader(patchUrl, directories = config.directories).download(patchPath)
-        patchPath.extract(directory)
+        Downloader(patchUrl, config = config.directoriesConfig).download(patchPath)
+
+        log.info { "Extracting UT patch..." }
+        patchPath.extract(directory).forEach(::track)
     }
 
     /**
      * Deletes the UT installation directory.
      */
-    override suspend fun uninstall() = withContext(Dispatchers.IO) { directory.deleteRecursively() }
+    override suspend fun uninstall() = withContext(Dispatchers.IO) { gameDirectory.deleteRecursively() }
 
     /**
      * Checks if the UT installation is complete by checking [versionFile] for the current patch version.

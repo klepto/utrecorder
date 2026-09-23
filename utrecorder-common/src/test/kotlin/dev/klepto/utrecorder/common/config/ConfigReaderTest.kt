@@ -6,12 +6,12 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import kotlin.time.Duration.Companion.seconds
 
-class PropertySourceTest :
+class ConfigReaderTest :
     FunSpec({
         fun source(
             properties: Map<String, String> = emptyMap(),
             environment: Map<String, String> = emptyMap(),
-        ) = PropertySource("utrecorder_test", properties::get, environment::get)
+        ) = SystemConfigReader("utrecorder_test", properties::get, environment::get)
 
         context("get") {
             test("reads the prefixed key from the properties") {
@@ -124,9 +124,9 @@ class PropertySourceTest :
             }
         }
 
-        context("DEFAULT") {
+        context("the system reader") {
             test("reads user.dir through systemProperty as the value the JVM holds") {
-                PropertySource.DEFAULT.systemProperty("user.dir") shouldBe System.getProperty("user.dir")
+                SystemConfigReader().systemProperty("user.dir") shouldBe System.getProperty("user.dir")
             }
         }
     })

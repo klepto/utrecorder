@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.common.process
 
-import dev.klepto.utrecorder.common.config.PropertySource
 import dev.klepto.utrecorder.common.io.workingDirectory
 import dev.klepto.utrecorder.common.os.OperatingSystem
 import kotlinx.coroutines.CompletableDeferred
@@ -51,17 +50,16 @@ private object EndOfStream
  * A mutable description of an executable, built into the immutable value by [Executable.build].
  *
  * @property executablePath The path of the program to run.
- * @property properties The source the working directory, the operating system and the inherited environment are read
+ * @property reader The source the working directory, the operating system and the inherited environment are read
  * from.
  */
 class ExecutableBuilder(
     var executablePath: Path,
-    private val properties: PropertySource = PropertySource.DEFAULT,
 ) {
     /**
-     * The directory the process starts in, the working directory of [properties] unless set.
+     * The directory the process starts in, the working directory of [reader] unless set.
      */
-    var workingDirectory: Path = workingDirectory(properties)
+    var workingDirectory: Path = workingDirectory()
 
     /**
      * The arguments passed to the program, in the order the program receives them.
@@ -86,13 +84,13 @@ class ExecutableBuilder(
 
     /**
      * Puts [value] in front of the variable [name], separated by the platform path separator. What follows it is the
-     * value this builder already holds, or the one [properties] holds.
+     * value this builder already holds, or the one [reader] holds.
      */
     fun prependEnvironment(
         name: String,
         value: String,
     ) {
-        val existing = environment[name] ?: properties.environmentVariable(name)
+        val existing = environment[name] ?: System.getenv(name)
         environment[name] =
             when {
                 existing.isNullOrEmpty() -> value
@@ -106,7 +104,7 @@ class ExecutableBuilder(
      */
     fun prependLibraryPath(
         path: Path,
-        operatingSystem: OperatingSystem = OperatingSystem.current(properties),
+        operatingSystem: OperatingSystem = OperatingSystem.current(),
     ) {
         operatingSystem.libraryPathVariable?.let { prependEnvironment(it, "$path") }
     }
@@ -160,13 +158,12 @@ data class Executable(
     companion object {
         /**
          * The executable of the program at [executablePath] that [configure] describes, reading the working directory,
-         * the operating system and the inherited environment from [properties].
+         * the operating system and the inherited environment from [reader].
          */
         fun build(
             executablePath: Path,
-            properties: PropertySource = PropertySource.DEFAULT,
             configure: ExecutableBuilder.() -> Unit = {},
-        ): Executable = ExecutableBuilder(executablePath, properties).apply(configure).build()
+        ): Executable = ExecutableBuilder(executablePath).apply(configure).build()
     }
 }
 

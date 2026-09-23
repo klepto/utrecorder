@@ -46,8 +46,6 @@ var config bool  bVerbose;
 var config float PlaybackFrameRate;
 var config int SpawnHealth;
 var config float SpawnTimeout;
-var config bool bHideInterface;
-var config bool bHideWeapon;
 
 var bool bNoRendering;
 var bool bSignalledSpawn;
@@ -70,9 +68,6 @@ var float ExitPending;    // seconds left between "stopdemo" and "exit"
 // =============================================================================
 event Tick(float Delta)
 {
-	if (bHideInterface)
-		HideInterface();
-
 	if (bNoRendering)
 		StopRendering();
 
@@ -110,35 +105,6 @@ event Tick(float Delta)
 	}
 
 	CheckPlayback(Delta);
-}
-
-event PostRender(canvas C)
-{
-	if (bHideInterface)
-		return;
-
-	Super.PostRender(C);
-}
-
-function HideInterface()
-{
-	local PlayerPawn Player;
-
-	if (Viewport == None || Viewport.Actor == None)
-		return;
-
-	Player = Viewport.Actor;
-	Player.bShowScores = False;
-	Player.HUDType = class'UTRecorderHUD';
-
-	if (Player.myHUD != None && Player.myHUD.Class != class'UTRecorderHUD')
-	{
-		Player.myHUD.Destroy();
-		Player.myHUD = None;
-	}
-
-	if (UTRecorderHUD(Player.myHUD) != None)
-		UTRecorderHUD(Player.myHUD).bHideWeapon = bHideWeapon;
 }
 
 exec function DisableRendering()
@@ -360,6 +326,4 @@ defaultproperties
 	PlaybackFrameRate=0.0
 	SpawnHealth=100
 	SpawnTimeout=30.0
-	bHideInterface=True
-	bHideWeapon=False
 }

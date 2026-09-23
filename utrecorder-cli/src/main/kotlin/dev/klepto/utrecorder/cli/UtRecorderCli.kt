@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.cli
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.core.DemoFetcher
 import dev.klepto.utrecorder.core.UtRecorder
 import kotlinx.coroutines.Job
@@ -37,7 +37,7 @@ object UtRecorderCli {
      */
     suspend fun cachedDemo(
         url: String,
-        directories: Directories = Directories.DEFAULT,
+        directories: DirectoriesConfig = DirectoriesConfig(),
     ): Path = DemoFetcher(directories).fetch(url)
 
     /**
@@ -48,7 +48,7 @@ object UtRecorderCli {
      */
     suspend fun main(
         url: String,
-        directories: Directories = Directories.DEFAULT,
+        directories: DirectoriesConfig = DirectoriesConfig(),
     ) {
         val demo = cachedDemo(url, directories)
         println(UtRecorder(directories = directories).record(demo, outputName(url)))
@@ -60,7 +60,7 @@ object UtRecorderCli {
      * The one permanent `runBlocking` this function keeps: `@JvmStatic fun main(Array<String>)` cannot itself be
      * `suspend`. A shutdown hook cancels the job `runBlocking` runs under and waits for it to finish, so Ctrl+C
      * during a recording destroys the child process and deletes the workspace instead of leaking both — the same
-     * cancellation path `RecordingSession.record` and `UtInstance.play` already clean up after. The other of the
+     * cancellation path `RecordingSession.record` and `UtProcess.launch` already clean up after. The other of the
      * task's two sanctioned entry-point bridges is `UtCli.main(Array<String>)`.
      */
     @JvmStatic

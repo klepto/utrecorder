@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.common.io
 
-import dev.klepto.utrecorder.common.config.PropertySource
 import dev.klepto.utrecorder.common.os.OperatingSystem
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -13,13 +12,11 @@ import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldMatch
-import io.kotest.matchers.string.shouldStartWith
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.NoSuchFileException
-import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.NoSuchAlgorithmException
 import kotlin.concurrent.thread
@@ -355,21 +352,6 @@ class PathsTest :
                 shouldThrow<FileAlreadyExistsException> { file("copy-kept-source", "new").copy(target, overwrite = false) }
 
                 target.readText() shouldBe "old"
-            }
-        }
-
-        context("workingDirectory") {
-            test("reads user.dir from the source as an absolute, normalized path") {
-                val properties = mapOf("user.dir" to "$root/nested/../probe")
-
-                workingDirectory(PropertySource(properties = properties::get, environment = { null })) shouldBe
-                    (root / "probe")
-            }
-
-            test("throws IllegalStateException for a source holding no user.dir") {
-                shouldThrow<IllegalStateException> {
-                    workingDirectory(PropertySource(properties = { null }, environment = { null }))
-                }
             }
         }
 

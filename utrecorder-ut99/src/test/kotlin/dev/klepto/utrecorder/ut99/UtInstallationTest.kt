@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Path
@@ -21,7 +21,7 @@ class UtInstallationTest :
             val executable = directory / UtDirectory.System.name / UtPlatform.current().gameExecutable
             executable.createParentDirectories()
             executable.writeText("")
-            return UtInstallation(directory, Directories(root / "home"))
+            return UtInstallation(directory, UtConfig(DirectoriesConfig(root / "home")))
         }
 
         fun emptyFile(path: Path): Path = path.createParentDirectories().also { it.writeText("") }

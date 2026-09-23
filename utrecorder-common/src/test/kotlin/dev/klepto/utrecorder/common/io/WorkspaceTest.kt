@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.common.io
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.os.OperatingSystem
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -20,7 +20,6 @@ import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
@@ -45,9 +44,9 @@ class WorkspaceTest :
                 lateinit var directory: Path
                 var existed = false
 
-                workspace("probe", directories = Directories(root / "named")) {
-                    directory = it
-                    existed = it.exists()
+                workspace("probe", config = DirectoriesConfig(root / "named")) {
+                    directory = it.directory
+                    existed = it.directory.exists()
                 }
 
                 existed shouldBe true
@@ -55,35 +54,37 @@ class WorkspaceTest :
                 directory.fileName.toString() shouldMatch Regex("""probe-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}""")
             }
 
-            test("names files and directories inside its directory without a prefix") {
-                workspace("plain", directories = Directories(root / "plain")) { directory ->
-                    file("make.log") shouldBe directory / "make.log"
-                    directory("logs") shouldBe directory / "logs"
-                    (directory / "logs").shouldExist()
+            test("names files and temporary directories inside its directory without a prefix") {
+                workspace("plain", config = DirectoriesConfig(root / "plain")) {
+                    this["make.log"] shouldBe directory / "make.log"
+                    tempDirectory().parent shouldBe directory
                 }
             }
 
-            test("removes the directory and passes the result through when the block returns") {
+            test("keeps the directory, a tracked directory and its contents, and passes the result through when the block returns") {
                 lateinit var directory: Path
+                lateinit var tracked: Path
 
                 val result =
-                    workspace("success", directories = Directories(root / "success")) {
-                        directory = it
-                        (it / "make.log").writeText("log")
+                    workspace("success", config = DirectoriesConfig(root / "success")) {
+                        directory = it.directory
+                        tracked = tempDirectory()
+                        (tracked / "make.log").writeText("log")
                         "the result"
                     }
 
                 result shouldBe "the result"
-                directory.shouldNotExist()
+                directory.shouldExist()
+                (tracked / "make.log").readText() shouldBe "log"
             }
 
             test("keeps the directory and rethrows when the block throws") {
                 lateinit var directory: Path
 
                 shouldThrow<IllegalStateException> {
-                    workspace("failure", directories = Directories(root / "failure")) {
-                        directory = it
-                        (it / "make.log").writeText("log")
+                    workspace("failure", config = DirectoriesConfig(root / "failure")) {
+                        directory = it.directory
+                        this["make.log"].writeText("log")
                         error("Boom")
                     }
                 }
@@ -91,45 +92,22 @@ class WorkspaceTest :
                 (directory / "make.log").readText() shouldBe "log"
             }
 
-            test("removes the directory and rethrows when the block is cancelled") {
+            test("removes its directory when the block leaves it empty") {
                 lateinit var directory: Path
 
-                shouldThrow<CancellationException> {
-                    workspace("cancelled", directories = Directories(root / "cancelled")) {
-                        directory = it
-                        throw CancellationException("Cancelled")
-                    }
-                }
-
-                directory.shouldNotExist()
-            }
-
-            test("still removes the directory when the surrounding coroutine, not just the block, is cancelled") {
-                lateinit var directory: Path
-                val wroteFile = CompletableDeferred<Unit>()
-
-                coroutineScope {
-                    val job =
-                        launch {
-                            workspace("real-cancel", directories = Directories(root / "real-cancel")) {
-                                directory = it
-                                (it / "make.log").writeText("log")
-                                wroteFile.complete(Unit)
-                                awaitCancellation()
-                            }
-                        }
-                    wroteFile.await()
-                    job.cancelAndJoin()
+                workspace("empty", config = DirectoriesConfig(root / "empty")) {
+                    directory = it.directory
+                    tempDirectory().toFile().delete()
                 }
 
                 directory.shouldNotExist()
             }
 
             test("gives two workspaces of the same name different directories") {
-                val directories = Directories(root / "twice")
+                val config = DirectoriesConfig(root / "twice")
 
-                val first = workspace("twice", directories = directories) { it }
-                val second = workspace("twice", directories = directories) { it }
+                val first = workspace("twice", config = config) { it.directory }
+                val second = workspace("twice", config = config) { it.directory }
 
                 first shouldNotBe second
             }
@@ -139,40 +117,96 @@ class WorkspaceTest :
             test("names files in the root with the name and id of the workspace as a prefix") {
                 val shared = root / "shared-names"
 
-                workspace("ucc", shared, Directories(root / "shared-names-home")) { directory ->
+                workspace("ucc", shared, DirectoriesConfig(root / "shared-names-home")) {
                     directory shouldBe shared
-                    file("make.ini").parent shouldBe shared
-                    file("make.ini").fileName.toString() shouldMatch Regex("""ucc-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-make\.ini""")
+                    this["make.ini"].parent shouldBe shared
+                    this["make.ini"].fileName.toString() shouldMatch Regex("""ucc-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-make\.ini""")
                 }
             }
 
-            test("removes the files it named and keeps the rest of the root when the block returns") {
+            test("moves the files and directories it named into its workspace directory and keeps the rest of the root") {
                 val shared = (root / "shared-success").apply { createDirectories() }
                 val foreign = (shared / "UnrealTournament.ini").apply { writeText("game") }
+                lateinit var ini: Path
+                lateinit var packageDirectory: Path
 
-                workspace("ucc", shared, Directories(root / "shared-success-home")) {
-                    file("make.ini").writeText("ini")
-                    (directory("Package") / "Package.uc").writeText("class Package extends Object;")
+                workspace("ucc", shared, DirectoriesConfig(root / "shared-success-home")) {
+                    ini = this["make.ini"].apply { writeText("ini") }
+                    packageDirectory = this["Package"].apply { createDirectories() }
+                    (packageDirectory / "Package.uc").writeText("class Package extends Object;")
+                    (packageDirectory / "Classes").createDirectories()
                 }
 
                 shared.listDirectoryEntries() shouldBe listOf(foreign)
+                val kept = (root / "shared-success-home" / "workspace").listDirectoryEntries().single()
+                (kept / ini.fileName).readText() shouldBe "ini"
+                (kept / packageDirectory.fileName / "Package.uc").readText() shouldBe "class Package extends Object;"
+                (kept / packageDirectory.fileName / "Classes").shouldExist()
             }
 
-            test("moves the files it named into a workspace directory without their prefix when the block throws") {
-                val shared = (root / "shared-failure").apply { createDirectories() }
-                val foreign = (shared / "UnrealTournament.ini").apply { writeText("game") }
+            test("still moves the files it named when the surrounding coroutine, not just the block, is cancelled") {
+                val shared = (root / "shared-cancel").apply { createDirectories() }
+                val wroteFile = CompletableDeferred<Unit>()
 
-                shouldThrow<IllegalStateException> {
-                    workspace("ucc", shared, Directories(root / "shared-failure-home")) {
-                        file("make.log").writeText("log")
-                        error("Boom")
-                    }
+                coroutineScope {
+                    val job =
+                        launch {
+                            workspace("ucc", shared, DirectoriesConfig(root / "shared-cancel-home")) {
+                                this["make.log"].writeText("log")
+                                wroteFile.complete(Unit)
+                                awaitCancellation()
+                            }
+                        }
+                    wroteFile.await()
+                    job.cancelAndJoin()
                 }
 
-                shared.listDirectoryEntries() shouldBe listOf(foreign)
-                val kept = (root / "shared-failure-home" / "workspace").listDirectoryEntries().single()
-                kept.fileName.toString() shouldMatch Regex("""ucc-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}""")
-                (kept / "make.log").readText() shouldBe "log"
+                shared.listDirectoryEntries() shouldBe emptyList()
+                (root / "shared-cancel-home" / "workspace").listDirectoryEntries().single().listDirectoryEntries().size shouldBe 1
+            }
+
+            test("removes its workspace directory when it named nothing in the root") {
+                val shared = (root / "shared-empty").apply { createDirectories() }
+
+                workspace("ucc", shared, DirectoriesConfig(root / "shared-empty-home")) {}
+
+                (root / "shared-empty-home" / "workspace").listDirectoryEntries() shouldBe emptyList()
+            }
+        }
+
+        context("delete") {
+            test("removes a tracked directory with the tracked paths under it, and the directory of its own") {
+                lateinit var directory: Path
+
+                workspace("delete", config = DirectoriesConfig(root / "delete")) {
+                    directory = it.directory
+                    val tracked = tempDirectory()
+                    track((tracked / "make.log").apply { writeText("log") })
+                    track((tracked / "empty").apply { createDirectories() })
+                    delete()
+                }
+
+                directory.shouldNotExist()
+            }
+        }
+
+        context("move") {
+            test("moves tracked directories into the target by their location relative to the workspace, empty ones included") {
+                val target = root / "move-target"
+                lateinit var directory: Path
+
+                workspace("move", config = DirectoriesConfig(root / "move")) {
+                    directory = it.directory
+                    val nested = (directory / "sub" / "nested").apply { createDirectories() }
+                    track(nested)
+                    (nested / "make.log").writeText("log")
+                    this["empty"].createDirectories()
+                    move(target)
+                }
+
+                (target / "sub" / "nested" / "make.log").readText() shouldBe "log"
+                (target / "empty").shouldExist()
+                directory.shouldNotExist()
             }
         }
 
@@ -182,7 +216,7 @@ class WorkspaceTest :
                 val fresh = (root / "prune-owned" / "workspace" / "fresh").apply { createDirectories() }
                 expire(stale)
 
-                workspace("trigger", directories = Directories(root / "prune-owned")) {}
+                workspace("trigger", config = DirectoriesConfig(root / "prune-owned")) {}
 
                 stale.shouldNotExist()
                 fresh.shouldExist()
@@ -195,7 +229,7 @@ class WorkspaceTest :
                 val foreign = (shared / "UCC.log").apply { writeText("") }
                 listOf(own, otherName, foreign).forEach(::expire)
 
-                workspace("ucc", shared, Directories(root / "prune-shared-home")) {}
+                workspace("ucc", shared, DirectoriesConfig(root / "prune-shared-home")) {}
 
                 own.shouldNotExist()
                 otherName.shouldExist()
@@ -212,7 +246,7 @@ class WorkspaceTest :
                     var ran = false
 
                     try {
-                        workspace("trigger", directories = Directories(root / "prune-held")) { ran = true }
+                        workspace("trigger", config = DirectoriesConfig(root / "prune-held")) { ran = true }
                     } finally {
                         stream.close()
                     }

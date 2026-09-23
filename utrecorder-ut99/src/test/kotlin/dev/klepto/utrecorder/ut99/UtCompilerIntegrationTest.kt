@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.get
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -27,12 +27,12 @@ import kotlin.io.path.writeText
 class UtCompilerIntegrationTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utcompiler-integration")
-        val config = UtConfig.DEFAULT
+        val config = UtConfig.fromProperties()
 
         beforeSpec { UtInstaller(config).install() }
         afterSpec { root.toFile().deleteRecursively() }
 
-        fun compiler(packageName: String): UtCompiler = UtInstallation(config.gameDirectory, Directories(root / packageName)).compiler
+        fun compiler(packageName: String): UtCompiler = UtInstallation(config.gameDirectory, UtConfig(DirectoriesConfig(root / packageName))).compiler
 
         fun sources(
             packageName: String,

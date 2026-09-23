@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.startAndAwait
 import io.kotest.assertions.throwables.shouldThrow
@@ -118,7 +118,7 @@ class UtCompilerTest :
             if (fails) {
                 (systemDirectory / "ucc.fail").writeText("")
             }
-            return UtInstallation(root / name, Directories(root / "$name-home"))
+            return UtInstallation(root / name, UtConfig(DirectoriesConfig(root / "$name-home")))
         }
 
         fun sources(packageName: String): Path {
@@ -172,12 +172,14 @@ class UtCompilerTest :
                 (root / "staged" / "PackageFour").exists() shouldBe false
             }
 
-            test("leaves no workspace behind after a successful run") {
+            test("keeps the workspace of a successful run, holding the make configuration it wrote") {
                 val compiler = installation("no-keep").compiler
 
                 compiler.make(sources("PackageSix"), root / "out" / "PackageSix.u")
 
-                workspaces("no-keep") shouldBe emptyList()
+                val workspace = workspaces("no-keep").single()
+                (workspace / "make.ini").exists() shouldBe true
+                (workspace / "PackageSix.u").exists() shouldBe true
             }
 
             test("keeps the workspace of a failed run with make.log written, and throws") {

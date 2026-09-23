@@ -1,9 +1,10 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.EmbeddedArtifacts
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.ut99.UtIni
+import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
 import io.kotest.core.spec.style.FunSpec
@@ -24,7 +25,7 @@ class RecorderPackageTest :
         val gameExecutable = UtPlatform.current().gameExecutable
         installationDirectory.resolve("System").createDirectories()
         installationDirectory.resolve("System/$gameExecutable").writeText("")
-        val installation = UtInstallation(installationDirectory, Directories(home))
+        val installation = UtInstallation(installationDirectory, UtConfig(DirectoriesConfig(home)))
 
         // The tag every Unreal package file opens with, little endian.
         val packageTag = byteArrayOf(0xC1.toByte(), 0x83.toByte(), 0x2A, 0x9E.toByte())

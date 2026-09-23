@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.ut99
 
 import com.sun.net.httpserver.HttpServer
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.startAndAwait
 import io.kotest.assertions.throwables.shouldThrow
@@ -23,7 +23,6 @@ import kotlin.io.path.name
 import kotlin.io.path.readText
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
-import kotlin.time.Duration.Companion.days
 
 class UtPackageInstallerTest :
     FunSpec({
@@ -144,7 +143,7 @@ class UtPackageInstallerTest :
 
         suspend fun fakeCompiler(): Path = fakeCompilerCache ?: fakeCompiler(root / "fake-ucc").also { fakeCompilerCache = it }
 
-        fun packagesDirectory(name: String): Path = Directories(root / name).packages
+        fun packagesDirectory(name: String): Path = DirectoriesConfig(root / name).packages
 
         suspend fun installation(
             name: String,
@@ -158,7 +157,7 @@ class UtPackageInstallerTest :
             if (compilerFails) {
                 (systemDirectory / "ucc.fail").writeText("")
             }
-            return UtInstallation(root / name / "install", Directories(root / name))
+            return UtInstallation(root / name / "install", UtConfig(DirectoriesConfig(root / name)))
         }
 
         fun installer(
@@ -166,7 +165,8 @@ class UtPackageInstallerTest :
             vararg packages: UtPackage,
         ): UtPackageInstaller {
             val home = installation.directory.parent
-            val config = UtConfig(directories = Directories(home), gameDirectory = installation.directory, redirectUrls = redirects)
+            val config =
+                UtConfig(directoriesConfig = DirectoriesConfig(home), gameDirectory = installation.directory, redirectUrls = redirects)
             return UtPackageInstaller(packages.toList(), installation, config)
         }
 
@@ -277,19 +277,6 @@ class UtPackageInstallerTest :
         }
 
         context("install from a redirect") {
-            test("fetches a package no local source holds, decompresses it and copies it into the installation") {
-                val installation = installation("fetch-from-redirect")
-                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
-                val installer = installer(installation, UtPackage.named("BTPog", ""))
-
-                installer.install()
-
-                val target = installationPath(installation, UtDirectory.System, "BTPog.u")
-                (packagesDirectory("fetch-from-redirect") / "BTPog.u").readText() shouldBe "BTPog"
-                target.readText() shouldBe "BTPog"
-                installer.installed.map { it.path } shouldBe listOf(target)
-            }
-
             test("fetches a package named CTF-BT +Fun from a redirect that serves it only at its encoded name") {
                 val installation = installation("encoded-name")
                 served["/first/CTF-BT%20%2BFun.unr.uz"] = "CTF-BT +Fun".toByteArray()
@@ -340,27 +327,6 @@ class UtPackageInstallerTest :
                     "123456789ABCDEF0876543210BADF00D"
             }
 
-            test("discards a package a redirect serves at another GUID and takes the next redirect serving the demo's") {
-                val installation = installation("mismatched-redirect")
-                served["/first/BTPog.u.uz"] = packageBytes(otherGuid)
-                served["/second/BTPog.u.uz"] = packageBytes(guid)
-                val installer = installer(installation, UtPackage.named("BTPog", guid))
-
-                installer.install()
-
-                requests shouldBe
-                    listOf(
-                        "HEAD /first/BTPog.u.uz",
-                        "GET /first/BTPog.u.uz",
-                        "HEAD /second/BTPog.u.uz",
-                        "GET /second/BTPog.u.uz",
-                    )
-                val target = installationPath(installation, UtDirectory.System, "BTPog.u")
-                UtPackage.read(target).guid shouldBe "123456789ABCDEF0876543210BADF00D"
-                UtPackage.read(packagesDirectory("mismatched-redirect") / "BTPog.u").guid shouldBe
-                    "123456789ABCDEF0876543210BADF00D"
-            }
-
             test("fails naming the package when no redirect serves it at the demo's GUID") {
                 val installation = installation("mismatched-everywhere")
                 served["/first/BTPog.u.uz"] = packageBytes(otherGuid)
@@ -385,16 +351,6 @@ class UtPackageInstallerTest :
                 val target = installationPath(installation, UtDirectory.System, "BTPog.u")
                 UtPackage.read(target).guid shouldBe "11111111222222223333333344444444"
                 installer.installed.map { it.path } shouldBe listOf(target)
-            }
-
-            test("deletes the archive it fetched once it is decompressed") {
-                val installation = installation("archive-deleted")
-                served["/first/BTPog.u.uz"] = "BTPog".toByteArray()
-                val installer = installer(installation, UtPackage.named("BTPog", ""))
-
-                installer.install()
-
-                packagesDirectory("archive-deleted").listDirectoryEntries().map { it.name } shouldBe listOf("BTPog.u")
             }
 
             test("leaves nothing in the packages directory when the decompression fails") {

@@ -1,12 +1,16 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
+import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldStartWith
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
@@ -18,7 +22,7 @@ import java.time.ZoneId
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
-import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.readText
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 import kotlin.time.Duration
@@ -30,18 +34,14 @@ class SoundPassTest :
         val gameExecutable = UtPlatform.current().gameExecutable
         installationDirectory.resolve("System").createDirectories()
         installationDirectory.resolve("System/$gameExecutable").writeText("")
-        val installation = UtInstallation(installationDirectory, Directories(home))
+        val installation = UtInstallation(installationDirectory, UtConfig(DirectoriesConfig(home)))
         val config = RecorderConfig(installationDirectory = installationDirectory)
-        val openAlEnvironment = mapOf("ALSOFT_DRIVERS" to "wave", "ALSOFT_LOGLEVEL" to "2")
 
         afterSpec {
             home.toFile().deleteRecursively()
         }
 
-        fun pass(
-            settings: RecorderConfig = config,
-            environment: Map<String, String> = openAlEnvironment,
-        ) = SoundPass(settings, installation, openAlEnvironment = environment)
+        fun pass(settings: RecorderConfig = config) = SoundPass(settings, installation, DirectoriesConfig(home))
 
         fun wavFile(path: Path): Path {
             val seconds = 0.5
@@ -69,6 +69,45 @@ class SoundPassTest :
             path.parent.createDirectories()
             path.writeBytes(bytes.array())
             return path
+        }
+
+        context("record") {
+            test("a recording without audio fails without launching the sound pass") {
+                val failure =
+                    shouldThrow<IllegalStateException> {
+                        workspace("record", config = DirectoriesConfig(home)) { workspace ->
+                            pass(config.copy(audio = false)).record(home / "missing.dem", workspace)
+                        }
+                    }
+
+                failure.message shouldContain "no audio"
+            }
+        }
+
+        context("openAl") {
+            test("the environment names the pass's conf and the conf writes the pass's own wav beside the game binary") {
+                workspace("sound-pass", installation.systemDirectory, DirectoriesConfig(home)) { workspace ->
+                    val environment = pass().openAl(workspace)
+
+                    val conf = Path.of(environment.getValue("ALSOFT_CONF"))
+                    conf shouldBe workspace["alsoft.conf"].toAbsolutePath()
+                    conf.fileName.toString() shouldStartWith "sound-pass-"
+                    conf.readText() shouldBe
+                        "[general]\ndrivers = wave\nfrequency = 44100\nchannels = stereo\nsample-type = int16\n\n" +
+                        "[wave]\nfile = ${workspace["audio.wav"].fileName}\n"
+                    environment["ALSOFT_DRIVERS"] shouldBe "wave"
+                    environment["ALSOFT_LOGLEVEL"] shouldBe "2"
+                }
+            }
+
+            test("two passes on one installation write wavs of different names") {
+                suspend fun conf() =
+                    workspace("sound-pass", installation.systemDirectory, DirectoriesConfig(home)) { workspace ->
+                        Path.of(pass().openAl(workspace).getValue("ALSOFT_CONF")).readText()
+                    }
+
+                conf() shouldNotBe conf()
+            }
         }
 
         context("gameIni") {

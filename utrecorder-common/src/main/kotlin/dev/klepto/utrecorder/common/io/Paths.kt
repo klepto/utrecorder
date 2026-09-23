@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.common.io
 
-import dev.klepto.utrecorder.common.config.PropertySource
 import dev.klepto.utrecorder.common.log.catchingIo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -53,12 +52,11 @@ operator fun Path.get(name: String): Path = resolve(name)
 operator fun Path.get(name: PathName): Path = get(name.pathName)
 
 /**
- * The working directory of the process [properties] describe, read from `user.dir` as an absolute, normalized path.
+ * The working directory of the process [reader] describes, read from `user.dir` as an absolute, normalized path.
  *
- * @throws IllegalStateException if [properties] holds no `user.dir`.
+ * @throws IllegalStateException if [reader] holds no `user.dir`.
  */
-fun workingDirectory(properties: PropertySource = PropertySource.DEFAULT): Path =
-    checkNotNull(properties.systemProperty("user.dir")) { "No user.dir system property" }.toAbsolutePath()
+fun workingDirectory(): Path = checkNotNull(System.getProperty("user.dir")) { "No user.dir system property" }.toAbsolutePath()
 
 /**
  * Copies the file at this path to [target], creating the parent directories of [target], and returns [target].
@@ -83,11 +81,11 @@ suspend fun Path.copy(
  * ones this directory does not contain.
  */
 @OptIn(ExperimentalPathApi::class)
-suspend fun Path.move(target: Path): Unit =
+suspend fun Path.move(target: Path): Path =
     withContext(Dispatchers.IO) {
         if (!isDirectory()) {
             moveFile(target.createParentDirectories())
-            return@withContext
+            return@withContext target
         }
 
         walk(PathWalkOption.INCLUDE_DIRECTORIES)
@@ -102,6 +100,7 @@ suspend fun Path.move(target: Path): Unit =
             }
 
         deleteRecursively()
+        target
     }
 
 /**

@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.PropertySource
 import dev.klepto.utrecorder.common.os.OperatingSystem
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.ExecutableResult
@@ -16,9 +15,7 @@ import java.nio.file.Path
  * Use one for everything that shells out to ffmpeg: running a command line to completion, reading the duration of a
  * media file and counting the frames of a video.
  */
-class Ffmpeg(
-    private val properties: PropertySource = PropertySource.DEFAULT,
-) : FfmpegLike {
+class Ffmpeg : FfmpegLike {
     /**
      * The path of the bundled ffmpeg executable, resolved once at first use alongside the probe's.
      */
@@ -78,9 +75,9 @@ class Ffmpeg(
         path: Path,
         libraryDirectory: Path,
         arguments: List<String> = emptyList(),
-        operatingSystem: OperatingSystem = OperatingSystem.current(properties),
+        operatingSystem: OperatingSystem = OperatingSystem.current(),
     ): Executable =
-        Executable.build(path, properties) {
+        Executable.build(path) {
             this.arguments += arguments
             prependLibraryPath(libraryDirectory, operatingSystem)
         }

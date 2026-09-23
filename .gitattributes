@@ -3,3 +3,4 @@
 *.jar binary
 *.iso binary
 *.u binary
+*.ini text eol=crlf

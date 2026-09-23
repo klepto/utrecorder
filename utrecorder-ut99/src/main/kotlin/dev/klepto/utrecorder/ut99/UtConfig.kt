@@ -1,15 +1,16 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.config.ConfigReader
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
+import dev.klepto.utrecorder.common.config.SystemConfigReader
 import dev.klepto.utrecorder.common.io.get
 import java.nio.file.Path
 
 /**
  * Configuration of the Unreal Tournament module.
  *
- * Use [DEFAULT] for the configuration of the current process, or [fromProperties] to build one from a
- * [PropertySource].
+ * Use the constructor for the configuration of literal defaults, or [fromProperties] for the one the configuration
+ * keys of a [ConfigReader] name.
  *
  * @property directories The directories the installation, the packages and the downloads live under.
  * @property gameDirectory The directory the game is installed in.
@@ -21,69 +22,35 @@ import java.nio.file.Path
  * from.
  */
 data class UtConfig(
-    val directories: Directories = Directories.DEFAULT,
-    val gameDirectory: Path = directories.installs[GAME_DIRECTORY],
-    val isoUrl: String = DEFAULT_ISO_URL,
-    val isoMd5: String = DEFAULT_ISO_MD5,
-    val patchUrl: String = DEFAULT_PATCH_URL,
-    val patchVersion: String = DEFAULT_PATCH_VERSION,
-    val redirectUrls: List<String> = DEFAULT_REDIRECT_URLS,
+    val directoriesConfig: DirectoriesConfig = DirectoriesConfig(),
+    val gameDirectory: Path = directoriesConfig.installs["ut99"],
+    val isoUrl: String = "https://archive.org/download/ut-goty/UT_GOTY_CD1.iso",
+    val isoMd5: String = "e5127537f44086f5ed36a9d29f992c00",
+    val patchUrl: String = "https://github.com/OldUnreal/UnrealTournamentPatches/releases/download",
+    val patchVersion: String = "469e",
+    val redirectUrls: List<String> = listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com"),
+    val patchFileName: String = UtPlatform.current().patchFileName(patchVersion),
 ) {
-    /**
-     * The name of the patch file this configuration installs on the current platform.
-     */
-    val patchFileName: String = UtPlatform.current().patchFileName(patchVersion)
-
     companion object {
         /**
-         * The name the installation takes within the installs directory.
-         */
-        const val GAME_DIRECTORY = "ut99"
-
-        /**
-         * The URL the original UT ISO is fetched from by default.
-         */
-        private const val DEFAULT_ISO_URL = "https://archive.org/download/ut-goty/UT_GOTY_CD1.iso"
-
-        /**
-         * The MD5 hash the fetched ISO is verified against by default.
-         */
-        private const val DEFAULT_ISO_MD5 = "e5127537f44086f5ed36a9d29f992c00"
-
-        /**
-         * The URL the patch releases are fetched from by default.
-         */
-        private const val DEFAULT_PATCH_URL = "https://github.com/OldUnreal/UnrealTournamentPatches/releases/download"
-
-        /**
-         * The patch version an installation is materialized with by default.
-         */
-        private const val DEFAULT_PATCH_VERSION = "469e"
-
-        /**
-         * The redirects a package is fetched from by default.
-         */
-        private val DEFAULT_REDIRECT_URLS = listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com")
-
-        /**
-         * The configuration a caller that names none works against, resolved on first use.
-         */
-        val DEFAULT: UtConfig by lazy { fromProperties() }
-
-        /**
-         * Builds the configuration [properties] holds, against the given [directories].
+         * The configuration the keys of [reader] name, over the literal defaults, against [directoriesConfig].
+         *
+         * Reads `iso_url`, `iso_md5`, `patch_url`, `patch_version` and the comma-separated `redirect_urls`.
          */
         fun fromProperties(
-            properties: PropertySource = PropertySource.DEFAULT,
-            directories: Directories = Directories.DEFAULT,
-        ): UtConfig =
-            UtConfig(
-                directories = directories,
-                isoUrl = properties["iso_url"] ?: DEFAULT_ISO_URL,
-                isoMd5 = properties["iso_md5"] ?: DEFAULT_ISO_MD5,
-                patchUrl = properties["patch_url"] ?: DEFAULT_PATCH_URL,
-                patchVersion = properties["patch_version"] ?: DEFAULT_PATCH_VERSION,
-                redirectUrls = properties.list("redirect_urls") ?: DEFAULT_REDIRECT_URLS,
+            reader: ConfigReader = SystemConfigReader(),
+            directoriesConfig: DirectoriesConfig = DirectoriesConfig(reader),
+        ): UtConfig {
+            val defaults = UtConfig(directoriesConfig)
+            val patchVersion = reader["patch_version"] ?: defaults.patchVersion
+            return defaults.copy(
+                isoUrl = reader["iso_url"] ?: defaults.isoUrl,
+                isoMd5 = reader["iso_md5"] ?: defaults.isoMd5,
+                patchUrl = reader["patch_url"] ?: defaults.patchUrl,
+                patchVersion = patchVersion,
+                redirectUrls = reader.list("redirect_urls") ?: defaults.redirectUrls,
+                patchFileName = UtPlatform.current().patchFileName(patchVersion),
             )
+        }
     }
 }

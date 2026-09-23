@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
+import dev.klepto.utrecorder.common.config.SystemConfigReader
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.io.path.createTempDirectory
@@ -10,37 +10,37 @@ import kotlin.io.path.div
 class UtConfigTest :
     FunSpec({
         val home = createTempDirectory("utrecorder-utconfig-test")
-        val directories = Directories(home)
+        val directories = DirectoriesConfig(home)
 
         afterSpec { home.toFile().deleteRecursively() }
 
         fun properties(vararg properties: Pair<String, String>) =
-            PropertySource(properties = mapOf(*properties)::get, environment = { null })
+            SystemConfigReader(properties = mapOf(*properties)::get, environment = { null })
 
         test("fromProperties derives gameDirectory from the installs directory of the given directories") {
             UtConfig.fromProperties(properties(), directories).gameDirectory shouldBe directories.installs / "ut99"
         }
 
         test("fromProperties honours iso_url and iso_md5") {
-            val properties =
+            val reader =
                 properties(
                     "utrecorder.iso_url" to "https://example.test/ut.iso",
                     "utrecorder.iso_md5" to "deadbeef",
                 )
 
-            val config = UtConfig.fromProperties(properties, directories)
+            val config = UtConfig.fromProperties(reader, directories)
             config.isoUrl shouldBe "https://example.test/ut.iso"
             config.isoMd5 shouldBe "deadbeef"
         }
 
         test("fromProperties honours patch_url and patch_version") {
-            val properties =
+            val reader =
                 properties(
                     "utrecorder.patch_url" to "https://example.test/patches",
                     "utrecorder.patch_version" to "999z",
                 )
 
-            val config = UtConfig.fromProperties(properties, directories)
+            val config = UtConfig.fromProperties(reader, directories)
             config.patchUrl shouldBe "https://example.test/patches"
             config.patchVersion shouldBe "999z"
         }
@@ -57,9 +57,9 @@ class UtConfigTest :
         }
 
         test("fromProperties reads redirect_urls as a comma-separated list") {
-            val properties = properties("utrecorder.redirect_urls" to " http://one.test , http://two.test ")
+            val reader = properties("utrecorder.redirect_urls" to " http://one.test , http://two.test ")
 
-            val config = UtConfig.fromProperties(properties, directories)
+            val config = UtConfig.fromProperties(reader, directories)
             config.redirectUrls shouldBe listOf("http://one.test", "http://two.test")
         }
 

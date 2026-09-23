@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.workspace
@@ -12,7 +12,6 @@ import dev.klepto.utrecorder.ut99.UtMapInstaller
 import dev.klepto.utrecorder.ut99.UtPackageException
 import dev.klepto.utrecorder.ut99.UtPackageInstaller
 import dev.klepto.utrecorder.ut99.demo.UtDemo
-import dev.klepto.utrecorder.ut99.play
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -32,7 +31,7 @@ import kotlin.time.Duration
  */
 class UtRecorder(
     private val config: RecorderConfig = RecorderConfig.DEFAULT,
-    private val directories: Directories = Directories.DEFAULT,
+    private val directories: DirectoriesConfig = DirectoriesConfig(),
 ) {
     /**
      * Plays the demo file at [demo] at normal speed with sound off and returns the demo-time range the game played, as
@@ -61,14 +60,14 @@ class UtRecorder(
         try {
             demo.copy(stagedDemo) { "Demo file not found at $demo" }
             recorderPackage.configure(description.recorderIni())
-            val instance =
-                installation.instance("play-demo") {
+            val process =
+                installation.process("play-demo") {
                     exec = listOf(description.execLine)
                     sound = false
                     windowed = true
                     gameIni { this["Engine.Engine", "Console"] = description.console }
                 }
-            val result = instance.play(runTimeout) { }
+            val result = process.launch(runTimeout)
             return try {
                 DemoMarks.parse(result.log)
             } catch (failure: IllegalStateException) {
@@ -105,8 +104,8 @@ class UtRecorder(
      *
      * The primitive the URL [record] calls with the demo it fetched and the mp4 name the URL sanitises; the demo is
      * read once and every package it names is fetched into the installation at the GUID the demo recorded, so playback
-     * resolves every package the demo loads, and the recorder's own console package is installed into it, so the
-     * console the passes name resolves; the two passes and the mux run inside a recording workspace, the finished mp4
+     * resolves every package the demo loads, and the recorder's own console package and HUD layout are installed into
+     * it, so the console the passes name resolves; the two passes and the mux run inside a recording workspace, the finished mp4
      * moved out to the output directory before the workspace closes.
      *
      * @throws IllegalStateException when the demo cannot be resolved, or when a pass fails the recording, which a
@@ -116,17 +115,17 @@ class UtRecorder(
     suspend fun record(
         demo: Path,
         name: String = demo.name.substringBeforeLast(DEMO_EXTENSION),
-    ): Path {
-        val utConfig = UtConfig(directories = directories, gameDirectory = config.installationDirectory)
-        UtInstaller(utConfig).install()
-        val installation = UtInstallation(config.installationDirectory, directories)
-        RecorderPackage(installation).install()
-        UtMapInstaller(installation).install()
-        UtPackageInstaller(UtDemo.read(demo).packages, installation, utConfig).install()
-        return workspace(RECORD_WORKSPACE, directories = directories) {
-            RecordingSession(config, installation, directories).record(demo, name, this)
+    ): Path =
+        workspace(RECORD_WORKSPACE, config = directories) { workspace ->
+            val utConfig = UtConfig(directoriesConfig = directories, gameDirectory = config.installationDirectory)
+            UtInstaller(utConfig).install()
+            val installation = UtInstallation(config.installationDirectory, utConfig)
+            RecorderPackage(installation).install()
+            RecorderSettings.install(installation)
+            UtMapInstaller(installation).install()
+            UtPackageInstaller(UtDemo.read(demo).packages, installation, utConfig).install()
+            RecordingSession(config, installation, directories).record(demo, name, workspace)
         }
-    }
 
     companion object {
         /**

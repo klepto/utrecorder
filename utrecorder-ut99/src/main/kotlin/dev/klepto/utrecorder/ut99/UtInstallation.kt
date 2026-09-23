@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.get
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,15 +10,14 @@ import kotlin.io.path.exists
  * A materialized Unreal Tournament installation, reached through the directories, the executable and the compiler it
  * holds.
  *
- * Use [UtInstaller] to materialize one, [instance] to run it, and [compiler] to compile against it.
+ * Use [UtInstaller] to materialize one, [process] to run it, and [compiler] to compile against it.
  *
  * @property directory The root of the installation.
- * @property directories The directories holding the workspaces anything the installation runs works in.
  * @throws IllegalStateException if [directory] or the game executable it holds does not exist.
  */
 class UtInstallation(
     val directory: Path,
-    private val directories: Directories = Directories.DEFAULT,
+    val config: UtConfig = UtConfig(),
 ) {
     /**
      * The platform the installation runs on.
@@ -54,7 +52,7 @@ class UtInstallation(
     /**
      * The UCC utility of this installation.
      */
-    val compiler: UtCompiler by lazy { UtCompiler(this, directories) }
+    val compiler: UtCompiler by lazy { UtCompiler(this, config) }
 
     init {
         check(directory.exists()) { "UT installation directory not found at $directory" }
@@ -62,17 +60,16 @@ class UtInstallation(
     }
 
     /**
-     * Returns an unstarted run of this installation, named [name] and described by [configure]. Building one opens the
-     * run's workspace, pruning the expired leftovers of earlier runs of that name, and writes nothing into the
-     * installation: [play] adds the files the run needs and removes them again.
+     * Returns an unstarted run of this installation, named [name] and described by [configure]. Building one writes
+     * nothing: [UtProcess.launch] opens the run's workspace, adds the files the run needs and removes them again.
      *
      * @throws IllegalArgumentException if [name] does not match `[A-Za-z0-9._-]+`, or [configure] sets arguments
-     * without an executable.
+     * without a program.
      */
-    suspend fun instance(
+    fun process(
         name: String,
-        configure: UtInstance.Builder.() -> Unit = {},
-    ): UtInstance = UtInstance.Builder(this, name, directories).apply(configure).build()
+        configure: UtProcessBuilder.() -> Unit = {},
+    ): UtProcess = UtProcess.build(this, name, configure)
 
     /**
      * Returns the packages [packageDirectory] of this installation holds, matched by the extension it declares. Empty

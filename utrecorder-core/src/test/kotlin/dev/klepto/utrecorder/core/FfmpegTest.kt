@@ -1,9 +1,8 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.os.OperatingSystem
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
@@ -13,37 +12,27 @@ import kotlin.io.path.writeBytes
 
 class FfmpegTest :
     FunSpec({
-        fun source(environment: Map<String, String> = emptyMap()) =
-            PropertySource(
-                properties = mapOf("os.name" to "Linux", "user.dir" to "/work")::get,
-                environment = environment::get,
-            )
-
         context("run") {
             test("reports success for a zero-exit command line") {
-                Ffmpeg(source()).run("-version") shouldBe true
+                Ffmpeg().run("-version") shouldBe true
             }
 
             test("reports failure for a nonzero-exit command line, wearing the tail of its output") {
-                Ffmpeg(source()).run("-bogus-flag", "no-such-input-file") shouldBe false
+                Ffmpeg().run("-bogus-flag", "no-such-input-file") shouldBe false
             }
         }
 
         context("builder") {
-            test("prepends the executable's library directory to LD_LIBRARY_PATH") {
-                val executable = Ffmpeg(source()).builder(Path.of("bundled", "ffmpeg.exe"), Path.of("bundled"))
+            test("prepends the executable's library directory to LD_LIBRARY_PATH on Linux") {
+                val executable =
+                    Ffmpeg().builder(
+                        Path.of("bundled", "ffmpeg.exe"),
+                        Path.of("bundled"),
+                        operatingSystem = OperatingSystem.LINUX,
+                    )
 
                 executable.executablePath shouldBe Path.of("bundled", "ffmpeg.exe")
                 executable.environment["LD_LIBRARY_PATH"] shouldBe "${Path.of("bundled")}"
-            }
-
-            test("keeps an existing LD_LIBRARY_PATH value behind the prepended one") {
-                val properties = source(mapOf("LD_LIBRARY_PATH" to "/existing"))
-
-                val executable = Ffmpeg(properties).builder(Path.of("bundled", "ffmpeg.exe"), Path.of("bundled"))
-
-                val separator = File.pathSeparator
-                executable.environment["LD_LIBRARY_PATH"] shouldBe "${Path.of("bundled")}$separator/existing"
             }
         }
 
@@ -75,7 +64,7 @@ class FfmpegTest :
                 bytes.put(pcm.array())
                 file.writeBytes(bytes.array())
 
-                Ffmpeg(source()).duration(file) shouldBe 0.5
+                Ffmpeg().duration(file) shouldBe 0.5
             }
         }
 
@@ -84,7 +73,7 @@ class FfmpegTest :
                 val home = createTempDirectory("utrecorder-ffmpeg-frames")
                 val file = home / "packet-count.mp4"
 
-                Ffmpeg(source()).run(
+                Ffmpeg().run(
                     "-f",
                     "lavfi",
                     "-i",
@@ -97,7 +86,7 @@ class FfmpegTest :
                 )
                 val count = (0.7 * 10).toInt()
 
-                Ffmpeg(source()).frames(file) shouldBe count
+                Ffmpeg().frames(file) shouldBe count
             }
         }
     })

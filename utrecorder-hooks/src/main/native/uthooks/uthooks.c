@@ -582,9 +582,15 @@ static int demoPlaying(void) {
     return demoFlag && *demoFlag;
 }
 
+/*
+ * Ends the capture, leaving the virtual clock armed and stepping. Disarming it here would hand the engine back to the
+ * real counter, and the cycle thunk clamps that counter to never fall below the virtual count: on a machine that
+ * renders faster than real time the virtual count is ahead of the real one, so every site would read the same clamped
+ * value, the engine would tick a zero delta and the exiting console would never count its exit delay down. The clock
+ * keeps stepping instead, so the run exits on its own as soon as the demo ends.
+ */
 static void finishCapture(void) {
     clockFinished = 1;
-    clockCyclesArmed = 0;
     pendingSize = 0;
     if (stream != STREAM_CLOSED) {
         closeStream(stream);

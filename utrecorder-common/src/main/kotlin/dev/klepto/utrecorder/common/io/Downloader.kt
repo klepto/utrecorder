@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.common.io
 
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.log.logger
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.onDownload
@@ -15,7 +15,6 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
-import kotlin.io.path.deleteIfExists
 import kotlin.io.path.exists
 import kotlin.io.path.fileSize
 import kotlin.io.path.outputStream
@@ -42,7 +41,7 @@ class Downloader(
     private val hash: String? = null,
     private val algorithm: String = "md5",
     private val timeout: Duration = HTTP_SOCKET_TIMEOUT,
-    private val directories: Directories = Directories.DEFAULT,
+    private val config: DirectoriesConfig = DirectoriesConfig(),
 ) {
     private val normalizedHash: String? = hash?.lowercase()
 
@@ -55,13 +54,18 @@ class Downloader(
     suspend fun download(
         outputPath: Path,
         listener: DownloadListener? = null,
+    ) = withContext(Dispatchers.IO) { executeDownload(outputPath, listener) }
+
+    private suspend fun executeDownload(
+        outputPath: Path,
+        listener: DownloadListener? = null,
     ) {
         if (isUpToDate(outputPath)) {
             reportDownloaded(outputPath, listener)
             return
         }
 
-        workspace("download", directories = directories) {
+        workspace("download", config = config) {
             val temporary = tempFile()
             log.info { "Downloading $url to $outputPath" }
             try {
@@ -69,7 +73,7 @@ class Downloader(
                 verifyHash(temporary)
                 temporary.move(outputPath)
             } finally {
-                withContext(Dispatchers.IO) { temporary.deleteIfExists() }
+                temporary.deleteCatching()
             }
         }
     }
@@ -77,12 +81,12 @@ class Downloader(
     /**
      * Reports the file already held by [outputPath] to [listener] as a download that is complete.
      */
-    private suspend fun reportDownloaded(
+    private fun reportDownloaded(
         outputPath: Path,
         listener: DownloadListener?,
     ) {
         log.debug { "File $outputPath was already downloaded" }
-        val size = withContext(Dispatchers.IO) { outputPath.fileSize() }
+        val size = outputPath.fileSize()
         listener?.invoke(size, size)
     }
 
@@ -93,11 +97,9 @@ class Downloader(
         target: Path,
         listener: DownloadListener?,
     ) {
-        withContext(Dispatchers.IO) {
-            target.outputStream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
-                val channel = output.asByteWriteChannel()
-                useHttpClient(timeout) { copyTo(channel, listener) }
-            }
+        target.outputStream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
+            val channel = output.asByteWriteChannel()
+            useHttpClient(timeout) { copyTo(channel, listener) }
         }
     }
 
@@ -130,11 +132,11 @@ class Downloader(
      * a hash, its size matches the size the server reports.
      */
     private suspend fun isUpToDate(outputPath: Path): Boolean {
-        if (!withContext(Dispatchers.IO) { outputPath.exists() }) return false
+        if (!outputPath.exists()) return false
         if (normalizedHash != null) return outputPath.digest(algorithm) == normalizedHash
 
         val remoteSize = remoteSize() ?: return false
-        return withContext(Dispatchers.IO) { outputPath.fileSize() } == remoteSize
+        return outputPath.fileSize() == remoteSize
     }
 
     /**

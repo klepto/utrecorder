@@ -1,7 +1,8 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.config.Directories
-import dev.klepto.utrecorder.common.config.PropertySource
+import dev.klepto.utrecorder.common.config.ConfigReader
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
+import dev.klepto.utrecorder.common.config.SystemConfigReader
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.toAbsolutePath
 import dev.klepto.utrecorder.ut99.UtConfig
@@ -14,7 +15,7 @@ import kotlin.time.Duration.Companion.seconds
  * settings the two passes and the mux are driven with.
  *
  * Use [DEFAULT] for the configuration the current process works against, or [fromProperties] to build one from a
- * given [PropertySource].
+ * given [ConfigReader].
  *
  * @property installationDirectory The Unreal Tournament installation demos are played in, holding the compiled
  * `UTRecorder.u` package.
@@ -134,48 +135,48 @@ data class RecorderConfig(
         val DEFAULT: RecorderConfig by lazy { fromProperties() }
 
         /**
-         * Returns the configuration [properties] holds, falling back to the Unreal Tournament installation under the
+         * Returns the configuration [reader] holds, falling back to the Unreal Tournament installation under the
          * installs directory of [directories].
          */
         fun fromProperties(
-            properties: PropertySource = PropertySource.DEFAULT,
-            directories: Directories = Directories.DEFAULT,
+            reader: ConfigReader = SystemConfigReader(),
+            directories: DirectoriesConfig = DirectoriesConfig(),
         ): RecorderConfig =
             RecorderConfig(
                 installationDirectory =
-                    properties.get("core.installation_directory") { it.toAbsolutePath() }
-                        ?: directories.installs[UtConfig.GAME_DIRECTORY],
-                startupTimeout = properties.duration("core.startup_timeout") ?: DEFAULT_STARTUP_TIMEOUT,
-                maxRunMargin = properties.duration("core.max_run_margin") ?: DEFAULT_MAX_RUN_MARGIN,
-                timeoutGrace = properties.duration("core.timeout_grace") ?: DEFAULT_TIMEOUT_GRACE,
-                exitDelay = properties.duration("core.exit_delay") ?: DEFAULT_EXIT_DELAY,
-                fps = properties.get("record.fps", String::toInt) ?: DEFAULT_FPS,
-                codec = properties["record.codec"] ?: DEFAULT_CODEC,
-                preset = properties["record.preset"] ?: DEFAULT_PRESET,
-                crf = properties["record.crf"] ?: DEFAULT_CRF,
-                bitrate = properties["record.bitrate"] ?: DEFAULT_BITRATE,
-                svtav1Params = properties["record.svtav1_params"] ?: DEFAULT_SVTAV1_PARAMS,
-                gop = properties.get("record.gop", String::toInt) ?: DEFAULT_GOP,
-                width = properties.get("record.width", String::toInt) ?: DEFAULT_WIDTH,
-                height = properties.get("record.height", String::toInt) ?: DEFAULT_HEIGHT,
-                frameQueue = properties.get("record.frame_queue", String::toInt) ?: DEFAULT_FRAME_QUEUE,
-                framePort = properties.get("record.frame_port", String::toInt) ?: DEFAULT_FRAME_PORT,
-                frameTimeout = properties.duration("record.frame_timeout") ?: DEFAULT_FRAME_TIMEOUT,
-                recordArguments = properties["record.arguments"] ?: DEFAULT_RECORD_ARGUMENTS,
-                audio = properties.get("record.audio", String::toBoolean) ?: DEFAULT_AUDIO,
-                audioBitrate = properties["record.audio_bitrate"] ?: DEFAULT_AUDIO_BITRATE,
-                audioFilter = properties["record.audio_filter"] ?: DEFAULT_AUDIO_FILTER,
-                audioOffset = properties.get("record.audio_offset", String::toDouble) ?: DEFAULT_AUDIO_OFFSET,
-                soundRender = properties.get("record.sound_render", String::toBoolean) ?: DEFAULT_SOUND_RENDER,
-                soundWidth = properties.get("record.sound_width", String::toInt) ?: DEFAULT_SOUND_WIDTH,
-                soundHeight = properties.get("record.sound_height", String::toInt) ?: DEFAULT_SOUND_HEIGHT,
-                soundFps = properties.get("record.sound_fps", String::toInt) ?: DEFAULT_SOUND_FPS,
-                renderThreads = properties.get("record.render_threads", String::toInt) ?: DEFAULT_RENDER_THREADS,
+                    reader.get("core.installation_directory") { it.toAbsolutePath() }
+                        ?: UtConfig(directoriesConfig = directories).gameDirectory,
+                startupTimeout = reader.duration("core.startup_timeout") ?: DEFAULT_STARTUP_TIMEOUT,
+                maxRunMargin = reader.duration("core.max_run_margin") ?: DEFAULT_MAX_RUN_MARGIN,
+                timeoutGrace = reader.duration("core.timeout_grace") ?: DEFAULT_TIMEOUT_GRACE,
+                exitDelay = reader.duration("core.exit_delay") ?: DEFAULT_EXIT_DELAY,
+                fps = reader.get("record.fps", String::toInt) ?: DEFAULT_FPS,
+                codec = reader["record.codec"] ?: DEFAULT_CODEC,
+                preset = reader["record.preset"] ?: DEFAULT_PRESET,
+                crf = reader["record.crf"] ?: DEFAULT_CRF,
+                bitrate = reader["record.bitrate"] ?: DEFAULT_BITRATE,
+                svtav1Params = reader["record.svtav1_params"] ?: DEFAULT_SVTAV1_PARAMS,
+                gop = reader.get("record.gop", String::toInt) ?: DEFAULT_GOP,
+                width = reader.get("record.width", String::toInt) ?: DEFAULT_WIDTH,
+                height = reader.get("record.height", String::toInt) ?: DEFAULT_HEIGHT,
+                frameQueue = reader.get("record.frame_queue", String::toInt) ?: DEFAULT_FRAME_QUEUE,
+                framePort = reader.get("record.frame_port", String::toInt) ?: DEFAULT_FRAME_PORT,
+                frameTimeout = reader.duration("record.frame_timeout") ?: DEFAULT_FRAME_TIMEOUT,
+                recordArguments = reader["record.arguments"] ?: DEFAULT_RECORD_ARGUMENTS,
+                audio = reader.get("record.audio", String::toBoolean) ?: DEFAULT_AUDIO,
+                audioBitrate = reader["record.audio_bitrate"] ?: DEFAULT_AUDIO_BITRATE,
+                audioFilter = reader["record.audio_filter"] ?: DEFAULT_AUDIO_FILTER,
+                audioOffset = reader.get("record.audio_offset", String::toDouble) ?: DEFAULT_AUDIO_OFFSET,
+                soundRender = reader.get("record.sound_render", String::toBoolean) ?: DEFAULT_SOUND_RENDER,
+                soundWidth = reader.get("record.sound_width", String::toInt) ?: DEFAULT_SOUND_WIDTH,
+                soundHeight = reader.get("record.sound_height", String::toInt) ?: DEFAULT_SOUND_HEIGHT,
+                soundFps = reader.get("record.sound_fps", String::toInt) ?: DEFAULT_SOUND_FPS,
+                renderThreads = reader.get("record.render_threads", String::toInt) ?: DEFAULT_RENDER_THREADS,
                 soundRenderThreads =
-                    properties.get("record.sound_render_threads", String::toInt) ?: DEFAULT_SOUND_RENDER_THREADS,
-                renderVectorWidth = properties["record.render_vector_width"] ?: DEFAULT_RENDER_VECTOR_WIDTH,
-                renderGlthread = properties.get("record.render_glthread", String::toBoolean) ?: DEFAULT_RENDER_GLTHREAD,
-                renderNoError = properties.get("record.render_no_error", String::toBoolean) ?: DEFAULT_RENDER_NO_ERROR,
+                    reader.get("record.sound_render_threads", String::toInt) ?: DEFAULT_SOUND_RENDER_THREADS,
+                renderVectorWidth = reader["record.render_vector_width"] ?: DEFAULT_RENDER_VECTOR_WIDTH,
+                renderGlthread = reader.get("record.render_glthread", String::toBoolean) ?: DEFAULT_RENDER_GLTHREAD,
+                renderNoError = reader.get("record.render_no_error", String::toBoolean) ?: DEFAULT_RENDER_NO_ERROR,
             )
     }
 }

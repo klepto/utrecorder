@@ -17,6 +17,7 @@ import kotlin.system.exitProcess
  */
 class UtCli(
     private val arguments: List<String>,
+    private val utConfig: UtConfig = UtConfig(),
 ) {
     /**
      * The name of the command to run, or `null` if the arguments name none.
@@ -31,7 +32,7 @@ class UtCli(
     /**
      * The configuration the command runs against, holding the installation the `--install` option names.
      */
-    private val config = path("install")?.let { UtConfig.DEFAULT.copy(gameDirectory = it) } ?: UtConfig.DEFAULT
+    private val config = path("install")?.let { utConfig.copy(gameDirectory = it) } ?: utConfig
 
     /**
      * Reads the `--key=value` options the [arguments] hold into a map, by key.
@@ -75,7 +76,7 @@ class UtCli(
      */
     private suspend fun install(): UtInstallation {
         UtInstaller(config).install()
-        return UtInstallation(config.gameDirectory, config.directories)
+        return UtInstallation(config.gameDirectory)
     }
 
     /**

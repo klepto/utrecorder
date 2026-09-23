@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.Directories
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.get
@@ -27,12 +26,11 @@ import kotlin.io.path.writeText
  * Use [UtInstallation.compiler] for the compiler of an installation.
  *
  * @property installation The installation the compiler belongs to.
- * @property directories The directories holding the workspace a compile runs in.
  * @throws IllegalStateException if [installation] holds no compiler executable.
  */
 class UtCompiler(
     private val installation: UtInstallation,
-    private val directories: Directories = Directories.DEFAULT,
+    private val config: UtConfig = UtConfig(),
 ) {
     /**
      * The directory holding the compiler executable, where the compiler reads and writes packages.
@@ -49,15 +47,20 @@ class UtCompiler(
     }
 
     /**
-     * Runs the compiler with the given [arguments] and returns the result without inspecting its exit code.
+     * Runs the compiler with the given [arguments] and returns the result without inspecting its exit code. The
+     * compiler logs to a file of a workspace opened in [directory] for the run.
      */
     private suspend fun run(vararg arguments: String): ExecutableResult =
-        Executable
-            .build(executablePath.toAbsolutePath()) {
-                workingDirectory = directory
-                prependLibraryPath(directory)
-                this.arguments += arguments.toList() + installation.platform.homeArguments
-            }.startAndAwait()
+        workspace("ucc", directory, config.directoriesConfig) { workspace ->
+            Executable
+                .build(executablePath.toAbsolutePath()) {
+                    workingDirectory = directory
+                    prependLibraryPath(directory)
+                    this.arguments += arguments.toList()
+                    this.arguments += "-log=${workspace[UCC_LOG].fileName}"
+                    this.arguments += installation.platform.homeArguments
+                }.startAndAwait()
+        }
 
     /**
      * Extracts the `.uz` archive into given [outputPath]. If [outputPath] is not specified, the archive will be
@@ -101,12 +104,12 @@ class UtCompiler(
         val stagedPath = installation.directory[packageName]
         val producedPath = directory[packageFileName]
 
-        return workspace("ucc", directories = directories) {
+        return workspace("ucc", config = config.directoriesConfig) { workspace ->
             val iniPath =
                 defaultConfig()
                     .apply(configure)
                     .apply { add(EDITOR_SECTION, EDIT_PACKAGES, packageName) }
-                    .write(file(MAKE_INI))
+                    .write(workspace[MAKE_INI])
 
             val result =
                 try {
@@ -120,13 +123,19 @@ class UtCompiler(
                     stagedPath.deleteCatching()
                 }
 
-            withContext(Dispatchers.IO) { file(MAKE_LOG).writeText(result.output.joinToString(System.lineSeparator())) }
+            val makeLogPath = workspace[MAKE_LOG]
+            withContext(Dispatchers.IO) { makeLogPath.writeText(result.output.joinToString(System.lineSeparator())) }
             result.orThrow()
 
-            withContext(Dispatchers.IO) { check(producedPath.exists()) { "UCC failed to compile $packageName, see ${file(MAKE_LOG)}" } }
-            producedPath.move(file(packageFileName))
+            withContext(Dispatchers.IO) {
+                check(producedPath.exists()) {
+                    "UCC failed to compile $packageName, see $makeLogPath"
+                }
+            }
 
-            file(packageFileName).copy(outputPath, overwrite = true)
+            val packagePath = workspace[packageFileName]
+            producedPath.move(packagePath)
+            packagePath.copy(outputPath, overwrite = true)
         }
     }
 
@@ -159,5 +168,10 @@ class UtCompiler(
          * The name the compiler output of a run is written under.
          */
         private const val MAKE_LOG = "make.log"
+
+        /**
+         * The name the log the compiler itself writes is written under.
+         */
+        private const val UCC_LOG = "ucc.log"
     }
 }

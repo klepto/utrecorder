@@ -61,11 +61,19 @@ class EmbeddedArtifacts(
      * Writes every artifact this namespace holds into [directory], overwriting the files already there, and returns
      * the paths written.
      */
-    suspend fun extractTo(directory: Path): List<Path> =
+    suspend fun extractTo(directory: Path): List<Path> {
+        withContext(Dispatchers.IO) { directory.createDirectories() }
+        return extractTo { name -> directory[name] }
+    }
+
+    /**
+     * Writes every artifact this namespace holds to the path [target] names for it, overwriting the file already
+     * there, and returns the paths written.
+     */
+    suspend fun extractTo(target: (String) -> Path): List<Path> =
         withContext(Dispatchers.IO) {
-            directory.createDirectories()
             names.map { name ->
-                directory[name].also { path -> path.createParentDirectories().writeBytes(read(name)) }
+                target(name).also { path -> path.createParentDirectories().writeBytes(read(name)) }
             }
         }
 

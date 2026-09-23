@@ -1,10 +1,11 @@
 package dev.klepto.utrecorder.cli
 
 import com.sun.net.httpserver.HttpServer
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldStartWith
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -21,7 +22,7 @@ import kotlin.io.path.writeText
 class UtRecorderCliTest :
     FunSpec({
         val home = Path.of("build", "test", "utrecorder-cli-test")
-        val directories = Directories(home)
+        val directories = DirectoriesConfig(home)
 
         afterSpec { home.toFile().deleteRecursively() }
 
@@ -44,7 +45,7 @@ class UtRecorderCliTest :
             shouldThrow<Exception> { UtRecorderCli.main("http://127.0.0.1:1/demos/never.dem", directories) }
         }
 
-        test("cancelling the coroutine running main(url, directories) leaves no child process alive and no workspace directory behind") {
+        test("cancelling the coroutine running main(url, directories) leaves no child process alive and keeps the workspace it wrote") {
             directories.workspace.toFile().deleteRecursively()
             val requestReceived = CompletableDeferred<Unit>()
             val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
@@ -63,13 +64,7 @@ class UtRecorderCliTest :
                     job.cancelAndJoin()
                 }
 
-                val leftWorkspaceFiles =
-                    if (directories.workspace.exists()) {
-                        directories.workspace.listDirectoryEntries()
-                    } else {
-                        emptyList()
-                    }
-                leftWorkspaceFiles shouldBe emptyList()
+                directories.workspace.listDirectoryEntries().single().fileName.toString() shouldStartWith "download-"
             } finally {
                 server.stop(0)
             }

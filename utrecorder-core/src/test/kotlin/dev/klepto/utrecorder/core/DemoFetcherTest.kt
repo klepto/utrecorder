@@ -2,12 +2,11 @@ package dev.klepto.utrecorder.core
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
-import dev.klepto.utrecorder.common.config.Directories
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
@@ -18,7 +17,7 @@ import kotlin.io.path.writeBytes
 class DemoFetcherTest :
     FunSpec({
         val home = createTempDirectory("utrecorder-demofetcher-test")
-        val directories = Directories(home)
+        val directories = DirectoriesConfig(home)
         val demos = directories.cache / "demos"
 
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)

@@ -53,7 +53,7 @@ private fun Path.writeEntry(
     open: () -> InputStream,
 ) {
     when {
-        directory -> createDirectories()
+        directory -> if (!exists()) createDirectories()
         else -> open().use { it.writeTo(this) }
     }
 }
@@ -93,7 +93,7 @@ private fun Path.markExecutable() {
 suspend fun Path.extract(
     target: Path = this.toAbsolutePath().parent,
     filter: (String) -> Boolean = { true },
-): Unit =
+): Set<Path> =
     withContext(Dispatchers.IO) {
         val name = fileName.toString().lowercase()
         when {
@@ -107,22 +107,30 @@ suspend fun Path.extract(
 private fun Path.extractIso(
     target: Path,
     filter: (String) -> Boolean,
-) = Iso9660FileSystem(toFile(), true).use { fileSystem ->
-    for (entry in fileSystem) {
-        val file = target.entryPath(entry.path, filter) ?: continue
-        file.writeEntry(entry.isDirectory) { fileSystem.getInputStream(entry) }
+): Set<Path> =
+    Iso9660FileSystem(toFile(), true).use { fileSystem ->
+        fileSystem
+            .mapNotNull { entry ->
+                val file = target.entryPath(entry.path, filter) ?: return@mapNotNull null
+                file.also {
+                    it.writeEntry(entry.isDirectory) { fileSystem.getInputStream(entry) }
+                }
+            }.toSet()
     }
-}
 
 private fun Path.extractZip(
     target: Path,
     filter: (String) -> Boolean,
-) = ZipFile.builder().setPath(this).get().use { zip ->
-    for (entry in zip.entries) {
-        val file = target.entryPath(entry.name, filter) ?: continue
-        zip.extractEntry(entry, file)
+): Set<Path> =
+    ZipFile.builder().setPath(this).get().use { zip ->
+        val result = mutableSetOf<Path>()
+        for (entry in zip.entries) {
+            val file = target.entryPath(entry.name, filter) ?: continue
+            zip.extractEntry(entry, file)
+            result.add(file)
+        }
+        result
     }
-}
 
 /**
  * Writes the given zip [entry] to [file], marking a file executable when the entry's mode says so.
@@ -138,16 +146,19 @@ private fun ZipFile.extractEntry(
 private fun Path.extractTarBzip2(
     target: Path,
     filter: (String) -> Boolean,
-) {
+): Set<Path> {
+    val result = mutableSetOf<Path>()
     val links = mutableListOf<Pair<Path, String>>()
     TarArchiveInputStream(BZip2CompressorInputStream(inputStream().buffered(), true)).use { tar ->
         while (true) {
             val entry = tar.nextEntry ?: break
             val file = target.entryPath(entry.name, filter) ?: continue
             tar.extractEntry(entry, file, links)
+            result.add(file)
         }
     }
     links.forEach { (file, name) -> target.link(file, name) }
+    return result
 }
 
 /**

@@ -1,12 +1,10 @@
 package dev.klepto.utrecorder.ut99
 
-import com.sun.net.httpserver.HttpServer
+import dev.klepto.utrecorder.common.config.DirectoriesConfig
 import dev.klepto.utrecorder.common.process.Executable
 import dev.klepto.utrecorder.common.process.startAndAwait
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.nio.file.Path
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
@@ -94,11 +92,7 @@ class UtMapInstallerTest :
             systemDirectory.createDirectories()
             (systemDirectory / platform.gameExecutable).writeText("")
             fakeCompiler().copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
-            return UtInstallation(
-                root / name / "install",
-                dev.klepto.utrecorder.common.config
-                    .Directories(root / name),
-            )
+            return UtInstallation(root / name / "install", UtConfig(DirectoriesConfig(root / name)))
         }
 
         fun installer(installation: UtInstallation): UtMapInstaller = UtMapInstaller(installation)
