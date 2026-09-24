@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.Installer
+import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.ut99.UtDirectory.Maps
 import kotlinx.coroutines.Dispatchers
@@ -25,10 +26,16 @@ class UtMapInstaller(
 ) : Installer {
     private val mapsDirectory: Path = installation.directory[Maps]
 
-    override suspend fun install() {
-        for (archive in compressed()) {
+    /**
+     * Decompresses the archives one after another, reporting the share of archives done to [onProgress].
+     */
+    override suspend fun install(onProgress: ProgressListener) {
+        val archives = compressed()
+        archives.forEachIndexed { index, archive ->
             install(archive)
+            onProgress((index + 1).toDouble() / archives.size)
         }
+        onProgress(1.0)
     }
 
     override suspend fun uninstall() {

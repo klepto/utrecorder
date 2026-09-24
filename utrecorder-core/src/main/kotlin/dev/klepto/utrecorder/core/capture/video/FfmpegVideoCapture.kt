@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.core.capture.video
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
+import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.EmbeddedArtifacts
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
@@ -10,6 +11,7 @@ import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
+import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtProcess
@@ -26,7 +28,8 @@ import kotlin.time.DurationUnit
  *
  * A capture stages the demo through a [DemoPlayback], extracts the hooks into a workspace of its own, and plays the
  * demo windowed and without sound. The run is killed once [VideoCaptureConfig.timeout] has passed, counted over the
- * whole run. The frames are encoded into a video file in a workspace of the capture's own. A run that logs no marks
+ * whole run. The frames are encoded into a video file in a workspace of the capture's own. The progress of a capture
+ * is the number of frames encoded out of the number the demo's duration makes at [VideoCaptureConfig.fps]. A run that logs no marks
  * fails with an [IllegalStateException] naming the missing mark and the exit code.
  *
  * @property config The video capture configuration, carrying the frame size, the fps, the timeout and the renderer
@@ -46,15 +49,32 @@ class FfmpegVideoCapture(
      */
     private val playback = DemoPlayback(installation, directories)
 
-    override suspend fun record(demo: Path): VideoTrack =
+    override suspend fun record(
+        demo: Path,
+        onProgress: ProgressListener,
+    ): VideoTrack =
         workspace(VIDEO_CAPTURE, config = directories) { output ->
-            val encoder = FrameEncoder(config, DemoPlaybackConfig.STARTUP_TIMEOUT, output[VIDEO_NAME], ffmpeg)
+            val target = output[VIDEO_NAME]
             val marks =
                 playback.play(demo, STAGED_DEMO_PREFIX, VIDEO_CAPTURE) { description, system ->
+                    val onFrames = frameProgress(description, onProgress)
+                    val encoder = FrameEncoder(config, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
                     DemoPlaybackMarks.parse(play(description, extractHooks(system), encoder))
                 }
-            track(encoder.target, marks)
+            track(target, marks)
         }
+
+    /**
+     * Returns the listener that reports the frames encoded out of the frames [description]'s demo makes to
+     * [onProgress].
+     */
+    private fun frameProgress(
+        description: DemoPlaybackConfig,
+        onProgress: ProgressListener,
+    ): (MediaProgress) -> Unit {
+        val frames = description.demoDuration.toDouble(DurationUnit.SECONDS) * config.fps
+        return { onProgress(it.frames / frames) }
+    }
 
     /**
      * Returns the result of the run of [description] with [hooks], launched inside [encoder]'s block.

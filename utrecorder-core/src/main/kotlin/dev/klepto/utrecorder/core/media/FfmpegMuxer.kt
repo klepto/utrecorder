@@ -1,8 +1,10 @@
 package dev.klepto.utrecorder.core.media
 
+import dev.klepto.utrecorder.common.ProgressListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import kotlin.time.DurationUnit.SECONDS
 
 /**
  * Mux of a recording: ffmpeg writing the mp4 from a finished frame capture and a part of an audio file placed against
@@ -23,11 +25,15 @@ class FfmpegMuxer(
         offset: Double,
         length: Double,
         target: Path,
+        onProgress: ProgressListener,
     ): Path {
         withContext(Dispatchers.IO) { target.toFile().delete() }
-        check(ffmpeg.run(*arguments(video, audio, offset, length, target).toTypedArray())) {
+        val arguments = arguments(video, audio, offset, length, target)
+        val merged = ffmpeg.run(*arguments.toTypedArray()) { onProgress(it.time.toDouble(SECONDS) / length) }
+        check(merged) {
             "Merging ${video.fileName} with ${audio.fileName} failed"
         }
+        onProgress(1.0)
         return target
     }
 

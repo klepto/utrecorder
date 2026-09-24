@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.core.capture.video
 
+import dev.klepto.utrecorder.common.ProgressListener
 import java.nio.file.Path
 
 /**
@@ -11,7 +12,11 @@ interface VideoCapture {
     /**
      * Returns the [VideoTrack] of [demo] played with every rendered frame captured.
      *
-     * The video file of the track is kept in a workspace of the capture's own.
+     * The video file of the track is kept in a workspace of the capture's own. [onProgress] receives an estimate of
+     * how much of [demo] is captured. It is called from any thread.
      */
-    suspend fun record(demo: Path): VideoTrack
+    suspend fun record(
+        demo: Path,
+        onProgress: ProgressListener = {},
+    ): VideoTrack
 }

@@ -59,6 +59,25 @@ class FfmpegMediaToolTest :
             }
         }
 
+        context("run with progress") {
+            test("reports the frames written once ffmpeg finishes") {
+                val file = createTempDirectory("utrecorder-ffmpeg-progress") / "black.mp4"
+                val reports = mutableListOf<MediaProgress>()
+
+                FfmpegMediaTool().run(
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=64x64:d=0.7:r=10",
+                    "-c:v",
+                    "mpeg4",
+                    "${file.toAbsolutePath()}",
+                ) { reports += it } shouldBe true
+
+                reports.last().frames shouldBe 7
+            }
+        }
+
         context("duration") {
             test("returns the length of a wav file in seconds") {
                 val file = createTempDirectory("utrecorder-ffmpeg-duration") / "silence.wav"

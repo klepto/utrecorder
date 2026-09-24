@@ -10,6 +10,7 @@ import kotlin.time.Duration.Companion.seconds
  * Use [of] to create one from a demo file name and a demo duration.
  *
  * @property demoFileName The file name of the demo in the installation's `System` directory, without extension.
+ * @property demoDuration How long the demo runs.
  * @property execLine The exec script line playing the demo.
  * @property console The console class the run sets `[Engine.Engine] Console` to.
  * @property exitDelay The `ExitDelay` the run writes to `UTRecorder.ini`.
@@ -19,6 +20,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 data class DemoPlaybackConfig(
     val demoFileName: String,
+    val demoDuration: Duration,
     val execLine: String,
     val console: String,
     val exitDelay: Duration,
@@ -70,6 +72,7 @@ data class DemoPlaybackConfig(
         ): DemoPlaybackConfig =
             DemoPlaybackConfig(
                 demoFileName = demoFileName,
+                demoDuration = demoDuration,
                 execLine = "demoplay $demoFileName",
                 console = RECORDER_CONSOLE,
                 exitDelay = EXIT_DELAY,

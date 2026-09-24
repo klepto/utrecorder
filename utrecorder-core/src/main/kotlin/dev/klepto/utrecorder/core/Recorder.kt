@@ -2,6 +2,10 @@ package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.common.part
+import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
+import dev.klepto.utrecorder.core.RecorderStage.PreparingInstallation
+import dev.klepto.utrecorder.core.RecorderStage.ResolvingPackages
 import dev.klepto.utrecorder.core.demo.DemoFetcher
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
@@ -64,14 +68,24 @@ class Recorder(
     /**
      * Returns the mp4 recorded from the demo at [url].
      *
-     * The demo is downloaded into the demo cache when the cache does not hold it. Everything else is as for the
-     * [record] that takes a demo file. Run one recording per installation at a time.
+     * The demo is downloaded into the demo cache when the cache does not hold it. [onProgress] receives the
+     * [FetchingDemo] stage first. Everything else is as for the [record] that takes a demo file. Run one recording per
+     * installation at a time.
      *
+     * @param name The name of the mp4 without its extension. If not provided, uses the file name of the cached demo
+     * without its `.dem` extension.
      * @throws IllegalStateException If the demo cannot be fetched or resolved, or if a capture fails the recording. A
      * failed audio capture always fails the recording.
      * @throws UtPackageException If no source serves one of the packages the demo names at the GUID it recorded.
      */
-    suspend fun record(url: String): Path = record(DemoFetcher(directories).fetch(url))
+    suspend fun record(
+        url: String,
+        name: String? = null,
+        onProgress: (RecorderProgress) -> Unit = {},
+    ): Path {
+        val demo = DemoFetcher(directories).fetch(url, FetchingDemo.start(onProgress))
+        return record(demo, name ?: demo.name.substringBeforeLast(DEMO_EXTENSION), onProgress)
+    }
 
     /**
      * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo].
@@ -80,6 +94,9 @@ class Recorder(
      * names is installed at the GUID the demo recorded. The recorder's console package and HUD layout are installed
      * too. The mp4 and the files of both captures are kept in a workspace of their own, whether the recording succeeds
      * or fails. Run one recording per installation at a time.
+     *
+     * [onProgress] receives each [RecorderStage] after [FetchingDemo] as it starts, and an estimate of how much of the
+     * stage is done while it runs. It is called from any thread, and often, so it must return quickly.
      *
      * @param name The name of the mp4 without its extension. If not provided, uses the file name of [demo] without its
      * `.dem` extension.
@@ -90,15 +107,18 @@ class Recorder(
     suspend fun record(
         demo: Path,
         name: String = demo.name.substringBeforeLast(DEMO_EXTENSION),
+        onProgress: (RecorderProgress) -> Unit = {},
     ): Path =
         workspace("record", config = directories) {
-            UtInstaller(config.ut).install()
+            val preparing = PreparingInstallation.start(onProgress)
+            UtInstaller(config.ut).install(preparing.part(0.0, 0.8))
             val installation = UtInstallation(config.ut.gameDirectory, config.ut)
             DemoPlaybackUscript(installation).install()
             DemoPlaybackResources.installHudLayout(installation)
-            UtMapInstaller(installation).install()
-            UtPackageInstaller(UtDemo.read(demo).packages, installation, config.ut).install()
-            RecorderPipeline(config.video, config.audio, installation, directories).record(demo, name)
+            UtMapInstaller(installation).install(preparing.part(0.8, 1.0))
+            val packages = UtDemo.read(demo).packages
+            UtPackageInstaller(packages, installation, config.ut).install(ResolvingPackages.start(onProgress))
+            RecorderPipeline(config.video, config.audio, installation, directories).record(demo, name, onProgress)
         }
 
     companion object {

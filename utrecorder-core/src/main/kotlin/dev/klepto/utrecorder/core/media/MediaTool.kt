@@ -8,8 +8,14 @@ import java.nio.file.Path
 interface MediaTool {
     /**
      * Runs the program with [arguments] to completion and returns whether it exited with code `0`.
+     *
+     * [onProgress] receives the progress the program reports while it runs. It is called from any thread. If
+     * [onProgress] is not provided, the program reports no progress.
      */
-    suspend fun run(vararg arguments: String): Boolean
+    suspend fun run(
+        vararg arguments: String,
+        onProgress: ((MediaProgress) -> Unit)? = null,
+    ): Boolean
 
     /**
      * Returns the length of [file] in seconds.

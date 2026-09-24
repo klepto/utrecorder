@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.workspace
@@ -57,8 +58,12 @@ class RecorderPipelineTest :
             private val audioThreadStarted: CountDownLatch?,
             private val audioThreadReleased: CountDownLatch?,
         ) : VideoCapture {
-            override suspend fun record(demo: Path): VideoTrack {
+            override suspend fun record(
+                demo: Path,
+                onProgress: ProgressListener,
+            ): VideoTrack {
                 audioThreadStarted?.await()
+                onProgress(0.5)
                 events += videoCapturePlayed
                 audioThreadReleased?.countDown()
                 return VideoTrack(file = videoFile, length = 8.0, demoEnd = 300.75)
@@ -72,7 +77,10 @@ class RecorderPipelineTest :
             private val outcome: AudioTrack?,
             private val failure: String?,
         ) : AudioCapture {
-            override suspend fun record(demo: Path): AudioTrack {
+            override suspend fun record(
+                demo: Path,
+                onProgress: ProgressListener,
+            ): AudioTrack {
                 events += audioThreadLaunched
                 audioThreadStarted?.countDown()
                 audioThreadReleased?.await()
@@ -90,6 +98,7 @@ class RecorderPipelineTest :
                 offset: Double,
                 length: Double,
                 target: Path,
+                onProgress: ProgressListener,
             ): Path {
                 events += muxRan
                 video.copyTo(target, overwrite = true)
@@ -173,6 +182,7 @@ class RecorderPipelineTest :
                         offset: Double,
                         length: Double,
                         target: Path,
+                        onProgress: ProgressListener,
                     ): Path {
                         merged = Triple(audio, offset, length)
                         return target
@@ -194,6 +204,22 @@ class RecorderPipelineTest :
             }
 
             merged shouldBe Triple(Path.of("audio.wav"), 6.5, 8.0)
+        }
+
+        test("record reports the capture with the lesser progress of the two captures, then the mux") {
+            val reports = ConcurrentLinkedQueue<RecorderProgress>()
+
+            workspace("record", config = directories) { recording ->
+                pipeline(ConcurrentLinkedQueue(), track("audio.wav")).record(demoIn(recording), "demo-file") { reports += it }
+            }
+
+            reports.toList() shouldBe
+                listOf(
+                    RecorderProgress(RecorderStage.Capturing, 0.0),
+                    RecorderProgress(RecorderStage.Capturing, 0.0),
+                    RecorderProgress(RecorderStage.Capturing, 1.0),
+                    RecorderProgress(RecorderStage.Muxing, 0.0),
+                )
         }
 
         test("record starts the audio capture before the video capture plays and muxes once both have finished") {
@@ -224,7 +250,10 @@ class RecorderPipelineTest :
 
             val cancellingVideoCapture =
                 object : VideoCapture {
-                    override suspend fun record(demo: Path): VideoTrack =
+                    override suspend fun record(
+                        demo: Path,
+                        onProgress: ProgressListener,
+                    ): VideoTrack =
                         try {
                             videoCaptureStarted.complete(Unit)
                             awaitCancellation()
@@ -234,7 +263,10 @@ class RecorderPipelineTest :
                 }
             val cancellingAudioCapture =
                 object : AudioCapture {
-                    override suspend fun record(demo: Path): AudioTrack =
+                    override suspend fun record(
+                        demo: Path,
+                        onProgress: ProgressListener,
+                    ): AudioTrack =
                         try {
                             audioCaptureStarted.complete(Unit)
                             awaitCancellation()

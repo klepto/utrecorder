@@ -3,6 +3,9 @@ package dev.klepto.utrecorder.cli
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.core.RecorderProgress
+import dev.klepto.utrecorder.core.RecorderStage.Capturing
+import dev.klepto.utrecorder.core.RecorderStage.Muxing
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -14,11 +17,7 @@ import kotlinx.coroutines.launch
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.Path
-import kotlin.io.path.createDirectories
-import kotlin.io.path.div
-import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
-import kotlin.io.path.writeText
 
 class UtRecorderTest :
     FunSpec({
@@ -33,14 +32,9 @@ class UtRecorderTest :
             UtRecorder.outputName("http://api.utbt.net") shouldBe "demo"
         }
 
-        test("cachedDemo returns the demo the cache holds without downloading it") {
-            val url = "http://api.utbt.net:1/demos/kept.dem"
-            val cached = directories.cache / "demos" / "kept.dem"
-            cached.parent.createDirectories()
-            cached.writeText("cached demo")
-
-            UtRecorder.cachedDemo(url, directories) shouldBe cached
-            cached.exists() shouldBe true
+        test("progressLine prints the stage and the whole percent done") {
+            UtRecorder.progressLine(RecorderProgress(Capturing, 0.426)) shouldBe "Capturing 42%"
+            UtRecorder.progressLine(RecorderProgress(Muxing, 1.0)) shouldBe "Muxing 100%"
         }
 
         test("main throws when the demo cannot be fetched") {

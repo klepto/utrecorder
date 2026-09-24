@@ -2,6 +2,9 @@ package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.common.slowest
+import dev.klepto.utrecorder.core.RecorderStage.Capturing
+import dev.klepto.utrecorder.core.RecorderStage.Muxing
 import dev.klepto.utrecorder.core.capture.audio.AudioAlignment
 import dev.klepto.utrecorder.core.capture.audio.AudioCapture
 import dev.klepto.utrecorder.core.capture.audio.AudioCaptureConfig
@@ -66,22 +69,31 @@ class RecorderPipeline(
      * The audio capture runs beside the video capture, and the mux runs once both have finished. Cancelling this call
      * cancels both captures. The audio track is placed against the end mark of the video capture.
      *
+     * [onProgress] receives the [Capturing] stage and then the [Muxing] stage, each with an estimate of how much of it
+     * is done. The progress of [Capturing] is the lesser progress of the two captures, and reaches `1.0` once both have
+     * finished. [onProgress] is called from any thread.
+     *
      * @throws IllegalStateException If either capture fails.
      */
     suspend fun record(
         demo: Path,
         name: String,
+        onProgress: (RecorderProgress) -> Unit = {},
     ): Path =
         workspace("record", config = directories) { output ->
+            val capturing = Capturing.start(onProgress)
+            val (videoProgress, audioProgress) = capturing.slowest(2)
             val (videoTrack, audioTrack) =
                 coroutineScope {
-                    val videoTrack = async(Dispatchers.IO) { videoCapture.record(demo) }
-                    val audioTrack = async(Dispatchers.IO) { audioCapture.record(demo) }
+                    val videoTrack = async(Dispatchers.IO) { videoCapture.record(demo, videoProgress) }
+                    val audioTrack = async(Dispatchers.IO) { audioCapture.record(demo, audioProgress) }
                     videoTrack.await() to audioTrack.await()
                 }
+            capturing(1.0)
 
+            val muxing = Muxing.start(onProgress)
             val target = output["$name.mp4"]
             val placement = AudioAlignment.place(audioTrack, videoTrack.length, videoTrack.demoEnd, audio.offset)
-            muxer.merge(videoTrack.file, audioTrack.file, placement.offset, placement.length, target)
+            muxer.merge(videoTrack.file, audioTrack.file, placement.offset, placement.length, target, muxing)
         }
 }

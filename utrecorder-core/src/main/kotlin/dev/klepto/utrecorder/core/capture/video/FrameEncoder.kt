@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.core.capture.video
 
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
+import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -31,12 +32,14 @@ private val log = logger<FrameEncoder>()
  * @property listenTimeout How long ffmpeg waits for the hook library to connect.
  * @property target The file the capture encodes into, already in the final codec.
  * @property ffmpeg The ffmpeg the capture process is started from.
+ * @property onProgress Receives the progress ffmpeg reports while it encodes. It is called from any thread.
  */
 class FrameEncoder(
     private val config: VideoCaptureConfig,
     private val listenTimeout: Duration,
     val target: Path,
     private val ffmpeg: MediaTool = FfmpegMediaTool(),
+    private val onProgress: (MediaProgress) -> Unit = {},
 ) {
     /**
      * The loopback port ffmpeg listens on for frames. Uses [VideoCaptureConfig.port] if it is positive, otherwise a
@@ -48,7 +51,7 @@ class FrameEncoder(
      * Runs ffmpeg listening on [port] until the capture ends, and returns whether ffmpeg exited with code `0`.
      * Use [encode] instead of calling this function directly.
      */
-    suspend fun capture(): Boolean = ffmpeg.run(*captureArguments().toTypedArray())
+    suspend fun capture(): Boolean = ffmpeg.run(*captureArguments().toTypedArray(), onProgress = onProgress)
 
     /**
      * Checks that [target] holds a finished capture. Use [encode] instead of calling this function directly.

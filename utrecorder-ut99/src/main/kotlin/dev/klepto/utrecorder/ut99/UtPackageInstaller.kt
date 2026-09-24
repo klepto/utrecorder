@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.Installer
+import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.http.encodeUrlPathSegment
 import dev.klepto.utrecorder.common.http.headCatching
@@ -53,11 +54,25 @@ class UtPackageInstaller(
      */
     val installed: List<UtPackage> get() = fetched.toList()
 
-    override suspend fun install() {
-        for (required in packages) {
-            if (installedPackage(required) != null) continue
-            fetched += copiedPackage(required) ?: downloadedPackage(required) ?: throw UtPackageException(required.name, sources)
+    /**
+     * Resolves the packages one after another, reporting the share of packages resolved to [onProgress].
+     */
+    override suspend fun install(onProgress: ProgressListener) {
+        packages.forEachIndexed { index, required ->
+            install(required)
+            onProgress((index + 1).toDouble() / packages.size)
         }
+        onProgress(1.0)
+    }
+
+    /**
+     * Fetches [required] into the installation, unless the installation already holds it.
+     *
+     * @throws UtPackageException If no source holds [required] at the GUID the demo recorded.
+     */
+    private suspend fun install(required: UtPackage) {
+        if (installedPackage(required) != null) return
+        fetched += copiedPackage(required) ?: downloadedPackage(required) ?: throw UtPackageException(required.name, sources)
     }
 
     override suspend fun uninstall() {

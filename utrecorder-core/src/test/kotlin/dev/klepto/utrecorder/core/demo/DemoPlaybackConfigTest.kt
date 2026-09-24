@@ -12,6 +12,7 @@ class DemoPlaybackConfigTest :
             DemoPlaybackConfig.of("ut-2026-09-13-1030-05", 10.minutes) shouldBe
                 DemoPlaybackConfig(
                     demoFileName = "ut-2026-09-13-1030-05",
+                    demoDuration = 10.minutes,
                     execLine = "demoplay ut-2026-09-13-1030-05",
                     console = "UTRecorder.UTRecorderConsole",
                     exitDelay = 5.seconds,
@@ -25,6 +26,7 @@ class DemoPlaybackConfigTest :
             val description =
                 DemoPlaybackConfig(
                     demoFileName = "ut-2026-09-13-1030-05",
+                    demoDuration = 10.minutes,
                     execLine = "demoplay ut-2026-09-13-1030-05",
                     console = "UTRecorder.UTRecorderConsole",
                     exitDelay = 7900.milliseconds,

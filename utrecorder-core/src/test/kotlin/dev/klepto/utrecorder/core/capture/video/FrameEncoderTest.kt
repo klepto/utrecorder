@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.core.capture.video
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
@@ -53,7 +54,10 @@ class FrameEncoderTest :
             frames: Int = 0,
         ): MediaTool =
             object : MediaTool {
-                override suspend fun run(vararg arguments: String): Boolean = finalised
+                override suspend fun run(
+                    vararg arguments: String,
+                    onProgress: ((MediaProgress) -> Unit)?,
+                ): Boolean = finalised
 
                 override suspend fun frames(file: Path): Int = frames
 
@@ -179,7 +183,10 @@ class FrameEncoderTest :
                 val workerCancelled = CompletableDeferred<Unit>()
                 val ffmpeg =
                     object : MediaTool {
-                        override suspend fun run(vararg arguments: String): Boolean =
+                        override suspend fun run(
+                            vararg arguments: String,
+                            onProgress: ((MediaProgress) -> Unit)?,
+                        ): Boolean =
                             try {
                                 workerStarted.complete(Unit)
                                 awaitCancellation()

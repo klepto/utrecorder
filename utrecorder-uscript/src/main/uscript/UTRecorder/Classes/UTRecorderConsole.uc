@@ -6,7 +6,8 @@
 // [Engine.Engine] Console. It does nothing until bAutoExit is on. While it
 // is on, the console logs a start and an end mark around the demo, then
 // stops playback and exits the process once the demo is over, the demo
-// spectator is gone, or a timeout runs out.
+// spectator is gone, or a timeout runs out. It also stops warp zones from
+// moving actors on the client, since the demo already carries every position.
 //
 // Exec commands, typically run from an -EXEC script:
 //   DisableRendering  stop drawing the world,
@@ -122,6 +123,9 @@ event Tick(float Delta)
 	if (PlaybackFrameRate > 0.0)
 		CheckSpawn(Delta);
 
+	if (bAutoExit)
+		DisableWarpSimulation();
+
 	Super.Tick(Delta);
 
 	if (!bAutoExit)
@@ -153,6 +157,31 @@ event Tick(float Delta)
 	}
 
 	CheckPlayback(Delta);
+}
+
+// Unlinks every warp zone of the demo level from its other side, so that
+// ActorEntered no longer moves an actor that enters it.
+function DisableWarpSimulation()
+{
+	local DemoPlaybackSpec Spec;
+	local WarpZoneInfo Zone;
+
+	if (Viewport == None)
+		return;
+
+	Spec = DemoPlaybackSpec(Viewport.Actor);
+	if (Spec == None)
+		return;
+
+	foreach Spec.AllActors(class'WarpZoneInfo', Zone)
+	{
+		if (Zone.OtherSideActor == None && Zone.OtherSideLevel != None)
+			continue;
+
+		Zone.OtherSideLevel = Zone.XLevel;
+		Zone.OtherSideActor = None;
+		Log("UTRecorder: disabled warp simulation of" @ Zone, 'UTRecorder');
+	}
 }
 
 // Logs the tick delta and the level and demo clocks.

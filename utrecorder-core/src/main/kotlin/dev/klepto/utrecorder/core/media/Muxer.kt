@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.core.media
 
+import dev.klepto.utrecorder.common.ProgressListener
 import java.nio.file.Path
 
 /**
@@ -14,6 +15,7 @@ interface Muxer {
      *
      * @param offset How many seconds into [audio] the part begins.
      * @param length How many seconds the part runs.
+     * @param onProgress Receives how much of [target] is written. It is called from any thread.
      * @throws IllegalStateException If ffmpeg fails to write [target].
      */
     suspend fun merge(
@@ -22,5 +24,6 @@ interface Muxer {
         offset: Double,
         length: Double,
         target: Path,
+        onProgress: ProgressListener = {},
     ): Path
 }
