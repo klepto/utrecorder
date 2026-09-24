@@ -6,40 +6,45 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 
 /**
- * An UnrealScript package the module compiles. The name is the package name and the directory the sources sit in:
+ * UnrealScript package a module compiles, named after the directory that holds its sources.
+ *
  * `src/main/uscript/UTRecorder` compiles to `UTRecorder.u`.
  */
 abstract class UnrealScriptPackage : Named {
     /**
-     * The directory holding the `Classes` directory UCC reads the sources from. Defaults to the directory of this
-     * name under the source directory.
+     * Directory holding the `Classes` directory UCC reads the sources from. Defaults to the directory of this name
+     * under the source directory.
      */
     abstract val sources: DirectoryProperty
 
     /**
-     * The packages this one compiles against, beyond the ones the installation configures by default. They are
-     * appended to `EditPackages` before this package, which is what a package of this module depends on.
+     * Packages this package compiles against, beyond the ones the installation configures by default. They are added
+     * to `EditPackages` ahead of this package.
      */
     abstract val editPackages: ListProperty<String>
 }
 
 /**
- * Configures the UnrealScript packages a module compiles. Every directory under [sourceDirectory] registers a package
- * of its own, and [packages] names what the layout cannot say, such as the packages a package compiles against.
+ * UnrealScript packages a module compiles, one for every directory under [sourceDirectory].
+ *
+ * The `utrecorder.unrealscript` plugin registers it as `unrealscript`. A module declares the
+ * [UnrealScriptPackage.editPackages] of every package that compiles against another one.
  */
 abstract class UnrealScriptExtension {
     /**
-     * The directory the package directories sit in.
+     * Directory holding one source directory for every package. Defaults to `src/main/uscript`.
      */
     abstract val sourceDirectory: DirectoryProperty
 
     /**
-     * The recorder home directory the compiler provisions its Unreal Tournament installation into. Not a task input.
+     * Recorder home directory the compiler provisions its Unreal Tournament installation into. Defaults to
+     * `.utrecorder` in the repository.
      */
     abstract val homeDirectory: DirectoryProperty
 
     /**
-     * The packages to compile. Registered from the layout, so a module configures them with `named`, never `create`.
+     * Packages to compile. They already exist when the module configures them, so a module reaches them with `named`,
+     * never `create`.
      */
     abstract val packages: NamedDomainObjectContainer<UnrealScriptPackage>
 }

@@ -1,14 +1,21 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.install.Installer
-import dev.klepto.utrecorder.common.io.Downloader
+import dev.klepto.utrecorder.common.Installer
+import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.extract
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
-import dev.klepto.utrecorder.common.log.logger
-import dev.klepto.utrecorder.ut99.UtDirectory.*
+import dev.klepto.utrecorder.common.logger
+import dev.klepto.utrecorder.ut99.UtDirectory.Help
+import dev.klepto.utrecorder.ut99.UtDirectory.Maps
+import dev.klepto.utrecorder.ut99.UtDirectory.Music
+import dev.klepto.utrecorder.ut99.UtDirectory.Sounds
+import dev.klepto.utrecorder.ut99.UtDirectory.System
+import dev.klepto.utrecorder.ut99.UtDirectory.System400
+import dev.klepto.utrecorder.ut99.UtDirectory.Textures
+import dev.klepto.utrecorder.ut99.UtDirectory.Web
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -22,8 +29,6 @@ import kotlin.io.path.writeText
 /**
  * Provisioner of Unreal Tournament and its OldUnreal patch into the game directory of a configuration.
  *
- * Use [install] to materialize the installation, then [UtInstallation] to reach it.
- *
  * @property config The installation to provision and the sources it is provisioned from.
  */
 @OptIn(ExperimentalPathApi::class)
@@ -31,23 +36,10 @@ class UtInstaller(
     private val config: UtConfig,
 ) : Installer {
     /**
-     * The directory where cached files are stored.
+     * File in the game directory that holds the name of the patch the installation was materialized with.
      */
-    private val cacheDirectory: Path = config.directoriesConfig.cache
+    private val versionFile: Path = config.gameDirectory[VERSION_FILE]
 
-    /**
-     * The directory the installation is materialized in.
-     */
-    private val gameDirectory: Path = config.gameDirectory
-
-    /**
-     * The version file of the current UT installation.
-     */
-    private val versionFile: Path = gameDirectory[VERSION_FILE]
-
-    /**
-     * Runs UT iso installer, UT patch installer and creates a version file.
-     */
     override suspend fun install() {
         if (isInstalled()) {
             log.info { "UT installation detected, skipping..." }
@@ -58,68 +50,63 @@ class UtInstaller(
         workspace("ut-installer") {
             installIso()
             installPatch()
-            move(gameDirectory)
-            versionFile.writeText(config.patchFileName)
+            move(config.gameDirectory)
+            withContext(Dispatchers.IO) { versionFile.writeText(config.patchFileName) }
         }
         log.info { "UT installation complete" }
     }
 
     /**
-     * Downloads the original UT iso and extracts it to the given [directory].
+     * Downloads the original Unreal Tournament iso and extracts its game directories into this workspace.
+     *
+     * The contents of `System400` are merged into `System`.
      */
     private suspend fun Workspace.installIso() {
-        val isoPath = cacheDirectory[ISO_FILE]
-        Downloader(config.isoUrl, config.isoMd5, config = config.directoriesConfig).download(isoPath)
+        val isoPath = config.directoriesConfig.cache[ISO_FILE]
+        Downloader(config.isoUrl, config.isoMd5, directories = config.directoriesConfig).download(isoPath)
 
         log.info { "Extracting UT iso..." }
         isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }.forEach(::track)
 
-        val target = directory[System]
-        val source = directory[System400].takeIf { it.isDirectory() } ?: return
-        source.move(target)
+        val system400 = directory[System400]
+        if (withContext(Dispatchers.IO) { system400.isDirectory() }) system400.move(directory[System])
     }
 
     /**
-     * Downloads the latest patch and extracts it to the given [directory].
+     * Downloads the configured OldUnreal patch and extracts it into this workspace.
      */
     private suspend fun Workspace.installPatch() {
-        val patchPath = cacheDirectory[config.patchFileName]
+        val patchPath = config.directoriesConfig.cache[config.patchFileName]
         val patchUrl = "${config.patchUrl}/v${config.patchVersion}/${config.patchFileName}"
-        Downloader(patchUrl, config = config.directoriesConfig).download(patchPath)
+        Downloader(patchUrl, directories = config.directoriesConfig).download(patchPath)
 
         log.info { "Extracting UT patch..." }
         patchPath.extract(directory).forEach(::track)
     }
 
-    /**
-     * Deletes the UT installation directory.
-     */
-    override suspend fun uninstall() = withContext(Dispatchers.IO) { gameDirectory.deleteRecursively() }
+    override suspend fun uninstall() = withContext(Dispatchers.IO) { config.gameDirectory.deleteRecursively() }
 
-    /**
-     * Checks if the UT installation is complete by checking [versionFile] for the current patch version.
-     */
     override suspend fun isInstalled() =
         withContext(Dispatchers.IO) { versionFile.exists() && versionFile.readText().trim() == config.patchFileName }
 
     companion object {
         /**
-         * The root directories of the original UT iso.
-         */
-        private val ISO_ROOTS =
-            listOf(System, System400, Maps, Music, Sounds, Textures, Help, Web)
-                .map { it.pathName }
-                .toSet()
-
-        /**
-         * The name of the file recording which patch an installation was materialized with.
+         * Name of the file that records which patch an installation was materialized with.
          */
         private const val VERSION_FILE = ".utrecorder.version"
 
         /**
-         * The name the original UT iso is cached under.
+         * Name the original Unreal Tournament iso is cached under.
          */
         private const val ISO_FILE = "ut99.iso"
+
+        /**
+         * Names of the top-level directories extracted from the original Unreal Tournament iso.
+         */
+        private val ISO_ROOTS: Set<String> =
+            listOf(System, System400, Maps, Music, Sounds, Textures, Help, Web)
+                .map { it.pathName }
+                .toSet()
 
         private val log = logger<UtInstaller>()
     }

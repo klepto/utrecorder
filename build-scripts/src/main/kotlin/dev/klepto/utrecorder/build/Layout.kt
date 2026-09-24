@@ -12,8 +12,9 @@ import org.gradle.language.base.plugins.LifecycleBasePlugin
 import kotlin.reflect.KClass
 
 /**
- * Creates one element of this container for every directory under [sourceDirectory], named after the directory and in
- * name order.
+ * Creates one element of this container for every directory under [sourceDirectory], named after the directory.
+ *
+ * Elements are created in name order. An element that already has the name of a directory is kept as it is.
  */
 fun <T : Any> NamedDomainObjectContainer<T>.createFromLayout(sourceDirectory: Directory) {
     sourceDirectory.asFile
@@ -25,11 +26,14 @@ fun <T : Any> NamedDomainObjectContainer<T>.createFromLayout(sourceDirectory: Di
 }
 
 /**
- * Registers one element of [elements] per directory under [sourceDirectory], a [taskType] task per element, and the
- * aggregate task [taskName] depending on every task of [taskType].
+ * Registers a [taskType] task for every directory under [sourceDirectory], and an aggregate task named [taskName].
  *
- * Each element's task is named [taskName] followed by the capitalized element name, is configured by [configure] with
- * the element, and adds its [outputDirectory] to the artifacts of the project's [EmbeddedArtifactsExtension].
+ * One element of [elements] is created per directory, as [createFromLayout] does. The task of an element is named
+ * [taskName] followed by the capitalized element name, and [configure] configures it with that element. The
+ * [outputDirectory] of the task is added to the artifacts of the project's [EmbeddedArtifactsExtension].
+ *
+ * The aggregate task has the given [description] and depends on every [taskType] task of the project. All tasks go
+ * in the build group.
  */
 fun <E : Named, T : Task> Project.registerLayoutTasks(
     elements: NamedDomainObjectContainer<E>,
@@ -51,8 +55,9 @@ fun <E : Named, T : Task> Project.registerLayoutTasks(
     elements.createFromLayout(sourceDirectory)
     elements.all {
         val element = this
+        val elementTaskName = taskName + element.name.replaceFirstChar(Char::uppercaseChar)
         val task =
-            tasks.register(taskName + element.name.replaceFirstChar(Char::uppercaseChar), taskType.java) {
+            tasks.register(elementTaskName, taskType.java) {
                 group = LifecycleBasePlugin.BUILD_GROUP
                 configure(element)
             }

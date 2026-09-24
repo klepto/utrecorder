@@ -16,17 +16,17 @@ class PathRegistryTest :
 
         afterSpec { root.toFile().deleteRecursively() }
 
-        test("leaves out of the roots a tracked path that lies under another tracked path") {
-            val directory = (root / "roots").apply { createDirectories() }
+        test("leaves out of the roots a registered path that lies under another registered path") {
+            val directory = (root / "roots").createDirectories()
             val registry = PathRegistry("", directory)
-            val parent = registry.newFile("parent").apply { createDirectories() }
+            val parent = registry.newFile("parent").createDirectories()
             registry.register((parent / "child.log").apply { writeText("log") })
             val sibling = registry.newFile("sibling.log").apply { writeText("log") }
 
             registry.getRoots() shouldBe setOf(parent.toAbsolutePath(), sibling.toAbsolutePath())
         }
 
-        test("relativizes a path under the registry directory to its location there, and a path outside it to its file name") {
+        test("relativizes a path inside the directory to its location there, and a path outside it to its file name") {
             val directory = root / "relativize"
             val registry = PathRegistry("", directory)
 
@@ -34,12 +34,12 @@ class PathRegistryTest :
             registry.relativize(root / "elsewhere" / "b.log") shouldBe Path.of("b.log")
         }
 
-        test("removes a tracked directory together with the tracked paths under it, empty directories included") {
-            val directory = (root / "delete").apply { createDirectories() }
+        test("removes every registered path together with everything under it, empty directories included") {
+            val directory = (root / "delete").createDirectories()
             val registry = PathRegistry("", directory)
             val parent = registry.tempDirectory()
             registry.register((parent / "child.log").apply { writeText("log") })
-            registry.register((parent / "empty").apply { createDirectories() })
+            registry.register((parent / "empty").createDirectories())
             registry.tempDirectory()
 
             registry.delete()

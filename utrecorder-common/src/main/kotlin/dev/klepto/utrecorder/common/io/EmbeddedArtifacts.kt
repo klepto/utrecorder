@@ -13,7 +13,7 @@ import kotlin.io.path.writeBytes
  * line.
  *
  * Construct one per namespace, then list the artifacts through [names], read one through [read], or write them all to
- * disk through [extractTo]. The index name matches `EmbeddedArtifactsExtension` in `build-scripts`.
+ * disk through [extractTo].
  *
  * @property namespace The directory the artifacts sit in, both in the jar and in the index resource path.
  * @property classLoader The class loader the artifacts are read from.
@@ -38,15 +38,8 @@ class EmbeddedArtifacts(
             .distinct()
             .toList()
 
-    private fun readIndex(url: URL): Sequence<String> =
-        url
-            .openStream()
-            .use { it.readBytes() }
-            .decodeToString()
-            .lineSequence()
-
     /**
-     * The bytes of the artifact called [name] in this namespace.
+     * Returns the bytes of the artifact called [name] in this namespace.
      *
      * @throws IllegalStateException if the classpath holds no such artifact.
      */
@@ -82,5 +75,12 @@ class EmbeddedArtifacts(
          * The file name of the index naming the artifacts of a namespace.
          */
         const val INDEX = "index"
+
+        private fun readIndex(url: URL): Sequence<String> =
+            url
+                .openStream()
+                .use { it.readBytes() }
+                .decodeToString()
+                .lineSequence()
     }
 }

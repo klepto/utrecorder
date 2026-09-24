@@ -19,6 +19,9 @@ import kotlin.io.path.nameWithoutExtension
  * Use [named] for a package a demo asks for, [read] for a file an installation holds, and [list] for the files of a
  * directory.
  *
+ * Two packages are equal when their names are equal ignoring case and they are held at the same path. The GUID takes no
+ * part.
+ *
  * @property name The name of the package, such as `Engine`.
  * @property path The file the package is held in, or `null` for a package a demo names.
  */
@@ -43,10 +46,6 @@ class UtPackage private constructor(
         name.equals(required.name, ignoreCase = true) &&
             (required.guid.isEmpty() || guid.equals(required.guid, ignoreCase = true))
 
-    /**
-     * Returns `true` when [other] is a package of the same name, ignoring case, held at the same path. The GUID takes
-     * no part.
-     */
     override fun equals(other: Any?): Boolean = other is UtPackage && name.equals(other.name, ignoreCase = true) && path == other.path
 
     override fun hashCode(): Int = Objects.hash(name.lowercase(), path)
@@ -67,7 +66,7 @@ class UtPackage private constructor(
         /**
          * The mask reading the unsigned file version out of the signed short the header holds it as.
          */
-        private const val VERSION_MASK = 0xFFFF
+        private const val VERSION_BITMASK = 0xFFFF
 
         /**
          * The first file version holding its GUID at [GUID_OFFSET] rather than in a heritage table.
@@ -120,21 +119,19 @@ class UtPackage private constructor(
 
         /**
          * Returns the packages held directly in [directory]: its regular files whose extension is one of [extensions],
-         * compared ignoring case. Empty when [directory] does not exist.
+         * compared ignoring case. If [directory] does not exist, returns an empty list instead.
          */
         suspend fun list(
             directory: Path,
             extensions: Set<String>,
         ): List<UtPackage> =
             withContext(Dispatchers.IO) {
-                if (!directory.isDirectory()) {
-                    emptyList()
-                } else {
-                    directory
-                        .listDirectoryEntries()
-                        .filter { it.isRegularFile() && it.hasExtension(extensions) }
-                        .map(::read)
-                }
+                directory
+                    .takeIf { it.isDirectory() }
+                    ?.listDirectoryEntries()
+                    ?.filter { it.isRegularFile() && it.hasExtension(extensions) }
+                    ?.map(::read)
+                    .orEmpty()
             }
 
         /**
@@ -143,7 +140,8 @@ class UtPackage private constructor(
         private fun Path.hasExtension(extensions: Set<String>): Boolean = extensions.any { it.equals(extension, ignoreCase = true) }
 
         /**
-         * Returns the GUID the header of the file at [path] holds, or an empty GUID when the file is not a package.
+         * Returns the GUID the header of the file at [path] holds. If the file is not a package, returns an empty string
+         * instead.
          */
         private fun readGuid(path: Path): String {
             val header = readHeader(path) ?: return ""
@@ -153,13 +151,13 @@ class UtPackage private constructor(
         }
 
         /**
-         * Returns the offset [header] holds its GUID at. A version before the heritage table was dropped holds the
-         * GUIDs of every version the package was saved as, and the last of them is the current one.
+         * Returns the offset [header] holds its GUID at. A version before [HERITAGE_VERSION] holds the GUIDs of every
+         * version the package was saved as in a heritage table, and the last of them is the current one. If [header]
+         * is not a package header, returns `null` instead.
          */
         private fun guidOffset(header: ByteBuffer): Int? {
-            if (header.limit() < GUID_OFFSET + GUID_BYTES) return null
             if (header.getInt(0) != PACKAGE_TAG) return null
-            if ((header.getShort(VERSION_OFFSET).toInt() and VERSION_MASK) >= HERITAGE_VERSION) return GUID_OFFSET
+            if ((header.getShort(VERSION_OFFSET).toInt() and VERSION_BITMASK) >= HERITAGE_VERSION) return GUID_OFFSET
 
             val count = header.getInt(GUID_OFFSET)
             val heritage = header.getInt(GUID_OFFSET + Int.SIZE_BYTES)
@@ -168,7 +166,8 @@ class UtPackage private constructor(
         }
 
         /**
-         * Returns the opening bytes of the file at [path], or `null` when it holds fewer than a header of them.
+         * Returns the opening bytes of the file at [path], in little-endian order. If the file is too short to hold a
+         * GUID, returns `null` instead.
          */
         private fun readHeader(path: Path): ByteBuffer? {
             val bytes = path.inputStream().use { it.readNBytes(HEADER_BYTES) }

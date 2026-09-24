@@ -3,17 +3,19 @@ package dev.klepto.utrecorder.ut99
 import dev.klepto.utrecorder.common.io.PathName
 
 /**
- * A directory of a UT installation, resolved against the installation root with the `get` operator.
+ * A directory of an Unreal Tournament installation, resolved against the installation root with the `get` operator.
  */
 sealed interface UtDirectory : PathName {
     /**
-     * The directory name.
+     * The name of this directory on disk, the same as [pathName].
      */
     val name: String
         get() = pathName
 
     /**
-     * The extension of the packages this directory holds, or `null` when it holds no packages.
+     * The file extension of the packages this directory holds, without the leading dot.
+     *
+     * If this directory holds no packages, it is `null` instead.
      */
     val extension: String?
         get() = null
@@ -59,7 +61,7 @@ sealed interface UtDirectory : PathName {
     }
 
     /**
-     * The directory the original ISO ships its 400-series system files in, merged into [System] on install.
+     * The directory holding the 400-series system files of the original ISO.
      */
     object System400 : UtDirectory {
         override val pathName = "System400"
@@ -81,18 +83,19 @@ sealed interface UtDirectory : PathName {
 
     companion object {
         /**
-         * The extensions of the package directories, in the order a redirect is probed.
-         */
-        val PACKAGE_EXTENSIONS: Set<String> by lazy { PACKAGES.mapNotNull { it.extension }.toSet() }
-
-        /**
-         * The directories holding packages, in the order a redirect is probed for a package of an unknown extension.
+         * The directories holding packages, in the order a package is looked up.
          */
         val PACKAGES: List<UtDirectory> by lazy { listOf(System, Maps, Textures, Sounds, Music) }
 
         /**
-         * Returns the directory a file of [extension] belongs in, comparing the extension ignoring case, or `null`
-         * when no directory claims it.
+         * The extensions of the [PACKAGES] directories, in the same order.
+         */
+        val PACKAGE_EXTENSIONS: Set<String> by lazy { PACKAGES.mapNotNull { it.extension }.toSet() }
+
+        /**
+         * Returns the directory holding packages of [extension], comparing the extension ignoring case.
+         *
+         * If no directory holds packages of [extension], returns `null` instead.
          */
         fun of(extension: String): UtDirectory? = PACKAGES.firstOrNull { it.extension.equals(extension, ignoreCase = true) }
     }

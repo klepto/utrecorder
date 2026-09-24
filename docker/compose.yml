@@ -1,0 +1,24 @@
+name: utrecorder
+
+services:
+  dev:
+    build: dev
+    image: utrecorder-dev
+    init: true
+    stdin_open: true
+    tty: true
+    volumes:
+      # The checkout, read-only. The entrypoint syncs it into /utrecorder on every start.
+      - ..:/source:ro
+      # The container's copy of the checkout, kept so Gradle builds incrementally across runs.
+      - checkout:/utrecorder
+      # The repository's .utrecorder is the home, so workspaces and downloads show up on the host as they are written.
+      - ../.utrecorder:/var/lib/utrecorder
+      # The Linux installs, kept apart from the Windows ones the host materializes in the same home.
+      - installs:/var/lib/utrecorder/installs
+      - gradle:/root/.gradle
+
+volumes:
+  checkout:
+  installs:
+  gradle:

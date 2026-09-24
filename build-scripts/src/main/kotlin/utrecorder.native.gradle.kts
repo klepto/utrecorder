@@ -17,7 +17,6 @@ embeddedArtifacts.namespace.convention("native")
 val nativeBinaries = extensions.create<NativeExtension>("nativeBinaries")
 nativeBinaries.sourceDirectory.convention(layout.projectDirectory.dir("src/main/native"))
 
-// Nothing cross-compiles, so the platform a build targets is the platform it runs on.
 val targetPlatform = NativePlatform.current
 
 val nativeToolchain =
@@ -25,8 +24,6 @@ val nativeToolchain =
         parameters.platform = targetPlatform.name
     }
 
-// Per-platform classifier, because the jar holds only the binaries of the platform that built it. A consumer that
-// needs another platform's binaries resolves that platform's jar rather than a different entry in this one.
 tasks.jar {
     archiveClassifier = targetPlatform.id
 }

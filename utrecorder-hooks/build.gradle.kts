@@ -1,5 +1,5 @@
-import dev.klepto.utrecorder.build.native.NativeBinaryType
-import dev.klepto.utrecorder.build.native.NativePlatform
+import dev.klepto.utrecorder.build.native.NativeBinaryType.EXECUTABLE
+import dev.klepto.utrecorder.build.native.NativePlatform.WINDOWS_X86
 
 plugins {
     id("utrecorder.native")
@@ -8,8 +8,8 @@ plugins {
 nativeBinaries {
     binaries {
         named("utinject") {
-            type = NativeBinaryType.EXECUTABLE
-            platforms = setOf(NativePlatform.WINDOWS_X86)
+            type = EXECUTABLE
+            platforms = setOf(WINDOWS_X86)
         }
     }
 }

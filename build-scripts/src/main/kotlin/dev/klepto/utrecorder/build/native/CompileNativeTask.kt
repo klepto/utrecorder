@@ -1,5 +1,9 @@
 package dev.klepto.utrecorder.build.native
 
+import dev.klepto.utrecorder.build.native.NativeBinaryType.SHARED_LIBRARY
+import dev.klepto.utrecorder.build.native.NativeToolchain.Kind.GCC
+import dev.klepto.utrecorder.build.native.NativeToolchain.Kind.MINGW
+import dev.klepto.utrecorder.build.native.NativeToolchain.Kind.MSVC
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileSystemOperations
@@ -20,7 +24,7 @@ import java.io.File
 import javax.inject.Inject
 
 /**
- * Compiles one native binary from the C sources of a unit. The compiler runs in [workDirectory] and only the binary it
+ * Task that compiles one native binary from the C sources under [sources]. The compiler runs in [workDirectory] and only the binary it
  * produced is copied into [outputDirectory].
  *
  * A binary the current platform does not build is not an error: the output is cleared and the task succeeds.
@@ -96,7 +100,10 @@ abstract class CompileNativeTask : DefaultTask() {
     abstract val files: FileSystemOperations
 
     /**
-     * Compiles the binary, or clears the output and returns when this platform does not build it.
+     * Clears the task directories, then compiles the binary into [outputDirectory]. If [platform] is not one of
+     * [platforms], returns after clearing instead.
+     *
+     * @throws IllegalStateException if no [toolchain] is present, [sources] holds no C file, or the compile fails.
      */
     @TaskAction
     fun compile() {
@@ -117,7 +124,11 @@ abstract class CompileNativeTask : DefaultTask() {
 
         val toolchain = toolchain.orNull ?: error(missingToolchain(target))
 
-        val sourceFiles = sources.asFileTree.matching { include("**/*.c") }.files.sortedBy { it.absolutePath }
+        val sourceFiles =
+            sources.asFileTree
+                .matching { include("**/*.c") }
+                .files
+                .sortedBy { it.absolutePath }
         check(sourceFiles.isNotEmpty()) { "No C sources under ${sources.get().asFile}" }
 
         val fileName = target.fileName(binaryName.get(), binaryType.get())
@@ -131,7 +142,7 @@ abstract class CompileNativeTask : DefaultTask() {
                 isIgnoreExitValue = true
             }
 
-        val log = logs.resolve(COMPILE_LOG)
+        val log = logs.resolve("compile.log")
         log.writeBytes(captured.toByteArray())
         check(result.exitValue == 0) { "Could not compile $fileName, see $log" }
 
@@ -150,46 +161,25 @@ abstract class CompileNativeTask : DefaultTask() {
         fileName: String,
     ): List<String> {
         val paths = sourceFiles.map { it.absolutePath }
-        val shared = binaryType.get() == NativeBinaryType.SHARED_LIBRARY
+        val shared = binaryType.get() == SHARED_LIBRARY
         return when (toolchain.kind) {
-            // -m32 because the Linux patch is x86: a 64-bit shared object cannot be loaded into a 32-bit game. It
-            // needs gcc-multilib and libc6-dev-i386 on a 64-bit host.
-            NativeToolchain.Kind.GCC ->
+            GCC ->
                 when {
                     shared -> listOf(toolchain.command, "-m32", "-shared", "-fPIC", "-O2", "-o", fileName) + paths + "-ldl"
                     else -> listOf(toolchain.command, "-m32", "-O2", "-o", fileName) + paths
                 }
 
-            NativeToolchain.Kind.MINGW ->
+            MINGW ->
                 when {
                     shared ->
                         listOf(toolchain.command, "-O2", "-shared", "-o", fileName) +
                             paths + listOf("-lws2_32", "-static-libgcc")
 
-                    // -municode gives the injector the wmain entry point it is written against.
                     else -> listOf(toolchain.command, "-O2", "-municode", "-o", fileName) + paths + "-static-libgcc"
                 }
 
-            NativeToolchain.Kind.MSVC -> listOf("cmd", "/c", visualStudioCommand(toolchain, paths, fileName, shared))
+            MSVC -> listOf("cmd", "/c", visualStudioCommand(toolchain, paths, fileName, shared))
         }
-    }
-
-    /**
-     * Returns the shell line that puts the 32-bit Visual Studio toolset on the path and then compiles with it.
-     */
-    private fun visualStudioCommand(
-        toolchain: NativeToolchain,
-        paths: List<String>,
-        fileName: String,
-        shared: Boolean,
-    ): String {
-        val sources = paths.joinToString(" ") { "\"$it\"" }
-        val compile =
-            when {
-                shared -> "cl /nologo /O2 /LD $sources /Fe:\"$fileName\" /link ws2_32.lib gdi32.lib user32.lib"
-                else -> "cl /nologo /O2 $sources /Fe:\"$fileName\" /link /SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup"
-            }
-        return "call \"${toolchain.command}\" -arch=x86 -host_arch=x64 -no_logo && $compile"
     }
 
     /**
@@ -205,6 +195,23 @@ abstract class CompileNativeTask : DefaultTask() {
         }
 
     companion object {
-        private const val COMPILE_LOG = "compile.log"
+        /**
+         * Returns the shell line that puts the 32-bit Visual Studio toolset of [toolchain] on the path and then
+         * compiles [paths] into [fileName] with it, as a shared library when [shared] is `true`.
+         */
+        private fun visualStudioCommand(
+            toolchain: NativeToolchain,
+            paths: List<String>,
+            fileName: String,
+            shared: Boolean,
+        ): String {
+            val sources = paths.joinToString(" ") { "\"$it\"" }
+            val compile =
+                when {
+                    shared -> "cl /nologo /O2 /LD $sources /Fe:\"$fileName\" /link ws2_32.lib gdi32.lib user32.lib"
+                    else -> "cl /nologo /O2 $sources /Fe:\"$fileName\" /link /SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup"
+                }
+            return "call \"${toolchain.command}\" -arch=x86 -host_arch=x64 -no_logo && $compile"
+        }
     }
 }

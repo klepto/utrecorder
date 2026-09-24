@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.common.io
 
-import dev.klepto.utrecorder.common.log.catchingIo
+import dev.klepto.utrecorder.common.suspendCatchingIo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -28,9 +28,16 @@ import kotlin.io.path.walk
 import kotlin.time.Duration
 
 /**
- * This string as an absolute, normalized path, resolved against the working directory when relative.
+ * Returns this string as an absolute, normalized path, resolved against the working directory when relative.
  */
 fun String.toAbsolutePath(): Path = Paths.get(this).toAbsolutePath().normalize()
+
+/**
+ * Returns the working directory of this process, read from `user.dir` as an absolute, normalized path.
+ *
+ * @throws IllegalStateException if the `user.dir` system property is not set.
+ */
+fun workingDirectory(): Path = checkNotNull(System.getProperty("user.dir")) { "No user.dir system property" }.toAbsolutePath()
 
 /**
  * A constant naming one path segment, resolved on a path through [get].
@@ -42,26 +49,19 @@ interface PathName {
 }
 
 /**
- * The child of this path called [name].
+ * Returns the child of this path called [name].
  */
 operator fun Path.get(name: String): Path = resolve(name)
 
 /**
- * The child of this path called by the segment [name] holds.
+ * Returns the child of this path called by the segment that [name] holds.
  */
 operator fun Path.get(name: PathName): Path = get(name.pathName)
 
 /**
- * The working directory of the process [reader] describes, read from `user.dir` as an absolute, normalized path.
- *
- * @throws IllegalStateException if [reader] holds no `user.dir`.
- */
-fun workingDirectory(): Path = checkNotNull(System.getProperty("user.dir")) { "No user.dir system property" }.toAbsolutePath()
-
-/**
  * Copies the file at this path to [target], creating the parent directories of [target], and returns [target].
  *
- * @throws IllegalStateException with the message [failureMessage] returns, if this path holds nothing.
+ * @throws IllegalStateException with the message that [failureMessage] returns, if this path holds nothing.
  * @throws java.nio.file.FileAlreadyExistsException if [target] exists and [overwrite] is `false`.
  */
 suspend fun Path.copy(
@@ -75,38 +75,42 @@ suspend fun Path.copy(
     }
 
 /**
- * Moves the file at this path to [target], replacing whatever is already there.
+ * Moves the file or directory at this path to [target], creating the parent directories of [target], and returns
+ * [target].
  *
- * A directory is merged into [target] one file at a time, overwriting the files [target] already holds and keeping the
- * ones this directory does not contain.
+ * A file replaces the file already at [target]. A directory is merged into [target] one file at a time. The merge
+ * overwrites the files [target] already holds and keeps the ones this directory does not contain.
  */
-@OptIn(ExperimentalPathApi::class)
 suspend fun Path.move(target: Path): Path =
     withContext(Dispatchers.IO) {
-        if (!isDirectory()) {
-            moveFile(target.createParentDirectories())
-            return@withContext target
+        when {
+            isDirectory() -> moveDirectory(target)
+            else -> moveFile(target.createParentDirectories())
         }
-
-        walk(PathWalkOption.INCLUDE_DIRECTORIES)
-            .toList()
-            .forEach { source ->
-                val destination = target.resolve(relativize(source))
-                if (source.isDirectory()) {
-                    destination.createDirectories()
-                } else {
-                    source.moveFile(destination.createParentDirectories())
-                }
-            }
-
-        deleteRecursively()
         target
     }
 
 /**
- * Moves a single file by atomic rename, or by a replacing move on a filesystem without atomic rename.
+ * Merges this directory into [target] one file at a time, then deletes what is left of this directory.
  */
-private fun Path.moveFile(target: Path) =
+@OptIn(ExperimentalPathApi::class)
+private fun Path.moveDirectory(target: Path) {
+    walk(PathWalkOption.INCLUDE_DIRECTORIES)
+        .toList()
+        .forEach { source ->
+            val destination = target.resolve(relativize(source))
+            when {
+                source.isDirectory() -> destination.createDirectories()
+                else -> source.moveFile(destination.createParentDirectories())
+            }
+        }
+    deleteRecursively()
+}
+
+/**
+ * Moves a single file by atomic rename or by a replacing move on a filesystem without atomic rename.
+ */
+private fun Path.moveFile(target: Path): Path =
     try {
         moveTo(target, StandardCopyOption.ATOMIC_MOVE)
     } catch (unsupported: AtomicMoveNotSupportedException) {
@@ -127,7 +131,9 @@ private fun Path.moveFileReplacing(
     }
 
 /**
- * The lines of the file at this path decoded with [charset], or no lines if the file does not exist.
+ * Returns the lines of the file at this path, decoded with [charset].
+ *
+ * If the file does not exist, returns an empty list instead.
  */
 suspend fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<String> =
     withContext(Dispatchers.IO) {
@@ -138,7 +144,9 @@ suspend fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<Strin
     }
 
 /**
- * The contents of the file at this path decoded with [charset], or an empty string if the file does not exist.
+ * Returns the contents of the file at this path, decoded with [charset].
+ *
+ * If the file does not exist, returns an empty string instead.
  */
 suspend fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
     withContext(Dispatchers.IO) {
@@ -149,7 +157,7 @@ suspend fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
     }
 
 /**
- * The digest of the file at this path under [algorithm], such as `MD5` or `SHA-256`, as lowercase hexadecimal.
+ * Returns the digest of the file at this path under [algorithm], such as `MD5` or `SHA-256`, as lowercase hexadecimal.
  */
 suspend fun Path.digest(algorithm: String): String =
     withContext(Dispatchers.IO) {
@@ -161,14 +169,16 @@ suspend fun Path.digest(algorithm: String): String =
     }
 
 /**
- * This array as lowercase hexadecimal, two digits per byte.
+ * Returns this array as lowercase hexadecimal, two digits per byte.
  */
 private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
 /**
- * The outcome of removing this path and everything under it, tried up to [attempts] times with [delay] between
- * attempts. A path that does not exist is a success, and when no attempt succeeds the failure is that of the last one.
- * Only an [IOException] is held as a failure.
+ * Returns the outcome of deleting this path and everything under it, tried up to [attempts] times with [delay] between
+ * attempts.
+ *
+ * A path that does not exist counts as a success. Only an [IOException] is held as a failure. If no attempt succeeds,
+ * the failure is that of the last attempt.
  *
  * @throws IllegalArgumentException if [attempts] is below 1.
  */
@@ -188,10 +198,10 @@ suspend fun Path.deleteCatching(
 }
 
 /**
- * The outcome of removing this path and everything under it once, after waiting [after].
+ * Returns the outcome of deleting this path and everything under it once, after waiting [after].
  */
 @OptIn(ExperimentalPathApi::class)
 private fun Path.deleteOnceCatching(after: Duration = Duration.ZERO): Result<Unit> {
     Thread.sleep(after.inWholeMilliseconds)
-    return catchingIo { deleteRecursively() }
+    return suspendCatchingIo { deleteRecursively() }
 }

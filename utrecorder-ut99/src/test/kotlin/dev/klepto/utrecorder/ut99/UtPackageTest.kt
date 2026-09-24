@@ -29,15 +29,14 @@ class UtPackageTest :
             path: Path,
             guidBytes: List<Int> = guidHeaderBytes,
         ): Path {
+            val tagAndVersion = listOf(0xC1, 0x83, 0x2A, 0x9E, 0x44, 0x00, 0x00, 0x00)
             val header = ByteArray(64)
-            listOf(0xC1, 0x83, 0x2A, 0x9E, 0x44, 0x00, 0x00, 0x00).forEachIndexed { index, value -> header[index] = value.toByte() }
+            tagAndVersion.forEachIndexed { index, value -> header[index] = value.toByte() }
             guidBytes.forEachIndexed { index, value -> header[36 + index] = value.toByte() }
-            path.createParentDirectories()
-            path.writeBytes(header)
-            return path
+            return path.createParentDirectories().also { it.writeBytes(header) }
         }
 
-        test("named gives a package with that name and GUID, and a null path") {
+        test("named returns a package with that name and GUID, and a null path") {
             val required = UtPackage.named("Engine", guid)
 
             required.name shouldBe "Engine"
@@ -45,7 +44,7 @@ class UtPackageTest :
             required.path shouldBe null
         }
 
-        test("read gives a package named after the file, carrying the path") {
+        test("read returns a package named after the file, with the file as its path") {
             val path = writePackage(root / "read-name" / "Engine.u")
 
             val held = UtPackage.read(path)
@@ -54,13 +53,13 @@ class UtPackageTest :
             held.path shouldBe path
         }
 
-        test("read on a package file gives the GUID its header holds") {
+        test("read returns a package carrying the GUID its header holds") {
             val path = writePackage(root / "read-guid" / "Engine.u")
 
             UtPackage.read(path).guid shouldBe guid
         }
 
-        test("read on a file that is not a package gives an empty GUID") {
+        test("read returns an empty GUID for a file that is not a package") {
             val path = root / "read-not-a-package" / "Engine.u"
             path.createParentDirectories()
             path.writeText("not a package")
@@ -68,7 +67,7 @@ class UtPackageTest :
             UtPackage.read(path).guid shouldBe ""
         }
 
-        test("read reads nothing until the GUID is asked for") {
+        test("read does not read the file until guid is accessed") {
             val path = root / "read-lazy" / "Engine.u"
 
             val held = UtPackage.read(path)
@@ -85,7 +84,7 @@ class UtPackageTest :
             shouldThrow<IOException> { held.guid }
         }
 
-        test("satisfies is true when the names differ only by case and the GUIDs differ only by case") {
+        test("satisfies is true when the names and the GUIDs are equal ignoring case") {
             val held = UtPackage.named("engine", guid.lowercase())
 
             held.satisfies(UtPackage.named("Engine", guid)) shouldBe true
@@ -95,11 +94,11 @@ class UtPackageTest :
             UtPackage.named("Engine", guid).satisfies(UtPackage.named("Core", guid)) shouldBe false
         }
 
-        test("satisfies is false when the names match and the GUIDs differ") {
+        test("satisfies is false when the names are equal and the GUIDs differ") {
             UtPackage.named("Engine", guid).satisfies(UtPackage.named("Engine", otherGuid)) shouldBe false
         }
 
-        test("satisfies is true for any package of that name when the required package carries an empty GUID") {
+        test("satisfies is true for any package of that name, without reading its header, when the required package carries no GUID") {
             val path = writePackage(root / "satisfies-empty" / "Engine.u")
             val held = UtPackage.read(path)
 
@@ -122,7 +121,7 @@ class UtPackageTest :
             first.hashCode() shouldBe second.hashCode()
         }
 
-        test("equality reads no header") {
+        test("equals and hashCode do not read the header") {
             val path = writePackage(root / "equals-lazy" / "Engine.u")
             val first = UtPackage.read(path)
             val second = UtPackage.read(path)
@@ -148,7 +147,7 @@ class UtPackageTest :
             UtPackage.named("Engine", guid).toString() shouldBe "Engine[12345678]"
         }
 
-        test("list lists the regular files directly in a directory whose extension is in the set, ignoring case") {
+        test("list returns the regular files held directly in the directory whose extension is one of the extensions, ignoring case") {
             val directory = root / "list"
             directory.createDirectories()
             listOf("Engine.u", "BTPog.U", "CTF-BT-II.unr", "Skins.utx", "Notes.txt").forEach { (directory / it).writeText("") }
@@ -160,7 +159,7 @@ class UtPackageTest :
             found.map { "${it.path?.fileName}" }.toSet() shouldBe setOf("Engine.u", "BTPog.U", "CTF-BT-II.unr")
         }
 
-        test("list of a directory that does not exist is empty") {
+        test("list returns an empty list when the directory does not exist") {
             UtPackage.list(root / "list-missing", setOf("u")) shouldBe emptyList()
         }
     })

@@ -1,7 +1,8 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.install.Installer
+import dev.klepto.utrecorder.common.Installer
 import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.ut99.UtDirectory.Maps
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -12,68 +13,62 @@ import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
 
 /**
- * Decompression of the compressed maps of an installation: the `.uz` archives in the maps directory extracted with
- * UCC, one plain map per archive, the archive removed once its map exists.
+ * Installer that decompresses the `.uz` map archives in the maps directory of an installation with UCC.
+ *
+ * Each archive becomes one plain map named after the archive without its `.uz` suffix. The archive is removed once
+ * its map exists. An archive whose map already exists is left as it is.
+ *
+ * @property installation the installation whose maps directory holds the archives.
  */
 class UtMapInstaller(
     private val installation: UtInstallation,
 ) : Installer {
-    /**
-     * Decompresses every archive the maps directory holds that names no map yet.
-     */
+    private val mapsDirectory: Path = installation.directory[Maps]
+
     override suspend fun install() {
         for (archive in compressed()) {
-            installOnce(archive)
+            install(archive)
         }
     }
 
-    /**
-     * Removes every plain map the maps directory holds that a compressed archive named.
-     */
     override suspend fun uninstall() {
         val archives = compressed()
         withContext(Dispatchers.IO) {
-            archives.forEach { archive -> installation.directory[UtDirectory.Maps][mapName(archive)].deleteIfExists() }
+            archives.forEach { map(it).deleteIfExists() }
         }
     }
 
-    /**
-     * Returns `true` when the maps directory holds no compressed archive.
-     */
-    override suspend fun isInstalled() = compressed().isEmpty()
+    override suspend fun isInstalled(): Boolean = compressed().isEmpty()
 
     /**
-     * Decompresses the archive [archive] into the maps directory and returns the map written.
+     * Decompresses [archive] into the maps directory and returns the map it wrote. The archive stays in place.
      */
-    suspend fun extract(archive: Path): Path =
-        withContext(Dispatchers.IO) {
-            installation.compiler.extract(archive, installation.directory[UtDirectory.Maps][mapName(archive)])
-        }
+    suspend fun extract(archive: Path): Path = installation.compiler.extract(archive, map(archive))
 
     /**
-     * The archives in the maps directory, a map existing for one leaving it nothing to do.
+     * Returns the `.uz` archives in the maps directory. If the maps directory does not exist, returns an empty list
+     * instead.
      */
     suspend fun compressed(): List<Path> =
         withContext(Dispatchers.IO) {
-            val mapsDirectory = installation.directory[UtDirectory.Maps]
-            if (!mapsDirectory.isDirectory()) {
-                emptyList()
-            } else {
-                mapsDirectory.listDirectoryEntries().filter { it.name.endsWith(ARCHIVE_SUFFIX, ignoreCase = true) }
+            when {
+                mapsDirectory.isDirectory() -> mapsDirectory.listDirectoryEntries().filter(::isArchive)
+                else -> emptyList()
             }
         }
 
-    private suspend fun installOnce(archive: Path) {
-        val mapName = mapName(archive)
-        val alreadyInstalled = withContext(Dispatchers.IO) { installation.directory[UtDirectory.Maps][mapName].exists() }
-        if (alreadyInstalled) return
+    private suspend fun install(archive: Path) {
+        val mapExists = withContext(Dispatchers.IO) { map(archive).exists() }
+        if (mapExists) return
         extract(archive)
         withContext(Dispatchers.IO) { archive.deleteIfExists() }
     }
 
-    private fun mapName(archive: Path) = archive.name.removeSuffix(ARCHIVE_SUFFIX)
+    private fun map(archive: Path): Path = mapsDirectory[archive.name.removeSuffix(ARCHIVE_SUFFIX)]
 
     private companion object {
-        private const val ARCHIVE_SUFFIX = ".uz"
+        const val ARCHIVE_SUFFIX = ".uz"
+
+        fun isArchive(path: Path): Boolean = path.name.endsWith(ARCHIVE_SUFFIX, ignoreCase = true)
     }
 }

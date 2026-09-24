@@ -19,7 +19,7 @@ import kotlin.time.Duration.Companion.seconds
  * @property packages The packages the demo loads, in the order the demo names them, with the level package first. A
  * package named more than once appears once, as its first entry, with names compared ignoring case.
  * @property duration The demo time of the last record. It can overshoot the played length by a fraction of a second.
- * @property cap The cap that ends the run the demo records, or `null` when the demo holds no cap.
+ * @property cap The cap that ends the run the demo records. If the demo holds no cap, it is `null` instead.
  */
 data class UtDemo(
     val map: String,
@@ -28,8 +28,6 @@ data class UtDemo(
     val cap: UtDemoCap?,
 ) {
     companion object {
-        private const val NAME_SEPARATOR = " and "
-
         private val TOLERANCE = 50.milliseconds
 
         private val SPAWN_MARKER = Regex("""BTPOG_SPAWN_MARKER:(\S+)""")
@@ -39,30 +37,36 @@ data class UtDemo(
         private val REPORTED_TIME = Regex("""(?:(\d{1,3}):)?(\d{1,3})\.(\d{3})""")
 
         /**
-         * Reads the demo file at the given [path].
+         * Returns the demo read from the file at [path].
          */
         suspend fun read(path: Path): UtDemo = read(withContext(Dispatchers.IO) { path.readBytes() })
 
         /**
-         * Reads the demo held in [bytes]. Reading stops at the first record that does not decode and keeps the records
-         * before it. Throws [IllegalStateException] if no record names the map.
+         * Returns the demo read from [bytes]. Reading stops at the first record that does not decode and keeps the
+         * records before it.
+         *
+         * @throws IllegalStateException If no record names the map.
          */
         fun read(bytes: ByteArray): UtDemo {
             val records = UtDemoRecord.read(bytes).toList()
             val lines = records.flatMap { it.controlLines() }
             val map = checkNotNull(lines.firstNotNullOfOrNull(::levelOf)) { "Demo names no map" }
-            val packages = lines.mapNotNull(::packageOf).distinctBy { it.name.lowercase() }
+            val packages =
+                lines
+                    .mapNotNull(::packageOf)
+                    .distinctBy { it.name.lowercase() }
             val duration = records.lastOrNull()?.time ?: Duration.ZERO
-            return UtDemo(map, packages, duration, readCap(records))
+            return UtDemo(map, packages, duration, capOf(records))
         }
 
         /**
-         * Returns the map a `WELCOME` [line] names, or `null` if the line is not one or names no map.
+         * Returns the map a `WELCOME` [line] names. If the line is not a `WELCOME` line or names no map, returns `null`
+         * instead.
          */
         private fun levelOf(line: String): String? = fieldsOf(line, "WELCOME")?.get("LEVEL")
 
         /**
-         * Returns the package a `USES` [line] names, or `null` if the line is not one.
+         * Returns the package a `USES` [line] names. If the line is not a `USES` line, returns `null` instead.
          */
         private fun packageOf(line: String): UtPackage? {
             val fields = fieldsOf(line, "USES") ?: return null
@@ -73,7 +77,8 @@ data class UtDemo(
         }
 
         /**
-         * Returns the `KEY=VALUE` fields of a [line] opening with [command], or `null` if it opens with another one.
+         * Returns the `KEY=VALUE` fields of a [line] opening with [command]. If the line opens with another command,
+         * returns `null` instead.
          */
         private fun fieldsOf(
             line: String,
@@ -89,10 +94,10 @@ data class UtDemo(
         }
 
         /**
-         * Reads the first cap [records] hold, or returns `null` if they hold none.
+         * Returns the first cap [records] hold. If they hold none, returns `null` instead.
          */
-        private fun readCap(records: List<UtDemoRecord>): UtDemoCap? {
-            val lines = records.flatMap(::linesIn)
+        private fun capOf(records: List<UtDemoRecord>): UtDemoCap? {
+            val lines = records.flatMap(::linesOf)
             val marker = lines.firstNotNullOfOrNull { it.marker(CAP_MARKER) }
             val capped = lines.firstNotNullOfOrNull { it.capped() }
             val demoTime = marker?.time ?: capped?.time ?: return null
@@ -111,18 +116,20 @@ data class UtDemo(
         /**
          * Returns every candidate line one [record] carries, at the demo time the record arrives at.
          */
-        private fun linesIn(record: UtDemoRecord): List<Line> = record.shiftedStrings().map { Line(record.time, it) }
+        private fun linesOf(record: UtDemoRecord): List<Line> = record.shiftedStrings().map { Line(record.time, it) }
 
         /**
-         * Returns the time between the spawn marker carrying [marker]'s id and [marker] itself, or `null` when [lines]
-         * holds no spawn marker of that id.
+         * Returns the time between the spawn marker carrying [marker]'s id and [marker] itself. If [lines] holds no
+         * spawn marker of that id, returns `null` instead.
          */
         private fun gapOf(
             marker: Marker,
             lines: List<Line>,
         ): Duration? =
             lines
-                .firstNotNullOfOrNull { line -> line.marker(SPAWN_MARKER)?.takeIf { it.id == marker.id } }
+                .asSequence()
+                .mapNotNull { it.marker(SPAWN_MARKER) }
+                .firstOrNull { it.id == marker.id }
                 ?.let { marker.time - it.time }
 
         /**
@@ -135,9 +142,9 @@ data class UtDemo(
                 .toMap()
 
         /**
-         * Returns the player whose run the demo records: the one of [reportedTimes] closest to [gap] within the
-         * tolerance, or the one player [names] holds when nothing separates the reported times. `null` when neither
-         * names exactly one player.
+         * Returns the player whose run the demo records: the one name of [reportedTimes] whose time is nearest [gap].
+         * If [gap] is `null` or no reported time is within [TOLERANCE] of it, returns the one player [names] holds
+         * instead. If the names chosen hold more than one player or none, returns `null`.
          */
         private fun capperOf(
             gap: Duration?,
@@ -150,8 +157,8 @@ data class UtDemo(
             }
 
         /**
-         * Returns the names of [reportedTimes] whose time is nearest [gap], or `null` when none of them is within the
-         * tolerance of it.
+         * Returns the names of [reportedTimes] whose time is nearest [gap]. If no time is within [TOLERANCE] of [gap],
+         * returns `null` instead.
          */
         private fun closestNames(
             gap: Duration,
@@ -165,6 +172,16 @@ data class UtDemo(
                 ?.value
 
         /**
+         * Returns the run time a reported time of the form `M:SS.mmm` or `SS.mmm` holds. If [text] is in neither form,
+         * returns `null` instead.
+         */
+        private fun timeOf(text: String): Duration? {
+            val match = REPORTED_TIME.matchEntire(text) ?: return null
+            val (minutes, seconds, millis) = match.destructured
+            return (minutes.toIntOrNull() ?: 0).minutes + seconds.toInt().seconds + millis.toInt().milliseconds
+        }
+
+        /**
          * A candidate line of a demo.
          *
          * @property time The demo time the record carrying the line arrives at.
@@ -175,36 +192,27 @@ data class UtDemo(
             val text: String,
         ) {
             /**
-             * Returns the marker this line holds under [pattern], or `null` when the line is not one.
+             * Returns the marker this line holds under [pattern]. If the line does not match [pattern], returns `null`
+             * instead.
              */
             fun marker(pattern: Regex): Marker? = pattern.matchEntire(text)?.let { Marker(it.groupValues[1], time) }
 
             /**
-             * Returns the cap this line broadcasts, or `null` when the line is not a `capped!` line.
+             * Returns the cap this line broadcasts. If the line is not a `capped!` line, returns `null` instead.
              */
             fun capped(): Capped? =
                 CAPPED
                     .matchEntire(text)
-                    ?.let { Capped(it.groupValues[1].split(NAME_SEPARATOR), time) }
+                    ?.let { Capped(it.groupValues[1].split(" and "), time) }
 
             /**
-             * Returns the name and run time this line reports, or `null` when the line is not a `finished in` line or
-             * reports a time in no known format.
+             * Returns the name and run time this line reports. If the line is not a `finished in` line or reports a
+             * time in no known format, returns `null` instead.
              */
             fun reportedTime(): Pair<String, Duration>? {
                 val match = FINISHED.matchEntire(text) ?: return null
                 val time = timeOf(match.groupValues[2]) ?: return null
                 return match.groupValues[1] to time
-            }
-
-            /**
-             * Returns the run time a reported time of the form `M:SS.mmm` or `SS.mmm` holds, or `null` when [text] is
-             * in neither form.
-             */
-            private fun timeOf(text: String): Duration? {
-                val match = REPORTED_TIME.matchEntire(text) ?: return null
-                val (minutes, seconds, millis) = match.destructured
-                return (minutes.toIntOrNull() ?: 0).minutes + seconds.toInt().seconds + millis.toInt().milliseconds
             }
         }
 

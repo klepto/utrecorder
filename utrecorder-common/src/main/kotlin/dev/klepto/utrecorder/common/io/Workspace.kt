@@ -1,11 +1,12 @@
 package dev.klepto.utrecorder.common.io
 
-import dev.klepto.utrecorder.common.config.DirectoriesConfig
-import dev.klepto.utrecorder.common.inject.getOrNull
-import dev.klepto.utrecorder.common.inject.withBinding
-import dev.klepto.utrecorder.common.log.logger
-import dev.klepto.utrecorder.common.log.mergeAndThrow
-import dev.klepto.utrecorder.common.time.TimestampId
+import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.TimestampId
+import dev.klepto.utrecorder.common.getOrNull
+import dev.klepto.utrecorder.common.logger
+import dev.klepto.utrecorder.common.mergeAndThrow
+import dev.klepto.utrecorder.common.suspendCatching
+import dev.klepto.utrecorder.common.withBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -21,7 +22,9 @@ import kotlin.time.Instant
 import kotlin.time.toKotlinInstant
 
 /**
- * @author Augustinas R. <http://github.com/klepto>
+ * Scratch directory of one run, which names the files the run writes and tracks them until the run ends.
+ *
+ * Open one with [workspace]. A workspace exists only for the duration of the block that opened it.
  */
 class Workspace private constructor(
     private val name: String,
@@ -32,37 +35,65 @@ class Workspace private constructor(
     private val id: String = IDS.next()
     private val prefix: String = "$name-$id"
 
+    /**
+     * Directory under the workspace directory of [config] that the tracked files end up in.
+     *
+     * A nested workspace uses the directory of its parent.
+     */
     private val outputDirectory: Path = parent?.outputDirectory ?: config.workspace[prefix]
-    private val outputPattern = Regex("""^${Regex.escape(name)}-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-""")
 
-    val directory = workingDirectory ?: outputDirectory
+    /**
+     * Pattern that matches the name of a file that a workspace of this name wrote into a shared working directory.
+     */
+    private val sharedFilePattern: Regex = Regex("""^${Regex.escape(name)}-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-""")
+
+    /**
+     * Directory this workspace names its files in.
+     *
+     * This is the working directory when one is given, and the output directory otherwise.
+     */
+    val directory: Path = workingDirectory ?: outputDirectory
 
     /**
      * Whether this workspace holds a directory of its own, the one [delete] removes along with the files it tracks.
      */
     private val ownsDirectory: Boolean = workingDirectory == null && parent == null
 
-    private val registry =
-        if (workingDirectory != null) {
-            PathRegistry("$prefix-", workingDirectory)
-        } else {
-            PathRegistry("", directory)
+    private val registry: PathRegistry =
+        when (workingDirectory) {
+            null -> PathRegistry("", directory)
+            else -> PathRegistry("$prefix-", workingDirectory)
         }
 
+    /**
+     * Returns the path of a new file named [name] in [directory], and tracks it.
+     *
+     * In a shared working directory, the file name carries the workspace name and id as a prefix.
+     */
+    operator fun get(name: String): Path = registry.newFile(name).also(::track)
+
+    /**
+     * Returns a new temporary file in [directory], and tracks it.
+     */
+    suspend fun tempFile(): Path = registry.tempFile().also(::track)
+
+    /**
+     * Returns a new temporary directory in [directory], and tracks it.
+     */
+    suspend fun tempDirectory(): Path = registry.tempDirectory().also(::track)
+
+    /**
+     * Tracks [path] in this workspace and in every workspace around it.
+     */
     fun track(path: Path) {
         registry.register(path)
         parent?.track(path)
     }
 
-    operator fun get(name: String): Path = registry.newFile(name).also(::track)
-
-    suspend fun tempFile(): Path = registry.tempFile().also(::track)
-
-    suspend fun tempDirectory(): Path = registry.tempDirectory().also(::track)
-
     /**
-     * Removes the files this workspace tracks and, when it holds a directory of its own, that directory. Nothing calls
-     * this for a consumer: a workspace is kept until pruning removes it unless the consumer removes it here.
+     * Removes the files this workspace tracks and, when it holds a directory of its own, that directory.
+     *
+     * Nothing calls this on its own: a workspace is kept until pruning removes it, unless the block removes it here.
      */
     suspend fun delete() {
         registry.delete()
@@ -70,28 +101,49 @@ class Workspace private constructor(
     }
 
     /**
-     * Moves the files this workspace tracks into [directory], then removes the workspace behind them.
+     * Moves the files this workspace tracks into [target], then removes the workspace behind them.
      */
-    suspend fun move(directory: Path) {
-        persist(directory)
+    suspend fun move(target: Path) {
+        persist(target)
         delete()
     }
 
-    private suspend fun persist(directory: Path = outputDirectory) {
-        withContext(Dispatchers.IO) {
-            registry
-                .getRoots()
-                .associateWith { directory.resolve(registry.relativize(it)).toAbsolutePath().normalize() }
-                .filter { (source, target) -> source != target }
-                .mapNotNull { (source, target) ->
-                    runCatching { source.move(target) }.exceptionOrNull()
-                }.mergeAndThrow()
+    /**
+     * Runs [block] in this workspace, then moves the tracked files into the output directory.
+     *
+     * Before [block] runs, removes expired entries. A failure to remove them is logged and does not stop [block].
+     */
+    private suspend fun <T> enter(block: suspend Workspace.(Workspace) -> T): T {
+        directory.createDirectories()
+        suspendCatching { prune() }.onFailure { log.warn(it) { "Failed to prune expired workspace entries" } }
+        try {
+            return block(this)
+        } finally {
+            withContext(NonCancellable) {
+                persist()
+                deleteIfEmpty()
+            }
         }
     }
 
     /**
-     * Removes the directory this workspace keeps its files in when the workspace left nothing there. A nested
-     * workspace keeps its files in its parent's directory and leaves that directory to the parent.
+     * Moves the tracked files into [target], each by its location relative to [directory].
+     *
+     * A file that is already at its target stays in place.
+     */
+    private suspend fun persist(target: Path = outputDirectory) {
+        registry
+            .getRoots()
+            .associateWith { target.resolve(registry.relativize(it)).toAbsolutePath().normalize() }
+            .filter { (source, destination) -> source != destination }
+            .mapNotNull { (source, destination) -> suspendCatching { source.move(destination) }.exceptionOrNull() }
+            .mergeAndThrow()
+    }
+
+    /**
+     * Removes the output directory when the workspace left nothing there.
+     *
+     * A nested workspace leaves the directory to its parent.
      */
     private suspend fun deleteIfEmpty() {
         if (parent != null) return
@@ -102,26 +154,31 @@ class Workspace private constructor(
         }
     }
 
+    /**
+     * Removes the expired entries of the workspace directory and of the shared working directory.
+     */
     private suspend fun prune() {
-        val deadline = Clock.System.now() - RETENTION
-        withContext(Dispatchers.IO) {
-            expiredEntries(deadline)
-                .mapNotNull {
-                    it.deleteCatching().exceptionOrNull()
-                }.mergeAndThrow()
-        }
+        expiredEntries(Clock.System.now() - RETENTION)
+            .mapNotNull { it.deleteCatching().exceptionOrNull() }
+            .mergeAndThrow()
     }
 
+    /**
+     * Returns the entries last modified before [deadline].
+     *
+     * These are entries of the workspace directory and files of the shared working directory that match
+     * [sharedFilePattern].
+     */
     private suspend fun expiredEntries(deadline: Instant): List<Path> =
         withContext(Dispatchers.IO) {
             val workspaceEntries = config.workspace.createDirectories().listDirectoryEntries()
-            val workingDirEntries =
-                workingDirectory?.listDirectoryEntries().orEmpty().filter {
-                    outputPattern.containsMatchIn(
-                        it.fileName.toString(),
-                    )
-                }
-            (workspaceEntries + workingDirEntries).filter { it.getLastModifiedTime().toInstant().toKotlinInstant() < deadline }
+            val sharedEntries =
+                workingDirectory
+                    ?.listDirectoryEntries()
+                    .orEmpty()
+                    .filter { sharedFilePattern.containsMatchIn(it.fileName.toString()) }
+            (workspaceEntries + sharedEntries)
+                .filter { it.getLastModifiedTime().toInstant().toKotlinInstant() < deadline }
         }
 
     companion object {
@@ -131,18 +188,16 @@ class Workspace private constructor(
         private val RETENTION = 7.days
 
         /**
-         * The source of the ids workspaces carry.
+         * Source of the ids that workspaces carry.
          */
         private val IDS = TimestampId()
 
-        /**
-         * The logger.
-         */
         private val log = logger<Workspace>()
 
         /**
-         * Runs [block] in a new workspace named [name] and returns its result. Backs [workspace], the one way to
-         * open a workspace.
+         * Returns the result of [block], run in a new workspace named [name].
+         *
+         * The workspace is nested in the workspace of the calling coroutine, if there is one.
          */
         suspend fun <T> scope(
             name: String,
@@ -150,26 +205,20 @@ class Workspace private constructor(
             config: DirectoriesConfig,
             block: suspend Workspace.(Workspace) -> T,
         ): T {
-            val parent = getOrNull<Workspace>()
-            val workspace = Workspace(name, workingDirectory, parent, config)
+            val workspace = Workspace(name, workingDirectory, getOrNull<Workspace>(), config)
             return withBinding(workspace) {
-                withContext(Dispatchers.IO) {
-                    workspace.directory.createDirectories()
-                    runCatching { workspace.prune() }
-                    try {
-                        workspace.block(workspace)
-                    } finally {
-                        withContext(NonCancellable) {
-                            workspace.persist()
-                            workspace.deleteIfEmpty()
-                        }
-                    }
-                }
+                withContext(Dispatchers.IO) { workspace.enter(block) }
             }
         }
     }
 }
 
+/**
+ * Returns the result of [block], run in a new workspace named [name].
+ *
+ * If [workingDirectory] is not provided, the workspace names its files in a directory of its own instead. If [config]
+ * is not provided, uses the directories read from the properties and the environment instead.
+ */
 suspend fun <T> workspace(
     name: String = "task",
     workingDirectory: Path? = null,

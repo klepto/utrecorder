@@ -1,19 +1,27 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.DirectoriesConfig
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.get
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.exists
 
+/**
+ * Tests [UtPackageInstaller] against a real Unreal Tournament installation and a real redirect: that it downloads a
+ * package neither the installation nor an empty packages directory holds, and that [UtPackageInstaller.uninstall]
+ * deletes it again.
+ *
+ * Runs only under `./gradlew :utrecorder-ut99:integrationTest`. The installation is downloaded on the first run.
+ */
 class UtPackageInstallerIntegrationTest :
     FunSpec({
         val packageName = "swJumpPad"
         val packageGuid = "5AC8779640DFA12A546D2B907A0A7D52"
         val home = createTempDirectory("utrecorder-utpackageinstaller-integration")
-        val defaults = UtConfig.fromProperties()
-        val config = defaults.copy(directoriesConfig = DirectoriesConfig(home), gameDirectory = defaults.gameDirectory)
+        val defaults = UtConfig()
+        val config = UtConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = home), defaults.gameDirectory)
 
         beforeSpec { UtInstaller(defaults).install() }
         afterSpec { home.toFile().deleteRecursively() }
@@ -21,10 +29,10 @@ class UtPackageInstallerIntegrationTest :
         val installation by lazy { UtInstallation(config.gameDirectory, config) }
 
         context("install") {
-            test("fetches a real package from a real redirect into a real installation") {
+            test("downloads the package from a redirect into the installation at the recorded GUID and uninstall deletes it") {
                 val required = UtPackage.named(packageName, packageGuid)
                 val installed = installation.directory[UtDirectory.System]["$packageName.u"]
-                val fetched = config.directoriesConfig.packages["$packageName.u"]
+                val packagesDirectoryFile = config.directoriesConfig.packages["$packageName.u"]
                 val installer = UtPackageInstaller(listOf(required), installation, config)
 
                 installer.isInstalled() shouldBe false
@@ -35,7 +43,7 @@ class UtPackageInstallerIntegrationTest :
 
                     installer.installed.map { it.name } shouldBe listOf(packageName)
                     installer.isInstalled() shouldBe true
-                    fetched.exists() shouldBe false
+                    packagesDirectoryFile.exists() shouldBe false
                     installed.exists() shouldBe true
                     UtPackage.read(installed).guid shouldBe packageGuid
                 } finally {

@@ -1,7 +1,10 @@
 package dev.klepto.utrecorder.build.native
 
+import dev.klepto.utrecorder.build.native.NativeBinaryType.EXECUTABLE
+import dev.klepto.utrecorder.build.native.NativeBinaryType.SHARED_LIBRARY
+
 /**
- * The kind of binary a native unit compiles to.
+ * Kind of file a native binary compiles to.
  */
 enum class NativeBinaryType {
     SHARED_LIBRARY,
@@ -9,13 +12,13 @@ enum class NativeBinaryType {
 }
 
 /**
- * A platform the native binaries are built for, both of them 32-bit.
+ * Platform that native binaries are built for. Every platform is 32-bit x86.
  *
- * Use [current] for the platform the build runs on, which is the only one it can produce binaries for.
+ * Use [current] for the platform the build runs on.
  *
- * @property id The name the platform takes as a jar classifier.
- * @property sharedLibrarySuffix The extension a shared library takes on this platform.
- * @property executableSuffix The extension an executable takes on this platform.
+ * @property id Name of the platform as a jar classifier.
+ * @property sharedLibrarySuffix File extension of a shared library on this platform.
+ * @property executableSuffix File extension of an executable on this platform.
  */
 enum class NativePlatform(
     val id: String,
@@ -27,12 +30,12 @@ enum class NativePlatform(
     ;
 
     /**
-     * `true` for [WINDOWS_X86].
+     * `true` if this platform is Windows.
      */
     val isWindows: Boolean get() = this == WINDOWS_X86
 
     /**
-     * Returns the file name a binary of the given [name] and [type] takes on this platform.
+     * Returns the file name of a binary of the given [name] and [type] on this platform.
      */
     fun fileName(
         name: String,
@@ -40,14 +43,15 @@ enum class NativePlatform(
     ): String =
         name +
             when (type) {
-                NativeBinaryType.SHARED_LIBRARY -> sharedLibrarySuffix
-                NativeBinaryType.EXECUTABLE -> executableSuffix
+                SHARED_LIBRARY -> sharedLibrarySuffix
+                EXECUTABLE -> executableSuffix
             }
 
     companion object {
         /**
-         * The platform the build runs on, and therefore the only one it can produce binaries for. Throws on anything
-         * that is neither Windows nor Linux.
+         * Platform the build runs on, and the only platform it can produce binaries for.
+         *
+         * @throws IllegalStateException if the operating system is neither Windows nor Linux.
          */
         val current: NativePlatform
             get() {

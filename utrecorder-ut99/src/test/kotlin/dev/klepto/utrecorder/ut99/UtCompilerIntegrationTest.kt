@@ -1,9 +1,11 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.DirectoriesConfig
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.get
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.longs.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import java.nio.file.Path
@@ -17,22 +19,32 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 
 /**
- * Tests [UtCompiler.make] against a real Unreal Tournament installation and a real compiler, pinning the assumptions
- * the fake compiler in [UtCompilerTest] cannot reach: that UCC accepts an absolute `-ini=` path, that it resolves a
- * package staged next to `System`, and that it writes the compiled package into `System`.
+ * Tests [UtCompiler.make] against a real Unreal Tournament installation and a real UCC: that UCC accepts an absolute
+ * `-ini=` path, that it resolves a package staged next to `System`, and that it writes the compiled package into
+ * `System`.
  *
- * Opt-in. The installation is downloaded on the first run, so this spec is excluded from `test` and only runs under
- * `./gradlew :utrecorder-ut99:integrationTest`.
+ * Runs only under `./gradlew :utrecorder-ut99:integrationTest`. The installation is downloaded on the first run.
  */
 class UtCompilerIntegrationTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utcompiler-integration")
-        val config = UtConfig.fromProperties()
+        val config = UtConfig()
 
         beforeSpec { UtInstaller(config).install() }
         afterSpec { root.toFile().deleteRecursively() }
 
-        fun compiler(packageName: String): UtCompiler = UtInstallation(config.gameDirectory, UtConfig(DirectoriesConfig(root / packageName))).compiler
+        fun compiler(packageName: String): UtCompiler =
+            UtInstallation(
+                config.gameDirectory,
+                UtConfig(
+                    ConfigReader.EMPTY,
+                    DirectoriesConfig(
+                        ConfigReader.EMPTY,
+                        home =
+                            root / packageName,
+                    ),
+                ),
+            ).compiler
 
         fun sources(
             packageName: String,
@@ -48,7 +60,7 @@ class UtCompilerIntegrationTest :
             (root / packageName / "workspace").takeIf { it.exists() }?.listDirectoryEntries("ucc-*") ?: emptyList()
 
         context("make") {
-            test("compiles a package into a real Unreal Tournament package file") {
+            test("compiles a package to the output path and leaves nothing in the installation") {
                 val packageName = "UtRecorderProbe"
                 val outputPath = root / "out" / "$packageName.u"
 
@@ -56,7 +68,7 @@ class UtCompilerIntegrationTest :
 
                 result shouldBe outputPath
                 outputPath.exists() shouldBe true
-                (outputPath.fileSize() > 0) shouldBe true
+                outputPath.fileSize() shouldBeGreaterThan 0L
 
                 (config.gameDirectory[UtDirectory.System] / "$packageName.u").exists() shouldBe false
                 (config.gameDirectory / packageName).exists() shouldBe false
@@ -85,7 +97,7 @@ class UtCompilerIntegrationTest :
                 workspaces(packageName) shouldBe emptyList()
             }
 
-            test("fails the run and keeps the compiler diagnostics when the sources don't compile") {
+            test("fails the run and keeps the compiler diagnostics when the sources do not compile") {
                 val packageName = "UtRecorderBroken"
                 val outputPath = root / "out" / "$packageName.u"
                 val sourcesPath = sources(packageName, "class $packageName extends NoSuchParentClass;")

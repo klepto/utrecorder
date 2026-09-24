@@ -2,7 +2,6 @@ import dev.klepto.utrecorder.build.bundle
 import dev.klepto.utrecorder.build.javaVersion
 import dev.klepto.utrecorder.build.ktlintVersion
 import dev.klepto.utrecorder.build.lib
-import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.language.base.plugins.LifecycleBasePlugin
 
 plugins {
@@ -36,12 +35,11 @@ tasks.test {
     filter.excludeTestsMatching(INTEGRATION_TEST_PATTERN)
 }
 
-val testSourceSet = the<JavaPluginExtension>().sourceSets["test"]
-
 tasks.register<Test>("integrationTest") {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     description = "Runs the tests that exercise real external dependencies. Opt-in, never part of `check`."
 
+    val testSourceSet = sourceSets["test"]
     testClassesDirs = testSourceSet.output.classesDirs
     classpath = testSourceSet.runtimeClasspath
 

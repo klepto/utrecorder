@@ -1,21 +1,19 @@
 //=============================================================================
-// UTRecorderConsole - console replacement that quits UT99 when a demo ends.
+// UTRecorderConsole - console that drives unattended demo playback and quits
+// the game once the demo ends.
 //
-// Built for unattended demo playback. An external launcher:
-//   1. writes System/UTRecorder.ini (see config vars below) with bAutoExit=True,
-//   2. points [Engine.Engine] Console at UTRecorder.UTRecorderConsole,
-//   3. starts the game with -EXEC=<file> holding a demoplay command.
-// This class watches playback and issues "exit" once the demo runs out, so the
-// process terminates on its own and the recorder can be stopped.
+// Configured through System/UTRecorder.ini and installed as the
+// [Engine.Engine] Console. It does nothing until bAutoExit is on. While it
+// is on, the console logs a start and an end mark around the demo, then
+// stops playback and exits the process once the demo is over, the demo
+// spectator is gone, or a timeout runs out.
 //
-// Detection is layered, so it still terminates when udemo is not the demo
-// driver in use:
-//   1. udemo driver active  -> compare current frame against total frames,
-//   2. spectator seen, gone -> playback torn down, quit,
-//   3. neither happened     -> StartupTimeout / MaxRunSeconds backstops.
-//
-// Overriding the global Tick is enough to cover both console states:
-// WindowConsole's state UWindow Tick dispatches through Global.Tick().
+// Exec commands, typically run from an -EXEC script:
+//   DisableRendering  stop drawing the world,
+//   HideMessages      keep chat and progress messages off the HUD,
+//   RewindStart       seek back to the demo start once ticks settle,
+//   DemoFrames <fps>  log a spawn mark and reset the demo speed to 1 once the
+//                     followed player spawns.
 //=============================================================================
 class UTRecorderConsole extends UTConsole
 	config(UTRecorder);
@@ -28,40 +26,46 @@ const SETTLED_DELTA = 0.05;
 // Settled ticks in a row RewindStart waits for before seeking back.
 const SETTLED_TICKS = 10;
 
-// Master switch. Off by default so the class is harmless if it is left
-// installed while the machine is used for normal play.
+// Master switch. Off by default, so the console behaves like UTConsole while
+// it stays installed for normal play.
 var config bool  bAutoExit;
 
-// Seconds to keep running after the demo hits its last frame. Gives an
-// external recorder time to capture the tail before the window disappears.
+// Seconds to keep running after the demo hits its last frame.
 var config float ExitDelay;
 
 // Quit if no demo spectator has appeared this many seconds after startup.
-// Catches a bad demo name or a wrong DemoRecordingDevice. 0 disables.
+// 0 disables.
 var config float StartupTimeout;
 
-// Absolute wall-clock cap on the whole session. 0 disables.
+// Wall-clock cap on the whole session, in seconds. 0 disables.
 var config float MaxRunSeconds;
 
-// Run "stopdemo" before "exit" - mirrors what udemo's own UI does.
+// Run "stopdemo" before "exit".
 var config bool  bStopDemoFirst;
 
+// Log the clocks on every tick and the end-frame wait.
 var config bool  bVerbose;
 
+// Rendered frames per demo second DemoFrames set. Above 0, the console
+// watches for the followed player's spawn.
 var config float PlaybackFrameRate;
+
+// Health at which a dead followed player counts as spawned.
 var config int SpawnHealth;
+
+// Seconds of playback after which the spawn is signalled anyway. 0 disables.
 var config float SpawnTimeout;
 
-var bool bNoRendering;
-var bool bHideMessages;
-var bool bSignalledSpawn;
-var bool bSeenPlayer;
-var bool bSeenDead;
-var float SincePlayback;
-var float LastStreamTime;
-var int RenderedFrames;
-var bool bMarkedStart;
-var bool bMarkedEnd;
+var bool bNoRendering;    // DisableRendering was run
+var bool bHideMessages;   // HideMessages was run
+var bool bSignalledSpawn; // the spawn mark has been logged
+var bool bSeenPlayer;     // a followed player has existed at some point
+var bool bSeenDead;       // the first followed player seen was dead
+var float SincePlayback;  // seconds of playback the spawn check has seen
+var float LastStreamTime; // demo time of the last tick that had a driver
+var int RenderedFrames;   // ticks counted while bAutoExit is on
+var bool bMarkedStart;    // the start mark has been logged
+var bool bMarkedEnd;      // the end mark has been logged
 var bool bRewindStart;    // seek back to the demo's start once ticks settle
 var bool bRewound;        // the rewind seek has been issued
 var int SettledTicks;     // settled ticks in a row before the rewind
@@ -72,9 +76,41 @@ var bool  bSeenSpec;      // a demo spectator has existed at some point
 var bool  bExiting;       // teardown started, ignore further checks
 var float ExitPending;    // seconds left between "stopdemo" and "exit"
 
-// =============================================================================
-// Tick ~ poll playback state
-// =============================================================================
+// Logs a mark labelled Label, with the wall-clock time, the rendered frame
+// count and the demo time. Without a demo driver, the demo time is the last
+// one seen.
+function MarkTime(string Label)
+{
+	local DemoPlaybackSpec Spec;
+	local LevelInfo CurrentLevel;
+	local float DemoTime;
+
+	if (Viewport == None || Viewport.Actor == None)
+		return;
+
+	Spec = DemoPlaybackSpec(Viewport.Actor);
+	if (Spec != None && Spec.Driver != None)
+		DemoTime = Spec.Driver.GetCurrentTime();
+	else
+		DemoTime = LastStreamTime;
+
+	CurrentLevel = Viewport.Actor.Level;
+	Log("UTRecorder: mark" @ Label @ CurrentLevel.Year @ CurrentLevel.Month @ CurrentLevel.Day @ CurrentLevel.Hour
+		@ CurrentLevel.Minute @ CurrentLevel.Second @ CurrentLevel.Millisecond @ RenderedFrames @ DemoTime, 'UTRecorder');
+}
+
+// Logs the end mark once.
+function MarkEnd()
+{
+	if (bMarkedEnd)
+		return;
+
+	bMarkedEnd = True;
+	MarkTime("end");
+}
+
+// Applies the exec commands that were run, then polls playback and advances
+// the exit while bAutoExit is on.
 event Tick(float Delta)
 {
 	if (bNoRendering)
@@ -119,12 +155,33 @@ event Tick(float Delta)
 	CheckPlayback(Delta);
 }
 
+// Logs the tick delta and the level and demo clocks.
+function LogClock(float Delta)
+{
+	local DemoPlaybackSpec Spec;
+	local LevelInfo CurrentLevel;
+	local float StreamTime;
+
+	if (Viewport == None || Viewport.Actor == None)
+		return;
+
+	CurrentLevel = Viewport.Actor.Level;
+	Spec = DemoPlaybackSpec(Viewport.Actor);
+	if (Spec != None && Spec.Driver != None)
+		StreamTime = Spec.Driver.GetCurrentTime();
+
+	Log("UTRecorder: f" @ RenderedFrames @ "tick" @ Delta @ "level" @ CurrentLevel.TimeSeconds
+		@ "stream" @ StreamTime @ "dil" @ CurrentLevel.TimeDilation, 'UTRecorder');
+}
+
+// Stops drawing the world from the next tick on.
 exec function DisableRendering()
 {
 	bNoRendering = True;
 	Log("UTRecorder: rendering disabled", 'UTRecorder');
 }
 
+// Clears the realtime and player control show flags of the viewport actor.
 function StopRendering()
 {
 	local PlayerPawn Player;
@@ -136,17 +193,16 @@ function StopRendering()
 	Player.ShowFlags = Player.ShowFlags & ~(SHOW_REALTIME | SHOW_PLAYERCTRL);
 }
 
-// Chat and BTPog lines reach the HUD through the InterceptHUD udemo gives the
-// linked player, and BTPog's stats block is a progress message. Swapping that
-// HUD for one that drops string messages, and expiring the progress timeout
-// every tick, keeps them off the HUD while the timer and the rest of it still
-// draw.
+// Keeps chat, BTPog lines and BTPog's stats block off the HUD from the next
+// tick on, while the timer and the rest of the HUD still draw.
 exec function HideMessages()
 {
 	bHideMessages = True;
 	Log("UTRecorder: hiding HUD messages", 'UTRecorder');
 }
 
+// Expires the progress message of the demo spectator and the linked player,
+// and mutes the linked player's HUD while it is still udemo's InterceptHUD.
 function ClearHUDMessages()
 {
 	local DemoPlaybackSpec Spec;
@@ -169,8 +225,7 @@ function ClearHUDMessages()
 		MuteHUD(Spec, Linked);
 }
 
-// udemo steals the HUD again only when the linked player changes, so the swap
-// holds until then and the next tick repeats it.
+// Replaces the HUD of Linked with a UTRecorderHUD that forwards to Spec.
 function MuteHUD(DemoPlaybackSpec Spec, PlayerPawn Linked)
 {
 	local UTRecorderHUD HUD;
@@ -182,10 +237,7 @@ function MuteHUD(DemoPlaybackSpec Spec, PlayerPawn Linked)
 	Log("UTRecorder: muted the HUD of" @ Linked.PlayerReplicationInfo.PlayerName, 'UTRecorder');
 }
 
-// Timebased playback advances the demo by each tick's delta, so the first demo
-// tick, which carries the map load, skips the demo's opening seconds along with
-// their sounds. This seeks back to the start once ticks settle, before the start
-// mark.
+// Seeks back to the demo's start once ticks settle, before the start mark.
 exec function RewindStart()
 {
 	bRewindStart = True;
@@ -193,6 +245,8 @@ exec function RewindStart()
 }
 
 // True while the rewind RewindStart asked for is pending or still seeking.
+// Issues the seek once SETTLED_TICKS ticks in a row are shorter than
+// SETTLED_DELTA.
 function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
 {
 	if (!bRewindStart)
@@ -215,16 +269,20 @@ function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
 	return True;
 }
 
+// Sets PlaybackFrameRate to Rate, which turns on the spawn check.
 exec function DemoFrames(float Rate)
 {
 	PlaybackFrameRate = Rate;
 	Log("UTRecorder: locking playback to" @ Rate @ "rendered frames per demo second", 'UTRecorder');
 }
 
+// Signals the spawn once the followed player is alive: at once if the first
+// player seen is alive, else when a dead one reaches SpawnHealth. Signals it
+// anyway when no player is followed or SpawnTimeout runs out.
 function CheckSpawn(float Delta)
 {
 	local DemoPlaybackSpec Spec;
-	local PlayerPawn P;
+	local PlayerPawn Linked;
 
 	if (bSignalledSpawn || Viewport == None || Viewport.Actor == None)
 		return;
@@ -234,9 +292,9 @@ function CheckSpawn(float Delta)
 		return;
 
 	SincePlayback += Delta;
-	P = Spec.PlayerLinked;
+	Linked = Spec.PlayerLinked;
 
-	if (P == None)
+	if (Linked == None)
 	{
 		if (bSeenPlayer || (SpawnTimeout > 0.0 && SincePlayback >= SpawnTimeout))
 			SignalSpawn("no player to follow");
@@ -246,18 +304,19 @@ function CheckSpawn(float Delta)
 	if (!bSeenPlayer)
 	{
 		bSeenPlayer = True;
-		bSeenDead = P.Health <= 0;
+		bSeenDead = Linked.Health <= 0;
 		if (!bSeenDead)
 			SignalSpawn("already alive");
 		return;
 	}
 
-	if (bSeenDead && P.Health >= SpawnHealth)
-		SignalSpawn("health" @ P.Health);
+	if (bSeenDead && Linked.Health >= SpawnHealth)
+		SignalSpawn("health" @ Linked.Health);
 	else if (SpawnTimeout > 0.0 && SincePlayback >= SpawnTimeout)
 		SignalSpawn("no spawn within" @ SpawnTimeout @ "seconds");
 }
 
+// Logs the spawn mark and sets the demo speed to 1.
 function SignalSpawn(string Reason)
 {
 	local DemoPlaybackSpec Spec;
@@ -272,83 +331,26 @@ function SignalSpawn(string Reason)
 	Spec.Driver.SetSpeed(1.0);
 }
 
-function LogClock(float Delta)
-{
-	local DemoPlaybackSpec Spec;
-	local LevelInfo L;
-	local float Stream;
-
-	if (Viewport == None || Viewport.Actor == None)
-		return;
-
-	L = Viewport.Actor.Level;
-	Spec = DemoPlaybackSpec(Viewport.Actor);
-	if (Spec != None && Spec.Driver != None)
-		Stream = Spec.Driver.GetCurrentTime();
-
-	Log("UTRecorder: f" @ RenderedFrames @ "tick" @ Delta @ "level" @ L.TimeSeconds
-		@ "stream" @ Stream @ "dil" @ L.TimeDilation, 'UTRecorder');
-}
-
-function MarkTime(string Label)
-{
-	local DemoPlaybackSpec Spec;
-	local LevelInfo L;
-	local float Now;
-
-	if (Viewport == None || Viewport.Actor == None)
-		return;
-
-	Spec = DemoPlaybackSpec(Viewport.Actor);
-	if (Spec != None && Spec.Driver != None)
-		Now = Spec.Driver.GetCurrentTime();
-	else
-		Now = LastStreamTime;
-
-	L = Viewport.Actor.Level;
-	Log("UTRecorder: mark" @ Label @ L.Year @ L.Month @ L.Day @ L.Hour @ L.Minute @ L.Second @ L.Millisecond
-		@ RenderedFrames @ Now, 'UTRecorder');
-}
-
-// =============================================================================
-// CheckPlayback ~ decide whether the demo is over
-// =============================================================================
+// Logs the start and end marks, and begins the exit once the demo has sat
+// on its last frame for ExitDelay seconds.
 function CheckPlayback(float Delta)
 {
 	local DemoPlaybackSpec Spec;
-	local int Cur, Total;
+	local int Current, Total;
 
 	if (Viewport == None || Viewport.Actor == None)
 		return;
 
 	Spec = DemoPlaybackSpec(Viewport.Actor);
-
 	if (Spec == None)
 	{
-		// Playback existed and has been torn down - the demo is over.
-		if (bSeenSpec)
-		{
-			if (!bMarkedEnd)
-			{
-				bMarkedEnd = True;
-				MarkTime("end");
-			}
-
-			SinceEnd += Delta;
-			if (SinceEnd >= ExitDelay)
-				BeginExit("demo spectator gone");
-			return;
-		}
-
-		if (StartupTimeout > 0.0 && Elapsed >= StartupTimeout)
-			BeginExit("no demo spectator after" @ StartupTimeout @ "seconds");
-
+		CheckWithoutSpectator(Delta);
 		return;
 	}
 
 	bSeenSpec = True;
 
-	// Driver interface is only populated once playback is actually running.
+	// The driver is set only once playback runs.
 	if (Spec.Driver == None)
 		return;
 
@@ -358,9 +360,9 @@ function CheckPlayback(float Delta)
 		return;
 
 	Total = Spec.Driver.GetTotalFrames();
-	Cur   = Spec.Driver.GetCurrentFrame();
+	Current = Spec.Driver.GetCurrentFrame();
 
-	if (!bMarkedStart && Total > 0 && Cur > 0)
+	if (!bMarkedStart && Total > 0 && Current > 0)
 	{
 		bMarkedStart = True;
 		MarkTime("start");
@@ -369,30 +371,41 @@ function CheckPlayback(float Delta)
 	if (Total <= 0)
 		return;
 
-	if (Cur < Total - 1)
+	if (Current < Total - 1)
 	{
 		SinceEnd = 0.0; // seeking backwards counts as still playing
 		return;
 	}
 
-	if (!bMarkedEnd)
-	{
-		bMarkedEnd = True;
-		MarkTime("end");
-	}
-
+	MarkEnd();
 	SinceEnd += Delta;
 
 	if (bVerbose)
-		Log("UTRecorder: at end frame" @ Cur $ "/" $ Total $ "," @ SinceEnd @ "of" @ ExitDelay, 'UTRecorder');
+		Log("UTRecorder: at end frame" @ Current $ "/" $ Total $ "," @ SinceEnd @ "of" @ ExitDelay, 'UTRecorder');
 
 	if (SinceEnd >= ExitDelay)
-		BeginExit("demo reached frame" @ Cur @ "of" @ Total);
+		BeginExit("demo reached frame" @ Current @ "of" @ Total);
 }
 
-// =============================================================================
-// BeginExit ~ stop playback, then quit on the following tick
-// =============================================================================
+// Begins the exit ExitDelay seconds after a demo spectator that existed is
+// gone, or once StartupTimeout runs out when none has appeared.
+function CheckWithoutSpectator(float Delta)
+{
+	if (!bSeenSpec)
+	{
+		if (StartupTimeout > 0.0 && Elapsed >= StartupTimeout)
+			BeginExit("no demo spectator after" @ StartupTimeout @ "seconds");
+		return;
+	}
+
+	MarkEnd();
+	SinceEnd += Delta;
+	if (SinceEnd >= ExitDelay)
+		BeginExit("demo spectator gone");
+}
+
+// Logs Reason, runs "stopdemo" when bStopDemoFirst is on, and leaves "exit"
+// to a following tick.
 function BeginExit(string Reason)
 {
 	bExiting = True;

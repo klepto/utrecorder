@@ -1,8 +1,11 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.DirectoriesConfig
-import dev.klepto.utrecorder.common.process.Executable
-import dev.klepto.utrecorder.common.process.startAndAwait
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.io.Executable
+import dev.klepto.utrecorder.common.io.startAndAwait
+import dev.klepto.utrecorder.ut99.UtPlatform.LINUX
+import dev.klepto.utrecorder.ut99.UtPlatform.WINDOWS
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -17,14 +20,21 @@ import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 
+/**
+ * Tests [UtCompiler] against a fake UCC in a stub installation.
+ *
+ * The fake UCC is a shell script on Linux and a C# program built with the .NET Framework compiler on Windows. It writes
+ * the package named by `-packages=`, writes the file named by the header of a `.uz` archive, and fails when its
+ * directory holds `ucc.fail`.
+ */
 class UtCompilerTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utcompiler-test")
         val platform = UtPlatform.current()
         val compilerName =
             when (platform) {
-                UtPlatform.WINDOWS -> "UCC.exe"
-                UtPlatform.LINUX -> "ucc-bin"
+                WINDOWS -> "UCC.exe"
+                LINUX -> "ucc-bin"
             }
 
         afterSpec { root.toFile().deleteRecursively() }
@@ -91,14 +101,17 @@ class UtCompilerTest :
 
         fun csharpCompiler(): Path {
             val frameworks = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "Microsoft.NET")
-            val candidates = listOf("Framework64", "Framework").map { frameworks / it / "v4.0.30319" / "csc.exe" }
-            return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
+            val candidates =
+                listOf("Framework64", "Framework")
+                    .map { frameworks / it / "v4.0.30319" / "csc.exe" }
+            return candidates.firstOrNull { it.exists() }
+                ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
         }
 
         suspend fun fakeCompiler(directory: Path): Path {
             directory.createDirectories()
             val binary = directory / compilerName
-            if (platform != UtPlatform.WINDOWS) {
+            if (platform != WINDOWS) {
                 binary.writeText(fakeCompilerScript)
                 return binary
             }
@@ -133,7 +146,10 @@ class UtCompilerTest :
             if (fails) {
                 (systemDirectory / "ucc.fail").writeText("")
             }
-            return UtInstallation(root / name, UtConfig(DirectoriesConfig(root / "$name-home")))
+            return UtInstallation(
+                root / name,
+                UtConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = root / "$name-home")),
+            )
         }
 
         fun sources(packageName: String): Path {
@@ -155,7 +171,7 @@ class UtCompilerTest :
         }
 
         context("make") {
-            test("make.ini is Default.ini plus EditPackages, with the configure block applied on top") {
+            test("writes make.ini as Default.ini plus the configure block, with the package appended to EditPackages") {
                 val compiler = installation("make-ini", fails = true).compiler
 
                 shouldThrow<IllegalStateException> {
@@ -188,16 +204,16 @@ class UtCompilerTest :
             }
 
             test("keeps the workspace of a successful run, holding the make configuration it wrote") {
-                val compiler = installation("no-keep").compiler
+                val compiler = installation("kept").compiler
 
                 compiler.make(sources("PackageSix"), root / "out" / "PackageSix.u")
 
-                val workspace = workspaces("no-keep").single()
+                val workspace = workspaces("kept").single()
                 (workspace / "make.ini").exists() shouldBe true
                 (workspace / "PackageSix.u").exists() shouldBe true
             }
 
-            test("keeps the workspace of a failed run with make.log written, and throws") {
+            test("throws and keeps the workspace of a failed run with make.log written") {
                 val compiler = installation("failure", fails = true).compiler
 
                 shouldThrow<IllegalStateException> {

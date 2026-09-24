@@ -23,9 +23,8 @@ import org.gradle.process.ExecOperations
 import javax.inject.Inject
 
 /**
- * Compiles one UnrealScript package into a `.u` file by forking `UtCli` against the runtime classpath of
- * `utrecorder-ut99`. The Unreal Tournament installation UCC comes from is not a task input: [compilerClasspath] and
- * [patchVersion] determine it.
+ * Task that compiles one UnrealScript package from [sources] into a `.u` file in [outputDirectory]. The compiler is
+ * `UtCli`, forked from [compilerClasspath].
  */
 @CacheableTask
 abstract class CompileUscriptTask : DefaultTask() {
@@ -87,7 +86,7 @@ abstract class CompileUscriptTask : DefaultTask() {
     abstract val logDirectory: DirectoryProperty
 
     /**
-     * Holds the compile to one at a time. See [UccService].
+     * The build service that holds compiles to one at a time.
      */
     @get:ServiceReference(UCC_SERVICE)
     abstract val ucc: Property<UccService>
@@ -105,14 +104,10 @@ abstract class CompileUscriptTask : DefaultTask() {
     abstract val files: FileSystemOperations
 
     /**
-     * Compiles the package, clearing the output and the log of the previous run first.
+     * Compiles the package. Clears [outputDirectory] and [logDirectory] of the previous run first.
      */
     @TaskAction
     fun compile() {
-        val outputPath = outputDirectory.file("${packageName.get()}.u").get().asFile
-        val logPath = logDirectory.get().asFile
-
-        // The compiler keeps the task directory of a failed run, so the previous one has to go or its log outlives its output.
         files.delete {
             delete(outputDirectory, logDirectory)
         }
@@ -125,23 +120,20 @@ abstract class CompileUscriptTask : DefaultTask() {
             environment("UTRECORDER_HOME", homeDirectory.get().asFile.absolutePath)
             patchVersion.orNull?.let { environment("UTRECORDER_PATCH_VERSION", it) }
 
-            args = compilerArguments(outputPath.absolutePath, logPath.absolutePath)
+            args = compilerArguments()
         }
     }
 
     /**
-     * Returns the `UtCli` arguments that compile this package into [outputPath], running the compiler under [logPath]
-     * so that a failed compile leaves its configuration and its log there.
+     * Returns the `UtCli` arguments that compile this package into [outputDirectory]. The compiler runs under
+     * [logDirectory], so a failed compile leaves its configuration and its log there.
      */
-    private fun compilerArguments(
-        outputPath: String,
-        logPath: String,
-    ): List<String> =
+    private fun compilerArguments(): List<String> =
         listOfNotNull(
             "make",
             "--sources=${sources.get().asFile.absolutePath}",
-            "--output=$outputPath",
-            "--tasks=$logPath",
+            "--output=${outputDirectory.file("${packageName.get()}.u").get().asFile.absolutePath}",
+            "--tasks=${logDirectory.get().asFile.absolutePath}",
             editPackagesArgument(),
         )
 

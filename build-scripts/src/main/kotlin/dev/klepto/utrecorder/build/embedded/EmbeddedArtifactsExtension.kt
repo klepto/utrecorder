@@ -4,23 +4,23 @@ import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.provider.Property
 
 /**
- * The file name the index of a namespace takes. Mirrors `EmbeddedArtifacts.INDEX` in `utrecorder-common`.
+ * File name of the index that names the artifacts of a namespace.
  */
 const val EMBEDDED_ARTIFACT_INDEX = "index"
 
 /**
- * Configures the build outputs a module embeds in its jar. A toolchain plugin adds its compile task outputs to
- * [artifacts], which land in the jar under [namespace] together with an index naming them.
+ * Build outputs a module embeds in its jar, under [namespace] beside an index naming them.
+ *
+ * The `utrecorder.embedded-artifacts` plugin registers it as `embeddedArtifacts`.
  */
 abstract class EmbeddedArtifactsExtension {
     /**
-     * The directory the artifacts take in the jar, and the name the consumer reads them back under.
+     * Directory in the jar that holds the artifacts and their index.
      */
     abstract val namespace: Property<String>
 
     /**
-     * The directories holding the artifacts to embed. Producers add their task outputs here, which carries the task
-     * dependency with it.
+     * Directories whose contents are embedded. Adding a task output here also adds a dependency on that task.
      */
     abstract val artifacts: ConfigurableFileCollection
 }

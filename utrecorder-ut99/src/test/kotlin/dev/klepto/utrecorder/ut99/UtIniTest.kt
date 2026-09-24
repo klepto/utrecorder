@@ -15,7 +15,7 @@ class UtIniTest :
         afterSpec { root.toFile().deleteRecursively() }
 
         context("get") {
-            test("returns repeated key values in file order") {
+            test("returns every value of a repeated key in file order") {
                 val ini =
                     UtIni(
                         """
@@ -43,7 +43,7 @@ class UtIniTest :
                     )
             }
 
-            test("never matches a comment line as an entry") {
+            test("skips a commented-out entry") {
                 val ini =
                     UtIni(
                         """
@@ -56,7 +56,7 @@ class UtIniTest :
                 ini["Section", "Suppress"] shouldBe listOf("DevNet")
             }
 
-            test("treats a bracketed key as opaque text, not an index") {
+            test("matches a bracketed key as plain text, not as an array index") {
                 val ini =
                     UtIni(
                         """
@@ -90,7 +90,7 @@ class UtIniTest :
         }
 
         context("set") {
-            test("collapses repeated keys to a single entry") {
+            test("replaces every entry of a repeated key with a single entry") {
                 val ini =
                     UtIni(
                         """
@@ -114,7 +114,7 @@ class UtIniTest :
                 ini["Section", "Key"] shouldBe listOf("1")
             }
 
-            test("appends a new section header at end of file for a missing section") {
+            test("appends a missing section at the end of the file") {
                 val ini = UtIni("[Existing]\nKey=1")
 
                 ini["Engine.Engine", "EditPackages"] = "Core"
@@ -124,7 +124,7 @@ class UtIniTest :
         }
 
         context("add") {
-            test("appends another entry keeping the existing ones") {
+            test("appends another entry, keeping the existing ones") {
                 val ini = UtIni("[Section]\nEditPackages=Core")
 
                 ini.add("Section", "EditPackages", "Engine")
@@ -132,18 +132,15 @@ class UtIniTest :
                 ini["Section", "EditPackages"] shouldBe listOf("Core", "Engine")
             }
 
-            test("inserts before trailing blank lines and before the next section header") {
-                val ini =
-                    UtIni(
-                        "[Section]\nKey=1\nKey=2\n\n[NextSection]\nOther=1",
-                    )
+            test("inserts after the last non-blank line of the section") {
+                val ini = UtIni("[Section]\nKey=1\nKey=2\n\n[NextSection]\nOther=1")
 
                 ini.add("Section", "Key", "3")
 
                 ini.toString() shouldBe "[Section]\nKey=1\nKey=2\nKey=3\n\n[NextSection]\nOther=1"
             }
 
-            test("inserts directly after the header when the section has no body") {
+            test("inserts directly after the header when the section holds no lines") {
                 val ini = UtIni("[Section]\n[NextSection]\nOther=1")
 
                 ini.add("Section", "Key", "1")
@@ -151,7 +148,7 @@ class UtIniTest :
                 ini.toString() shouldBe "[Section]\nKey=1\n[NextSection]\nOther=1"
             }
 
-            test("appends a new section header at end of file for a missing section") {
+            test("appends a missing section at the end of the file") {
                 val ini = UtIni("[Existing]\nKey=1")
 
                 ini.add("Engine.Engine", "ServerPackages", "Botpack")
@@ -183,7 +180,7 @@ class UtIniTest :
                 shouldThrow<IllegalArgumentException> { ini.replace("Section", "Key", from = "3", to = "9") }
             }
 
-            test("throws when the section is missing altogether") {
+            test("throws when the section is missing") {
                 val ini = UtIni("[Other]\nKey=1")
 
                 shouldThrow<IllegalArgumentException> { ini.replace("Missing", "Key", from = "1", to = "2") }
@@ -191,7 +188,7 @@ class UtIniTest :
         }
 
         context("remove") {
-            test("deletes every matching entry") {
+            test("removes every entry of the key") {
                 val ini =
                     UtIni(
                         """
@@ -208,7 +205,7 @@ class UtIniTest :
                 ini["Section", "Keep"] shouldBe listOf("1")
             }
 
-            test("removes the one entry of a repeated key holding the given value") {
+            test("removes the one entry of a repeated key holding the value") {
                 val ini =
                     UtIni(
                         """
@@ -225,7 +222,7 @@ class UtIniTest :
                 ini["Section", "Keep"] shouldBe listOf("1")
             }
 
-            test("throws when the section holds no entry of the key at the given value") {
+            test("throws when the section holds no entry of the key at the value") {
                 val ini = UtIni("[Section]\nKey=1")
 
                 shouldThrow<IllegalArgumentException> { ini.remove("Section", "Key", value = "2") }
@@ -233,13 +230,13 @@ class UtIniTest :
         }
 
         context("toString") {
-            test("returns the input unchanged for lf line endings") {
+            test("returns the text unchanged with LF line endings") {
                 val text = "[Section]\nKey=1\n; comment\n\nKey=2"
 
                 UtIni(text).toString() shouldBe text
             }
 
-            test("returns the input unchanged for crlf line endings, preserving the style") {
+            test("returns the text unchanged with CRLF line endings") {
                 val text = "[Section]\r\nKey=1\r\n; comment\r\n\r\nKey=2"
 
                 UtIni(text).toString() shouldBe text
@@ -247,7 +244,7 @@ class UtIniTest :
         }
 
         context("read/write") {
-            test("round trips through a file, preserving non-ASCII bytes exactly") {
+            test("round trips through a file, keeping non-ASCII bytes exact") {
                 val text = "[Section]\nName=Café"
                 val path = root / "UT.ini"
 

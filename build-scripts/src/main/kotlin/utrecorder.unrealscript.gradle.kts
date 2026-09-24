@@ -15,8 +15,6 @@ plugins {
     id("utrecorder.embedded-artifacts")
 }
 
-val COMPILER_PROJECT = ":utrecorder-ut99"
-
 val embeddedArtifacts = extensions.getByType<EmbeddedArtifactsExtension>()
 embeddedArtifacts.namespace.convention("unrealscript")
 
@@ -47,13 +45,10 @@ val unrealScriptCompilerClasspath =
     }
 
 dependencies {
-    unrealScriptCompiler.name(project(COMPILER_PROJECT))
-    // `utrecorder-ut99` is a library and binds no logging backend, so the forked compiler would log to nothing.
+    unrealScriptCompiler.name(project(":utrecorder-ut99"))
     unrealScriptCompiler.name(lib("logback.classic"))
 }
 
-// The version the compiler defaults to is compiled into the jar, so the classpath already invalidates on a bump. An
-// override arrives out of band, and only reaches the compile if it is an input of its own.
 val patchVersionOverride =
     providers
         .systemProperty("utrecorder.patch_version")

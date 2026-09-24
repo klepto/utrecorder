@@ -1,8 +1,11 @@
 package dev.klepto.utrecorder.ut99
 
-import dev.klepto.utrecorder.common.config.DirectoriesConfig
-import dev.klepto.utrecorder.common.process.Executable
-import dev.klepto.utrecorder.common.process.startAndAwait
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.io.Executable
+import dev.klepto.utrecorder.common.io.startAndAwait
+import dev.klepto.utrecorder.ut99.UtDirectory.Maps
+import dev.klepto.utrecorder.ut99.UtPlatform.WINDOWS
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Path
@@ -16,13 +19,15 @@ import kotlin.io.path.name
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 
+/**
+ * Tests [UtMapInstaller] against a fake UCC in a stub installation.
+ *
+ * The fake UCC is a shell script on Linux and a C# program built with the .NET Framework compiler on Windows. It writes
+ * the file named by the header of a `.uz` archive, holding the bytes that follow the header.
+ */
 class UtMapInstallerTest :
     FunSpec({
-        val root =
-            createTempDirectory("utrecorder-utmapinstaller-test").also { root ->
-                root.toFile().deleteRecursively()
-                root.toFile().mkdirs()
-            }
+        val root = createTempDirectory("utrecorder-utmapinstaller-test")
         val platform = UtPlatform.current()
 
         val fakeCompilerScript =
@@ -62,14 +67,17 @@ class UtMapInstallerTest :
 
         fun csharpCompiler(): Path {
             val frameworks = Path.of(System.getenv("SystemRoot") ?: "C:\\Windows", "Microsoft.NET")
-            val candidates = listOf("Framework64", "Framework").map { frameworks / it / "v4.0.30319" / "csc.exe" }
-            return candidates.firstOrNull { it.exists() } ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
+            val candidates =
+                listOf("Framework64", "Framework")
+                    .map { frameworks / it / "v4.0.30319" / "csc.exe" }
+            return candidates.firstOrNull { it.exists() }
+                ?: error("No C# compiler to build the fake UCC with, looked in $candidates")
         }
 
         suspend fun fakeCompiler(directory: Path): Path {
             directory.createDirectories()
             val binary = directory / platform.compilerExecutable
-            if (platform != UtPlatform.WINDOWS) {
+            if (platform != WINDOWS) {
                 binary.writeText(fakeCompilerScript)
                 return binary
             }
@@ -88,55 +96,54 @@ class UtMapInstallerTest :
 
         suspend fun fakeCompiler(): Path = fakeCompilerCache ?: fakeCompiler(root / "fake-ucc").also { fakeCompilerCache = it }
 
-        suspend fun installation(name: String): UtInstallation {
-            val systemDirectory = root / name / "install" / UtDirectory.System.name
-            systemDirectory.createDirectories()
-            (systemDirectory / platform.gameExecutable).writeText("")
-            fakeCompiler().copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
-            return UtInstallation(root / name / "install", UtConfig(DirectoriesConfig(root / name)))
-        }
-
-        fun installer(installation: UtInstallation): UtMapInstaller = UtMapInstaller(installation)
-
         fun emptyFile(path: Path): Path = path.createParentDirectories().also { it.writeText("") }
+
+        suspend fun installation(name: String): UtInstallation {
+            val directory = root / name / "install"
+            val systemDirectory = directory / UtDirectory.System.name
+            emptyFile(systemDirectory / platform.gameExecutable)
+            fakeCompiler().copyTo(systemDirectory / platform.compilerExecutable).toFile().setExecutable(true)
+            return UtInstallation(directory, UtConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = root / name)))
+        }
 
         fun archive(path: Path): Path {
             val name = path.name.removeSuffix(".uz").toByteArray() + byteArrayOf(0)
-            return path.createParentDirectories().also { it.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, name.size.toByte()) + name) }
+            val header = byteArrayOf(0xD2.toByte(), 0x04, 0, 0, name.size.toByte()) + name
+            return path.createParentDirectories().also { it.writeBytes(header) }
         }
 
         context("compressed") {
-            test("lists the .uz archives a maps directory holds") {
+            test("returns the .uz archives the maps directory holds") {
                 val installation = installation("compressed-lists")
-                emptyFile(installation.directory / UtDirectory.Maps.name / "CTF-BT-Test.unr.uz")
+                emptyFile(installation.directory / Maps.name / "CTF-BT-Test.unr.uz")
 
-                val installer = installer(installation)
+                val installer = UtMapInstaller(installation)
 
                 installer.compressed().map { it.name } shouldBe listOf("CTF-BT-Test.unr.uz")
             }
 
-            test("lists nothing for a maps directory that is not there") {
+            test("returns an empty list when the maps directory does not exist") {
                 val installation = installation("compressed-empty")
-                val installer = installer(installation)
+                val installer = UtMapInstaller(installation)
 
                 installer.compressed() shouldBe emptyList()
             }
 
-            test("lists nothing for a maps directory holding only plain maps") {
+            test("returns an empty list when the maps directory holds only plain maps") {
                 val installation = installation("compressed-plain")
-                emptyFile(installation.directory / UtDirectory.Maps.name / "CTF-BT-Test.unr")
-                val installer = installer(installation)
+                emptyFile(installation.directory / Maps.name / "CTF-BT-Test.unr")
+                val installer = UtMapInstaller(installation)
 
                 installer.compressed() shouldBe emptyList()
             }
         }
 
         context("extract") {
-            test("writes the archive's map into the maps directory under its own name without the .uz suffix") {
+            test("returns the map it wrote to the maps directory, named after the archive without its .uz suffix") {
                 val installation = installation("extract-target")
-                val mapsDirectory = installation.directory / UtDirectory.Maps.name
+                val mapsDirectory = installation.directory / Maps.name
                 archive(mapsDirectory / "CTF-BT-Test.unr.uz")
-                val installer = installer(installation)
+                val installer = UtMapInstaller(installation)
 
                 val extract = installer.extract(mapsDirectory / "CTF-BT-Test.unr.uz")
 
@@ -144,11 +151,11 @@ class UtMapInstallerTest :
                 extract.exists() shouldBe true
             }
 
-            test("leaves the archive it extracted in place") {
+            test("keeps the archive in place") {
                 val installation = installation("extract-archive-kept")
-                val mapsDirectory = installation.directory / UtDirectory.Maps.name
+                val mapsDirectory = installation.directory / Maps.name
                 val archive = archive(mapsDirectory / "CTF-BT-Test.unr.uz")
-                val installer = installer(installation)
+                val installer = UtMapInstaller(installation)
 
                 installer.extract(archive)
 
@@ -157,12 +164,12 @@ class UtMapInstallerTest :
         }
 
         context("install") {
-            test("decompresses every archive holding no map and removes the archive once its map exists") {
+            test("decompresses every archive whose map does not exist and removes the archive once its map exists") {
                 val installation = installation("install-fresh")
-                val mapsDirectory = installation.directory / UtDirectory.Maps.name
+                val mapsDirectory = installation.directory / Maps.name
                 archive(mapsDirectory / "CTF-BT-Test.unr.uz")
                 archive(mapsDirectory / "CTF-BT-II.unr.uz")
-                val installer = installer(installation)
+                val installer = UtMapInstaller(installation)
 
                 installer.install()
 
@@ -173,12 +180,12 @@ class UtMapInstallerTest :
                 installer.isInstalled() shouldBe true
             }
 
-            test("leaves an archive whose decompressed map already exists alone and stays listed") {
+            test("leaves an archive in place when its map already exists") {
                 val installation = installation("install-map-exists")
-                val mapsDirectory = installation.directory / UtDirectory.Maps.name
+                val mapsDirectory = installation.directory / Maps.name
                 archive(mapsDirectory / "CTF-BT-Test.unr.uz")
                 emptyFile(mapsDirectory / "CTF-BT-Test.unr")
-                val installer = installer(installation)
+                val installer = UtMapInstaller(installation)
 
                 installer.install()
 

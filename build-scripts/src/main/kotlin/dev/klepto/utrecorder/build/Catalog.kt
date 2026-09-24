@@ -10,17 +10,20 @@ import org.gradle.kotlin.dsl.getByType
 import java.util.Optional
 
 /**
- * Returns the entry the catalogue holds, or throws [IllegalStateException] naming the [kind] and [alias] missing from it.
+ * The `libs` version catalogue of the build this project belongs to.
+ */
+private val Project.libs: VersionCatalog
+    get() = extensions.getByType<VersionCatalogsExtension>().named("libs")
+
+/**
+ * Returns the value this optional holds.
+ *
+ * @throws IllegalStateException if this optional is empty. The message names the [kind] and [alias] that are missing.
  */
 private fun <T> Optional<T>.orFail(
     kind: String,
     alias: String,
 ): T = orElseThrow { IllegalStateException("No $kind '$alias' in version catalog") }
-
-// Reached through the extension because a convention plugin gets no generated accessors: they are generated for the
-// build being configured, not for the build the plugins are compiled in.
-private val Project.libs: VersionCatalog
-    get() = extensions.getByType<VersionCatalogsExtension>().named("libs")
 
 /**
  * Returns the library the `libs` version catalogue holds under [alias].
@@ -44,13 +47,13 @@ fun Project.bundle(alias: String): Provider<ExternalModuleDependencyBundle> = li
 fun Project.catalogVersion(alias: String): String = libs.findVersion(alias).orFail("version", alias).requiredVersion
 
 /**
- * The Java toolchain version every module compiles with and every forked process runs on.
+ * The Java language version the `libs` version catalogue holds under `java`.
  */
 val Project.javaVersion: Int
     get() = catalogVersion("java").toInt()
 
 /**
- * The ktlint release the formatter runs.
+ * The ktlint version the `libs` version catalogue holds under `ktlint`.
  */
 val Project.ktlintVersion: String
     get() = catalogVersion("ktlint")

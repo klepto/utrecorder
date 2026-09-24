@@ -1,13 +1,13 @@
 //=============================================================================
-// UTRecorderHUD - InterceptHUD that drops the linked player's string messages.
+// UTRecorderHUD - InterceptHUD that drops the string messages sent to its
+// owner.
 //
-// UTRecorderConsole puts it on the linked player in place of udemo's own
-// InterceptHUD when HideMessages is on. Chat and ClientMessage lines never
-// reach the viewer's HUD; critical events and localized messages still pass
-// through, so centre announcements keep drawing.
+// Of the lines that reach Message, only critical events are forwarded.
+// Localized messages do not go through Message, so they still draw.
 //=============================================================================
 class UTRecorderHUD extends InterceptHUD;
 
+// Forwards the message when MsgType is CriticalEvent, and drops it otherwise.
 simulated function Message( PlayerReplicationInfo PRI, coerce string Msg, name MsgType )
 {
 	if (MsgType == 'CriticalEvent')

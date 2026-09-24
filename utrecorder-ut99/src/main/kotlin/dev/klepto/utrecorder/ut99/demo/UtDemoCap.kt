@@ -5,12 +5,12 @@ import kotlin.time.Duration
 /**
  * The cap that ends a Bunny Track run, as the messages and markers of a demo report it.
  *
- * Read one through [UtDemo.cap], which is `null` for a demo that holds no cap.
+ * Use [UtDemo.read] to read the cap of a demo.
  *
- * @property capper The player whose run the demo records, or `null` when nothing in the demo tells them from a
- * teammate.
- * @property id The unique cap id the demo's markers carry, or `null` when the demo holds no marker.
- * @property runTime The length of the run, or `null` when the demo reports none.
+ * @property capper The player whose run the demo records. If nothing in the demo tells them from a teammate, it is
+ * `null` instead.
+ * @property id The unique cap id the markers of the demo carry. If the demo holds no marker, it is `null` instead.
+ * @property runTime The length of the run. If the demo reports none, it is `null` instead.
  * @property demoTime The demo time the cap arrives at.
  */
 data class UtDemoCap(

@@ -4,12 +4,12 @@ import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 
 /**
- * Serializes the UnrealScript compile tasks of a build, so that two packages never compile into one installation at
- * the same time. Registered with `maxParallelUsages = 1`.
+ * Stateless build service that stands for the UnrealScript compiler. A task that uses it holds one of its usages for
+ * as long as it runs, so a limit on usages limits how many compiles run at a time.
  */
 abstract class UccService : BuildService<BuildServiceParameters.None>
 
 /**
- * The name [UccService] is registered under, and the name the compile tasks reference it by.
+ * Name of the shared [UccService] of a build.
  */
 const val UCC_SERVICE = "ucc"

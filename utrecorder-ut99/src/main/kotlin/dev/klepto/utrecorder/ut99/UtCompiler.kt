@@ -1,13 +1,13 @@
 package dev.klepto.utrecorder.ut99
 
+import dev.klepto.utrecorder.common.io.Executable
+import dev.klepto.utrecorder.common.io.ExecutableResult
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
+import dev.klepto.utrecorder.common.io.startAndAwait
 import dev.klepto.utrecorder.common.io.workspace
-import dev.klepto.utrecorder.common.process.Executable
-import dev.klepto.utrecorder.common.process.ExecutableResult
-import dev.klepto.utrecorder.common.process.startAndAwait
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -27,6 +27,7 @@ import kotlin.io.path.writeText
  * Use [UtInstallation.compiler] for the compiler of an installation.
  *
  * @property installation The installation the compiler belongs to.
+ * @property config The configuration whose directories the workspaces of the compiler runs are opened under.
  * @throws IllegalStateException if [installation] holds no compiler executable.
  */
 class UtCompiler(
@@ -48,8 +49,9 @@ class UtCompiler(
     }
 
     /**
-     * Runs the compiler with the given [arguments] and returns the result without inspecting its exit code. The
-     * compiler logs to a file of a workspace opened in [directory] for the run.
+     * Returns the result of running the compiler with [arguments], without inspecting its exit code.
+     *
+     * The compiler logs to a file of a workspace opened in [directory] for the run.
      */
     private suspend fun run(vararg arguments: String): ExecutableResult =
         workspace("ucc", directory, config.directoriesConfig) { workspace ->
@@ -58,14 +60,18 @@ class UtCompiler(
                     workingDirectory = directory
                     prependLibraryPath(directory)
                     this.arguments += arguments.toList()
-                    this.arguments += "-log=${workspace[UCC_LOG].fileName}"
+                    this.arguments += "-log=${workspace["ucc.log"].fileName}"
                     this.arguments += installation.platform.homeArguments
                 }.startAndAwait()
         }
 
     /**
-     * Extracts the `.uz` archive into given [outputPath]. If [outputPath] is not specified, the archive will be
-     * extracted in the same directory as the `.uz` file, named after the archive without its `.uz` suffix.
+     * Extracts the `.uz` archive at [uzPath] to [outputPath] and returns the path of the extracted file.
+     *
+     * If [outputPath] is not provided, uses the directory that holds the archive and the archive name without its
+     * `.uz` suffix instead.
+     *
+     * @throws IllegalStateException if the compiler fails.
      */
     suspend fun extract(
         uzPath: Path,
@@ -84,66 +90,13 @@ class UtCompiler(
     }
 
     /**
-     * Compiles the UnrealScript package rooted at [sourcesPath] and copies the resulting package to [outputPath].
+     * Returns the file name held in the header of the `.uz` archive at [uzPath]. The compiler extracts the archive
+     * under this name.
      *
-     * The name of [sourcesPath] is the package name, and the directory holds the `Classes` directory the compiler reads
-     * the sources from. The configuration is the default configuration of the installation with [configure] applied on
-     * top of it and the `EditPackages` entry of the compiled package appended last.
+     * The header holds a signature, then the file name as a string. The string is a compact index giving its length,
+     * then that many bytes ending in a null.
      *
-     * @throws IllegalStateException if [sourcesPath] is not a directory, or if the compiler fails.
-     */
-    @OptIn(ExperimentalPathApi::class)
-    suspend fun make(
-        sourcesPath: Path,
-        outputPath: Path,
-        configure: UtIni.() -> Unit = {},
-    ): Path {
-        withContext(Dispatchers.IO) { check(sourcesPath.isDirectory()) { "UT package sources not found at $sourcesPath" } }
-
-        val packageName = sourcesPath.fileName.toString()
-        val packageFileName = "$packageName.u"
-        val stagedPath = installation.directory[packageName]
-        val producedPath = directory[packageFileName]
-
-        return workspace("ucc", config = config.directoriesConfig) { workspace ->
-            val iniPath =
-                defaultConfig()
-                    .apply(configure)
-                    .apply { add(EDITOR_SECTION, EDIT_PACKAGES, packageName) }
-                    .write(workspace[MAKE_INI])
-
-            val result =
-                try {
-                    withContext(Dispatchers.IO) {
-                        stagedPath.deleteRecursively()
-                        sourcesPath.copyToRecursively(stagedPath, followLinks = false, overwrite = true)
-                        producedPath.deleteIfExists()
-                    }
-                    run("make", "-nobind", "-bytehax", "-packages=$packageName", "-ini=${iniPath.absolutePathString()}")
-                } finally {
-                    stagedPath.deleteCatching()
-                }
-
-            val makeLogPath = workspace[MAKE_LOG]
-            withContext(Dispatchers.IO) { makeLogPath.writeText(result.output.joinToString(System.lineSeparator())) }
-            result.orThrow()
-
-            withContext(Dispatchers.IO) {
-                check(producedPath.exists()) {
-                    "UCC failed to compile $packageName, see $makeLogPath"
-                }
-            }
-
-            val packagePath = workspace[packageFileName]
-            producedPath.move(packagePath)
-            packagePath.copy(outputPath, overwrite = true)
-        }
-    }
-
-    /**
-     * Returns the file name the header of the `.uz` archive at [uzPath] holds, which is the name the compiler
-     * extracts the archive under: a signature, then a string of a compact index giving its length and that many bytes
-     * ending in a null.
+     * @throws IllegalStateException if the header holds no file name, or holds a UTF-16 file name.
      */
     private suspend fun archivedName(uzPath: Path): String {
         val header =
@@ -168,12 +121,86 @@ class UtCompiler(
     }
 
     /**
-     * Reads the default configuration of the installation.
+     * Compiles the UnrealScript package rooted at [sourcesPath], copies the package to [outputPath] and returns
+     * [outputPath].
+     *
+     * The name of [sourcesPath] is the package name. The directory holds the `Classes` directory the compiler reads
+     * the sources from. The configuration is the default configuration of the installation with [configure] applied
+     * on top of it and the `EditPackages` entry of the compiled package appended last.
+     *
+     * @throws IllegalStateException if [sourcesPath] is not a directory, or if the compiler fails.
+     */
+    suspend fun make(
+        sourcesPath: Path,
+        outputPath: Path,
+        configure: UtIni.() -> Unit = {},
+    ): Path {
+        withContext(Dispatchers.IO) { check(sourcesPath.isDirectory()) { "UT package sources not found at $sourcesPath" } }
+
+        val packageName = sourcesPath.fileName.toString()
+        val packageFileName = "$packageName.u"
+        val producedPath = directory[packageFileName]
+
+        return workspace("ucc", config = config.directoriesConfig) { workspace ->
+            val iniPath =
+                defaultConfig()
+                    .apply(configure)
+                    .apply { add(EDITOR_SECTION, EDIT_PACKAGES, packageName) }
+                    .write(workspace["make.ini"])
+
+            val result = compile(sourcesPath, producedPath, iniPath)
+            val makeLogPath = workspace["make.log"]
+            withContext(Dispatchers.IO) { makeLogPath.writeText(result.output.joinToString(System.lineSeparator())) }
+            result.orThrow()
+
+            withContext(Dispatchers.IO) {
+                check(producedPath.exists()) {
+                    "UCC failed to compile $packageName, see $makeLogPath"
+                }
+            }
+
+            val packagePath = workspace[packageFileName]
+            producedPath.move(packagePath)
+            packagePath.copy(outputPath, overwrite = true)
+        }
+    }
+
+    /**
+     * Returns the default configuration of the installation.
+     *
+     * @throws IllegalStateException if the installation holds no default configuration.
      */
     private suspend fun defaultConfig(): UtIni {
         val defaultPath = installation.defaultIniPath
         withContext(Dispatchers.IO) { check(defaultPath.exists()) { "UT default configuration not found at $defaultPath" } }
         return UtIni.read(defaultPath)
+    }
+
+    /**
+     * Returns the result of compiling the package at [sourcesPath] with the configuration at [iniPath], without
+     * inspecting its exit code.
+     *
+     * The sources are staged in the installation directory for the run and removed after it. The package an earlier
+     * run left at [producedPath] is deleted first.
+     */
+    @OptIn(ExperimentalPathApi::class)
+    private suspend fun compile(
+        sourcesPath: Path,
+        producedPath: Path,
+        iniPath: Path,
+    ): ExecutableResult {
+        val packageName = sourcesPath.fileName.toString()
+        val stagedPath = installation.directory[packageName]
+        return try {
+            withContext(Dispatchers.IO) {
+                stagedPath.deleteRecursively()
+                sourcesPath.copyToRecursively(stagedPath, followLinks = false, overwrite = true)
+                producedPath.deleteIfExists()
+            }
+            run("make", "-nobind", "-bytehax", "-packages=$packageName", "-ini=${iniPath.absolutePathString()}")
+        } finally {
+            stagedPath.deleteCatching()
+        }
     }
 
     companion object {
@@ -186,21 +213,6 @@ class UtCompiler(
          * The configuration key holding a package the compiler builds.
          */
         const val EDIT_PACKAGES = "EditPackages"
-
-        /**
-         * The name the compiler configuration of a run is written under.
-         */
-        private const val MAKE_INI = "make.ini"
-
-        /**
-         * The name the compiler output of a run is written under.
-         */
-        private const val MAKE_LOG = "make.log"
-
-        /**
-         * The name the log the compiler itself writes is written under.
-         */
-        private const val UCC_LOG = "ucc.log"
 
         private const val UZ_HEADER_BYTES = 1024
         private const val SIGN_BIT = 0x80

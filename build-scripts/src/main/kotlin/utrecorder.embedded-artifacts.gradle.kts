@@ -26,15 +26,11 @@ val embeddedArtifactIndex =
         index = layout.buildDirectory.file("embedded-artifacts/$EMBEDDED_ARTIFACT_INDEX")
     }
 
-// `into` resolves the provider, so the namespace stays lazy and a module can still override it after the plugin
-// applies.
 tasks.processResources {
     from(embeddedArtifacts.artifacts) { into(embeddedArtifacts.namespace) }
     from(embeddedArtifactIndex) { into(embeddedArtifacts.namespace) }
 }
 
-// The jar is the invalidation signal every consumer sees. Without this its entries carry the time of the build, so an
-// unchanged rebuild would produce a different jar and rebuild everything downstream.
 tasks.jar {
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true

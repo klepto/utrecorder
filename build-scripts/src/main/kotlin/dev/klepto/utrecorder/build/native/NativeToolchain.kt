@@ -1,5 +1,8 @@
 package dev.klepto.utrecorder.build.native
 
+import dev.klepto.utrecorder.build.native.NativeToolchain.Kind.GCC
+import dev.klepto.utrecorder.build.native.NativeToolchain.Kind.MINGW
+import dev.klepto.utrecorder.build.native.NativeToolchain.Kind.MSVC
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
@@ -10,17 +13,20 @@ import java.io.Serializable
 import javax.inject.Inject
 
 /**
- * The C toolchain a native binary is compiled by, carried as a task input.
+ * C toolchain that compiles native binaries on the machine the build runs on.
  *
- * Use [Source] to discover the toolchain of the machine the build runs on.
+ * Use [Source] to discover the toolchain of that machine.
  *
- * @property kind The compiler family, which decides the shape of the command line.
- * @property command The compiler to invoke, or the environment script that puts it on the path for [Kind.MSVC].
+ * @property kind Compiler family, which decides the shape of the command line.
+ * @property command Compiler to invoke. For [MSVC], the environment script that puts the compiler on the path instead.
  */
 data class NativeToolchain(
     val kind: Kind,
     val command: String,
 ) : Serializable {
+    /**
+     * Compiler family of a [NativeToolchain].
+     */
     enum class Kind {
         /**
          * `gcc`, targeting the machine it runs on.
@@ -33,33 +39,29 @@ data class NativeToolchain(
         MINGW,
 
         /**
-         * The Visual Studio 32-bit toolset, reached through `VsDevCmd.bat`.
+         * Visual Studio 32-bit toolset, reached through `VsDevCmd.bat`.
          */
         MSVC,
     }
 
-    companion object {
-        private const val GCC = "gcc"
-        private const val MINGW = "i686-w64-mingw32-gcc"
-    }
-
     /**
-     * Discovery of the C toolchain for a platform, obtaining nothing when the machine holds none. On Windows MinGW on the
-     * path comes first and the Visual Studio environment script second.
+     * Discovery of the C toolchain for a platform. Obtains nothing when the machine holds no toolchain.
+     *
+     * On Windows, MinGW on the path comes first and the Visual Studio environment script second.
      */
     abstract class Source : ValueSource<NativeToolchain, Source.Parameters> {
         /**
-         * The parameters the discovery reads.
+         * Parameters of the toolchain discovery.
          */
         interface Parameters : ValueSourceParameters {
             /**
-             * The name of the [NativePlatform] to find a toolchain for.
+             * Name of the [NativePlatform] to find a toolchain for.
              */
             val platform: Property<String>
         }
 
         /**
-         * The service the discovery runs its probing commands through.
+         * Service that runs the probing commands.
          */
         @get:Inject
         abstract val exec: ExecOperations
@@ -72,34 +74,33 @@ data class NativeToolchain(
         private fun gcc(platform: NativePlatform): NativeToolchain? =
             when {
                 platform.isWindows -> null
-                runsCatching(GCC).getOrDefault(false) -> NativeToolchain(Kind.GCC, GCC)
+                runsCatching(GCC_COMMAND).getOrDefault(false) -> NativeToolchain(GCC, GCC_COMMAND)
                 else -> null
             }
 
         private fun mingw(platform: NativePlatform): NativeToolchain? =
             when {
                 !platform.isWindows -> null
-                runsCatching(MINGW).getOrDefault(false) -> NativeToolchain(Kind.MINGW, MINGW)
+                runsCatching(MINGW_COMMAND).getOrDefault(false) -> NativeToolchain(MINGW, MINGW_COMMAND)
                 else -> null
             }
 
         private fun msvc(platform: NativePlatform): NativeToolchain? =
             when {
                 !platform.isWindows -> null
-                else -> visualStudioToolsCatching().getOrNull()?.let { NativeToolchain(Kind.MSVC, it.absolutePath) }
+                else -> environmentScriptCatching().getOrNull()?.let { NativeToolchain(MSVC, it.absolutePath) }
             }
 
         /**
-         * Returns whether the given [tool] answers `--version` with exit code `0`, or the failure that kept it from
-         * running.
+         * Returns whether [tool] answers `--version` with exit code `0`, or the failure that kept it from running.
          */
         private fun runsCatching(tool: String): Result<Boolean> = runCatching { execute(listOf(tool, "--version")) == 0 }
 
         /**
-         * Returns the Visual Studio environment script, `null` when no installation holds one, or the failure that kept
-         * `vswhere` from running.
+         * Returns the Visual Studio environment script, or the failure that kept `vswhere` from running. If no
+         * installation holds the script, returns `null` instead.
          */
-        private fun visualStudioToolsCatching(): Result<File?> =
+        private fun environmentScriptCatching(): Result<File?> =
             runCatching {
                 val vswhere = vswhere() ?: return@runCatching null
                 val output = ByteArrayOutputStream()
@@ -111,27 +112,8 @@ data class NativeToolchain(
             }
 
         /**
-         * Returns the Visual Studio locator, or `null` when it is not installed.
-         */
-        private fun vswhere(): File? =
-            System
-                .getenv("ProgramFiles(x86)")
-                ?.let { File(it, "Microsoft Visual Studio/Installer/vswhere.exe") }
-                ?.takeIf { it.exists() }
-
-        /**
-         * Returns the first non-blank line of [output], trimmed, or `null` when it holds none.
-         */
-        private fun firstLine(output: ByteArrayOutputStream): String? =
-            output
-                .toByteArray()
-                .decodeToString()
-                .lineSequence()
-                .map { it.trim() }
-                .firstOrNull { it.isNotEmpty() }
-
-        /**
-         * Runs the given [command], writing everything it prints into [output], and returns its exit code.
+         * Runs [command] and returns its exit code. Everything the command prints is written into [output]. If
+         * [output] is not provided, the printed text is discarded.
          */
         private fun execute(
             command: List<String>,
@@ -144,5 +126,30 @@ data class NativeToolchain(
                     errorOutput = output
                     isIgnoreExitValue = true
                 }.exitValue
+
+        companion object {
+            private const val GCC_COMMAND = "gcc"
+            private const val MINGW_COMMAND = "i686-w64-mingw32-gcc"
+
+            /**
+             * Returns `vswhere.exe`, the Visual Studio locator. If it is not installed, returns `null` instead.
+             */
+            private fun vswhere(): File? =
+                System
+                    .getenv("ProgramFiles(x86)")
+                    ?.let { File(it, "Microsoft Visual Studio/Installer/vswhere.exe") }
+                    ?.takeIf { it.exists() }
+
+            /**
+             * Returns the first non-blank line of [output], trimmed. If [output] holds none, returns `null` instead.
+             */
+            private fun firstLine(output: ByteArrayOutputStream): String? =
+                output
+                    .toByteArray()
+                    .decodeToString()
+                    .lineSequence()
+                    .map { it.trim() }
+                    .firstOrNull { it.isNotEmpty() }
+        }
     }
 }

@@ -21,8 +21,8 @@ dependencyResolutionManagement {
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 rootProject.name = "utrecorder"
-include("utrecorder-ut99")
 include("utrecorder-common")
+include("utrecorder-ut99")
 include("utrecorder-uscript")
 include("utrecorder-hooks")
 include("utrecorder-core")

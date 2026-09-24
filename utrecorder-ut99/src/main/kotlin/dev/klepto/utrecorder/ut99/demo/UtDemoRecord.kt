@@ -9,7 +9,7 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * One record of a demo: the network packet the server sent in one frame, decoded into its bunches.
  *
- * Use [read] to read every record a demo holds.
+ * Use [read] to read every record of a demo.
  *
  * @property time The demo time the packet was sent at.
  */
@@ -47,7 +47,7 @@ class UtDemoRecord private constructor(
         fun shiftedStrings(): List<String> =
             (0 until Byte.SIZE_BITS)
                 .map { payload.shiftedBy(it) }
-                .flatMap { data -> data.indices.mapNotNull { framedStringAt(data, it) } }
+                .flatMap { it.framedStrings() }
 
         companion object {
             private const val MIN_STRING_BYTES = 9
@@ -75,9 +75,16 @@ class UtDemoRecord private constructor(
             }
 
             /**
-             * Returns the framed string beginning at [index] of [data], or `null` when none does. A framed string is a
-             * compact index giving its length, then that many printable bytes ending in a null, and it holds at least
-             * eight characters.
+             * Returns every framed string that begins at some index of this payload.
+             */
+            private fun ByteArray.framedStrings(): List<String> = indices.mapNotNull { framedStringAt(this, it) }
+
+            /**
+             * Returns the framed string that begins at [index] of [data]. If no framed string begins there, returns
+             * `null` instead.
+             *
+             * A framed string is a compact index that gives its length, then that many printable bytes ending in a null.
+             * It holds at least eight characters.
              */
             private fun framedStringAt(
                 data: ByteArray,
@@ -85,7 +92,9 @@ class UtDemoRecord private constructor(
             ): String? {
                 val length = compactIndexAt(data, index) ?: return null
                 val start = index + length.size
-                val framed = length.value in MIN_STRING_BYTES..data.size - start && data.isFramedString(start, start + length.value)
+                val framed =
+                    length.value in MIN_STRING_BYTES..data.size - start &&
+                        data.isFramedString(start, start + length.value)
 
                 return when {
                     framed -> stringAt(data, start, length.value)
@@ -121,12 +130,12 @@ class UtDemoRecord private constructor(
         private var position = 0
 
         /**
-         * The number of bits left to read, negative once a read has overrun the end.
+         * The number of bits left to read. Negative once a read has overrun the end.
          */
         val remaining: Int get() = length - position
 
         /**
-         * Reads the next bit, either `0` or `1`.
+         * Returns the next bit, either `0` or `1`, and moves past it.
          */
         fun bit(): Int =
             when {
@@ -135,7 +144,8 @@ class UtDemoRecord private constructor(
             }.also { position++ }
 
         /**
-         * Reads an integer below [max], written in only as many bits as the integers below [max] need.
+         * Returns the next integer below [max] and moves past it. The integer takes only as many bits as the integers
+         * below [max] need.
          */
         fun int(max: Int): Int {
             var value = 0
@@ -148,7 +158,7 @@ class UtDemoRecord private constructor(
         }
 
         /**
-         * Reads the next [count] bits into bytes of their own, least significant bit first.
+         * Returns the next [count] bits as bytes of their own, least significant bit first, and moves past them.
          */
         fun bits(count: Int): ByteArray =
             ByteArray((count + Byte.SIZE_BITS - 1) / Byte.SIZE_BITS).also { output ->
@@ -162,12 +172,24 @@ class UtDemoRecord private constructor(
              */
             fun packet(packet: ByteArray): BitReader = BitReader(packet, lastSetBit(packet) ?: 0)
 
-            private fun lastSetBit(data: ByteArray): Int? = (0 until data.size * Byte.SIZE_BITS).lastOrNull { data.bitAt(it) == 1 }
+            /**
+             * Returns the index of the last set bit of [data]. If no bit is set, returns `null` instead.
+             */
+            private fun lastSetBit(data: ByteArray): Int? =
+                (0 until data.size * Byte.SIZE_BITS)
+                    .lastOrNull { data.bitAt(it) == 1 }
 
+            /**
+             * Returns the bit at [index] of this array, either `0` or `1`.
+             */
             private fun ByteArray.bitAt(index: Int): Int = (this[index / Byte.SIZE_BITS].toInt() shr (index % Byte.SIZE_BITS)) and 1
 
+            /**
+             * Sets the bit at [index] of this array.
+             */
             private fun ByteArray.setBit(index: Int) {
-                this[index / Byte.SIZE_BITS] = (this[index / Byte.SIZE_BITS].toInt() or (1 shl (index % Byte.SIZE_BITS))).toByte()
+                val byte = index / Byte.SIZE_BITS
+                this[byte] = (this[byte].toInt() or (1 shl (index % Byte.SIZE_BITS))).toByte()
             }
         }
     }
@@ -183,13 +205,17 @@ class UtDemoRecord private constructor(
         private var position = 0
 
         /**
-         * Reads strings until the payload runs out or holds an empty or malformed one.
+         * Returns the strings the payload holds from the current position on, and moves past them. Reading stops at
+         * the end of the payload, or at the first empty or malformed string.
          */
-        fun strings(): List<String> = generateSequence { string() }.takeWhile { it.isNotEmpty() }.toList()
+        fun strings(): List<String> =
+            generateSequence { string() }
+                .takeWhile { it.isNotEmpty() }
+                .toList()
 
         /**
-         * Reads the next string: a compact index giving its length, then that many bytes ending in a null. Returns
-         * `null` when the payload holds no such string.
+         * Returns the next string and moves past it. A string is a compact index that gives its length, then that
+         * many bytes ending in a null. If the payload holds no such string, returns `null` instead.
          */
         private fun string(): String? {
             val length = compactIndexAt(data, position) ?: return null
@@ -225,14 +251,14 @@ class UtDemoRecord private constructor(
         private const val TERMINATOR = Char.MIN_VALUE
         private const val SIGN_BIT = 0x80
         private const val FIRST_CONTINUATION_BIT = 0x40
-        private const val FIRST_VALUE_MASK = 0x3F
+        private const val FIRST_VALUE_BITMASK = 0x3F
         private const val FIRST_VALUE_BITS = 6
         private const val CONTINUATION_BIT = 0x80
-        private const val VALUE_MASK = 0x7F
+        private const val VALUE_BITMASK = 0x7F
         private const val VALUE_BITS = 7
 
         /**
-         * Reads the records held in [bytes], in the order the demo holds them. Reading stops at the first record that
+         * Returns the records held in [bytes], in the order the demo holds them. Reading stops at the first record that
          * does not decode.
          */
         fun read(bytes: ByteArray): Sequence<UtDemoRecord> {
@@ -241,8 +267,8 @@ class UtDemoRecord private constructor(
         }
 
         /**
-         * Reads the next record from [buffer], or returns `null` if the buffer holds no whole record or the record does
-         * not decode.
+         * Returns the next record of [buffer] and moves past it. If the buffer holds no whole record, or the record
+         * does not decode, returns `null` instead.
          */
         private fun readRecord(buffer: ByteBuffer): UtDemoRecord? {
             if (buffer.remaining() < HEADER_BYTES) return null
@@ -269,7 +295,7 @@ class UtDemoRecord private constructor(
             }
 
         /**
-         * Returns the bunches [packet] carries, or `null` if one of them does not decode.
+         * Returns the bunches [packet] carries. If one of them does not decode, returns `null` instead.
          */
         private fun readBunches(packet: ByteArray): List<Bunch>? {
             val reader = BitReader.packet(packet)
@@ -283,7 +309,8 @@ class UtDemoRecord private constructor(
         }
 
         /**
-         * Reads the next bunch from [reader], or returns `null` if its payload runs past the end of the packet.
+         * Returns the next bunch of [reader] and moves past it. If its payload runs past the end of the packet, returns
+         * `null` instead.
          */
         private fun readBunch(reader: BitReader): Bunch? {
             val control = reader.bit() == 1
@@ -300,21 +327,25 @@ class UtDemoRecord private constructor(
         }
 
         /**
-         * Returns the compact index at [index] of [data], or `null` when [data] ends before it does. A sign, then the
-         * value in 6 bits and further 7-bit groups while each byte sets its continuation bit.
+         * Returns the compact index at [index] of [data]. If [data] ends before the compact index does, returns `null`
+         * instead.
+         *
+         * The first byte of a compact index holds a sign bit, a continuation bit and 6 bits of the value. Each further
+         * byte holds 7 more bits of the value and its own continuation bit. A byte follows while the byte before it
+         * sets its continuation bit.
          */
         private fun compactIndexAt(
             data: ByteArray,
             index: Int,
         ): CompactIndex? {
             val first = data.getOrNull(index)?.toUByte()?.toInt() ?: return null
-            var value = first and FIRST_VALUE_MASK
+            var value = first and FIRST_VALUE_BITMASK
             var more = first and FIRST_CONTINUATION_BIT != 0
             var bits = FIRST_VALUE_BITS
             var size = 1
             while (more && bits < Int.SIZE_BITS) {
                 val next = data.getOrNull(index + size)?.toUByte()?.toInt() ?: return null
-                value = value or ((next and VALUE_MASK) shl bits)
+                value = value or ((next and VALUE_BITMASK) shl bits)
                 more = next and CONTINUATION_BIT != 0
                 bits += VALUE_BITS
                 size++

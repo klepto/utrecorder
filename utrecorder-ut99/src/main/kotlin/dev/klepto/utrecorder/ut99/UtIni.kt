@@ -39,7 +39,7 @@ class UtIni(
     operator fun get(
         section: String,
         key: String,
-    ): List<String> = entryIndices(section, key).map { lines[it].trim().substringAfter('=').trim() }
+    ): List<String> = entryIndices(section, key).map { entryValue(lines[it]) }
 
     /**
      * Replaces every [key] entry within the given [section] with a single entry holding [value]. Appends the entry if
@@ -61,8 +61,8 @@ class UtIni(
     }
 
     /**
-     * Appends another [key] entry holding [value] to the given [section], keeping the entries already there. The
-     * section is appended to the file if it isn't present.
+     * Appends another [key] entry holding [value] to the given [section], keeping the entries already there. The entry
+     * goes after the last non-blank line of the section. The section is appended to the file if it is not present.
      */
     fun add(
         section: String,
@@ -77,8 +77,7 @@ class UtIni(
             return
         }
 
-        var index = indices.last + 1
-        while (index > indices.first && lines[index - 1].isBlank()) index--
+        val index = indices.lastOrNull { lines[it].isNotBlank() }?.plus(1) ?: indices.first
         lines.add(index, "$key=$value")
     }
 
@@ -102,10 +101,7 @@ class UtIni(
         from: String,
         to: String,
     ) {
-        val index =
-            entryIndices(section, key).firstOrNull { lines[it].trim().substringAfter('=').trim() == from }
-                ?: throw IllegalArgumentException("No $key=$from entry in the [$section] section")
-        lines[index] = "$key=$to"
+        lines[entryIndex(section, key, from)] = "$key=$to"
     }
 
     /**
@@ -119,10 +115,7 @@ class UtIni(
         key: String,
         value: String,
     ) {
-        val index =
-            entryIndices(section, key).firstOrNull { lines[it].trim().substringAfter('=').trim() == value }
-                ?: throw IllegalArgumentException("No $key=$value entry in the [$section] section")
-        lines.removeAt(index)
+        lines.removeAt(entryIndex(section, key, value))
     }
 
     /**
@@ -135,10 +128,20 @@ class UtIni(
         }
     }
 
-    /**
-     * Returns the contents of the configuration file.
-     */
     override fun toString(): String = lines.joinToString(newline)
+
+    /**
+     * Returns the index of the first [key] entry holding [value] within the given [section].
+     *
+     * @throws IllegalArgumentException when the section holds no entry of the key at [value].
+     */
+    private fun entryIndex(
+        section: String,
+        key: String,
+        value: String,
+    ): Int =
+        entryIndices(section, key).firstOrNull { entryValue(lines[it]) == value }
+            ?: throw IllegalArgumentException("No $key=$value entry in the [$section] section")
 
     /**
      * Returns the indices of the [key] entries within the given [section].
@@ -146,10 +149,10 @@ class UtIni(
     private fun entryIndices(
         section: String,
         key: String,
-    ): List<Int> {
-        val indices = sectionIndices(section) ?: return emptyList()
-        return indices.filter { entryKey(lines[it]).equals(key, ignoreCase = true) }
-    }
+    ): List<Int> =
+        sectionIndices(section)
+            ?.filter { entryKey(lines[it]).equals(key, ignoreCase = true) }
+            .orEmpty()
 
     /**
      * Returns the indices of the lines within the given [section] excluding its header, or `null` if the file holds no
@@ -160,36 +163,9 @@ class UtIni(
         val start = lines.indexOfFirst { isSection(it) && sectionName(it).equals(section, ignoreCase = true) }
         if (start == -1) return null
 
-        val length = lines.subList(start + 1, lines.size).indexOfFirst { isSection(it) }
-        val end =
-            when (length) {
-                -1 -> lines.size
-                else -> start + 1 + length
-            }
+        val end = (start + 1 until lines.size).firstOrNull { isSection(lines[it]) } ?: lines.size
         return (start + 1) until end
     }
-
-    /**
-     * Returns the key of the given entry [line], or `null` if the line holds no entry.
-     */
-    private fun entryKey(line: String): String? {
-        val trimmed = line.trim()
-        if (trimmed.startsWith(COMMENT) || !trimmed.contains('=')) return null
-        return trimmed.substringBefore('=').trim()
-    }
-
-    /**
-     * Marks whether the given [line] is a section header.
-     */
-    private fun isSection(line: String): Boolean {
-        val trimmed = line.trim()
-        return trimmed.startsWith("[") && trimmed.endsWith("]")
-    }
-
-    /**
-     * Returns the name of the given section header [line].
-     */
-    private fun sectionName(line: String) = line.trim().removeSurrounding("[", "]")
 
     companion object {
         /**
@@ -198,8 +174,35 @@ class UtIni(
         private const val COMMENT = ";"
 
         /**
-         * Reads the configuration file at the given [path].
+         * Returns the configuration file read from the given [path].
          */
         suspend fun read(path: Path): UtIni = UtIni(withContext(Dispatchers.IO) { path.readText(UtPlatform.CHARSET) })
+
+        /**
+         * Returns the key of the given entry [line], or `null` if the line holds no entry.
+         */
+        private fun entryKey(line: String): String? {
+            val trimmed = line.trim()
+            if (trimmed.startsWith(COMMENT) || !trimmed.contains('=')) return null
+            return trimmed.substringBefore('=').trim()
+        }
+
+        /**
+         * Returns the value of the given entry [line].
+         */
+        private fun entryValue(line: String): String = line.substringAfter('=').trim()
+
+        /**
+         * Returns whether the given [line] is a section header.
+         */
+        private fun isSection(line: String): Boolean {
+            val trimmed = line.trim()
+            return trimmed.startsWith("[") && trimmed.endsWith("]")
+        }
+
+        /**
+         * Returns the name of the given section header [line].
+         */
+        private fun sectionName(line: String): String = line.trim().removeSurrounding("[", "]")
     }
 }

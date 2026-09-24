@@ -7,39 +7,43 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
 
 /**
- * A native binary the module compiles. The name is the base name of the binary and the directory the sources sit in:
- * `src/main/native/uthooks` compiles to `uthooks.dll` on Windows and `uthooks.so` on Linux, from every `.c` file under
- * that directory.
+ * Native binary a module compiles, named after the directory that holds its sources.
+ *
+ * `src/main/native/uthooks` compiles every `.c` file under it to `uthooks.dll` on Windows and `uthooks.so` on Linux.
  */
 abstract class NativeBinary : Named {
     /**
-     * The directory holding the C sources. Defaults to the directory of this name under the source directory.
+     * Directory holding the C sources. Defaults to the directory of this name under the source directory.
      */
     abstract val sources: DirectoryProperty
 
     /**
-     * The kind of binary the sources compile to. Defaults to [NativeBinaryType.SHARED_LIBRARY].
+     * Kind of binary the sources compile to. Defaults to [NativeBinaryType.SHARED_LIBRARY].
      */
     abstract val type: Property<NativeBinaryType>
 
     /**
-     * The platforms this binary is built for. Defaults to all of them.
+     * Platforms the binary is built for. Defaults to all of them. A build on any other platform produces no file for
+     * the binary.
      */
     abstract val platforms: SetProperty<NativePlatform>
 }
 
 /**
- * Configures the native binaries a module compiles. Every directory under [sourceDirectory] registers a binary of its
- * own, and a module declares the [NativeBinary.type] of anything that is not a shared library.
+ * Native binaries a module compiles, one for every directory under [sourceDirectory].
+ *
+ * The `utrecorder.native` plugin registers it as `nativeBinaries`. A module declares the [NativeBinary.type] of every
+ * binary that is not a shared library.
  */
 abstract class NativeExtension {
     /**
-     * The directory the binary directories sit in.
+     * Directory holding one source directory for every binary. Defaults to `src/main/native`.
      */
     abstract val sourceDirectory: DirectoryProperty
 
     /**
-     * The binaries to compile. Registered from the layout, so a module configures them with `named`, never `create`.
+     * Binaries to compile. They already exist when the module configures them, so a module reaches them with `named`,
+     * never `create`.
      */
     abstract val binaries: NamedDomainObjectContainer<NativeBinary>
 }

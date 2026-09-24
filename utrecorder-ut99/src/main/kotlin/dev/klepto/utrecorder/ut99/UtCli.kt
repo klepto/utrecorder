@@ -1,7 +1,9 @@
 package dev.klepto.utrecorder.ut99
 
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.SystemConfigReader
 import dev.klepto.utrecorder.common.io.toAbsolutePath
-import dev.klepto.utrecorder.common.log.logger
+import dev.klepto.utrecorder.common.logger
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Path
 import kotlin.system.exitProcess
@@ -10,14 +12,16 @@ import kotlin.system.exitProcess
  * Command line entry point of the Unreal Tournament module, provisioning an installation and driving [UtCompiler].
  *
  * Use [main] to run it as a process, or [run] to run it in the current one. `install` provisions the installation, and
- * `make` compiles the package `--sources` names into the file `--output` names. `--install` names the installation,
- * defaulting to the one [UtConfig.DEFAULT] names. `--edit-packages` names the packages a compile compiles against.
+ * `make` compiles the package `--sources` names into the file `--output` names. `--install` names the installation.
+ * If `--install` is not provided, uses the game directory [reader] configures instead. `--edit-packages` names the
+ * packages a compile compiles against.
  *
  * @property arguments The command line arguments, the command first and its options after it.
+ * @param reader The source of the keys the Unreal Tournament configuration is read from.
  */
 class UtCli(
     private val arguments: List<String>,
-    private val utConfig: UtConfig = UtConfig(),
+    reader: ConfigReader = SystemConfigReader(),
 ) {
     /**
      * The name of the command to run, or `null` if the arguments name none.
@@ -32,7 +36,7 @@ class UtCli(
     /**
      * The configuration the command runs against, holding the installation the `--install` option names.
      */
-    private val config = path("install")?.let { utConfig.copy(gameDirectory = it) } ?: utConfig
+    private val config = path("install")?.let { UtConfig(reader, gameDirectory = it) } ?: UtConfig(reader)
 
     /**
      * Reads the `--key=value` options the [arguments] hold into a map, by key.
@@ -43,15 +47,9 @@ class UtCli(
             .associate(::parseOption)
 
     /**
-     * Splits one `--key=value` [option] into its key and its value, which is empty when the option carries none.
-     */
-    private fun parseOption(option: String): Pair<String, String> {
-        val entry = option.removePrefix(OPTION_PREFIX)
-        return entry.substringBefore('=') to entry.substringAfter('=', "")
-    }
-
-    /**
-     * Runs the command the arguments name and returns the exit code of the process, `1` when the command fails.
+     * Returns the exit code of the process after running the command the arguments name.
+     *
+     * If the command fails, logs the failure with the usage and returns `1` instead of `0`.
      */
     suspend fun run(): Int =
         try {
@@ -72,7 +70,7 @@ class UtCli(
             ?: error("Unknown command '$commandName', expected one of ${Command.entries.joinToString(", ") { it.commandName }}")
 
     /**
-     * Provisions the installation, and returns it.
+     * Returns the installation, provisioning it first.
      */
     private suspend fun install(): UtInstallation {
         UtInstaller(config).install()
@@ -86,7 +84,11 @@ class UtCli(
     private suspend fun make() {
         val sourcesPath = requireNotNull(path("sources")) { "Missing --sources" }
         val outputPath = requireNotNull(path("output")) { "Missing --output" }
-        val editPackages = options["edit-packages"].orEmpty().split(',').filter { it.isNotBlank() }
+        val editPackages =
+            options["edit-packages"]
+                .orEmpty()
+                .split(',')
+                .filter { it.isNotBlank() }
 
         val compiler = install().compiler
         val configure: UtIni.() -> Unit = {
@@ -100,10 +102,15 @@ class UtCli(
     /**
      * Returns the absolute path the option [key] holds, or `null` if the arguments hold no such option.
      */
-    private fun path(key: String): Path? = options[key]?.takeIf { it.isNotEmpty() }?.toAbsolutePath()
+    private fun path(key: String): Path? =
+        options[key]
+            ?.takeIf { it.isNotEmpty() }
+            ?.toAbsolutePath()
 
     /**
-     * A command this entry point runs, by the name the arguments give it.
+     * A command this entry point runs.
+     *
+     * @property commandName The name the arguments give the command.
      */
     private enum class Command(
         val commandName: String,
@@ -142,11 +149,15 @@ class UtCli(
         private val log = logger<UtCli>()
 
         /**
-         * Runs this entry point as a process and exits with its result code.
-         *
-         * The one permanent `runBlocking` this function keeps: `@JvmStatic fun main(Array<String>)` cannot itself be
-         * `suspend`, and `JavaExec` — which is how `compileUscript` forks this class — can only call a real one. The
-         * other of the task's two sanctioned entry-point bridges is `UtRecorderCli.main(Array<String>)`.
+         * Splits one `--key=value` [option] into its key and its value, which is empty when the option carries none.
+         */
+        private fun parseOption(option: String): Pair<String, String> {
+            val entry = option.removePrefix(OPTION_PREFIX)
+            return entry.substringBefore('=') to entry.substringAfter('=', "")
+        }
+
+        /**
+         * Runs this entry point as a process and exits with the exit code of [run].
          */
         @JvmStatic
         fun main(args: Array<String>): Unit = exitProcess(runBlocking { UtCli(args.toList()).run() })
