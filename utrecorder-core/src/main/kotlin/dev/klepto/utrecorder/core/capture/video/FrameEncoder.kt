@@ -153,7 +153,7 @@ class FrameEncoder(
 suspend fun <T> FrameEncoder.encode(block: suspend FrameEncoder.Connection.() -> T): Pair<T, Path> =
     coroutineScope {
         val worker = async { capture() }
-        log.info { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
+        log.debug { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
         val value = FrameEncoder.Connection(port).block()
         check(worker.await()) { "Frame capture was not finalised by ffmpeg" }
         checkCapture()

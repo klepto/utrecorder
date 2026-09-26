@@ -1,8 +1,14 @@
+@file:UseSerializers(PathSerializer::class)
+
 package dev.klepto.utrecorder.server
 
 import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.logger
+import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.database.PathSerializer
 import kotlinx.coroutines.delay
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.UseSerializers
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.hours
 
@@ -13,6 +19,7 @@ import kotlin.time.Duration.Companion.hours
  * @property attempts The number of deletions tried.
  * @property error The message of the last failed deletion, or `null` if none failed.
  */
+@Serializable
 data class Cleanup(
     val path: Path,
     val attempts: Int = 0,
@@ -20,30 +27,33 @@ data class Cleanup(
 )
 
 /**
- * Deletes files and directories through [store], persisting every deletion so a failed one is retried.
+ * Deletes files and directories, persisting every deletion to [cleanups] so a failed one is retried.
  *
  * A deletion made outside [CleanupService] risks being lost to a crash or a restart before it completes. Every
- * deletion the server makes goes through [delete] instead, so the pending path survives in [store] until it succeeds.
+ * deletion the server makes goes through [delete] instead, so the pending path survives in [cleanups] until it
+ * succeeds.
+ *
+ * @property cleanups The collection of pending cleanups, keyed by the string form of [Cleanup.path].
  */
 class CleanupService(
-    private val store: DemoStore,
+    private val cleanups: DocumentStore.Collection<Cleanup>,
 ) {
     /**
      * Persists [path] as a pending cleanup, then deletes it. A file is removed directly, a directory recursively. A
-     * path that no longer exists counts as success. A failed deletion keeps its row in [store], with [Cleanup.attempts]
+     * path that no longer exists counts as success. A failed deletion keeps its cleanup in [cleanups], with [Cleanup.attempts]
      * incremented and [Cleanup.error] set to the failure's message; the failure is logged, not thrown.
      */
     suspend fun delete(path: Path) {
         val cleanup = Cleanup(path)
-        store.put(cleanup)
+        cleanups.put(cleanup)
         attempt(cleanup)
     }
 
     /**
-     * Retries every pending cleanup of [store], with the same success and failure handling as [delete].
+     * Retries every pending cleanup of [cleanups], with the same success and failure handling as [delete].
      */
     suspend fun retry() {
-        store.load().cleanups.forEach { attempt(it) }
+        cleanups.all().forEach { attempt(it) }
     }
 
     /**
@@ -59,9 +69,9 @@ class CleanupService(
     private suspend fun attempt(cleanup: Cleanup) {
         cleanup.path
             .deleteCatching()
-            .onSuccess { store.remove(cleanup.path) }
+            .onSuccess { cleanups.remove(cleanup.path.toString()) }
             .onFailure { failure ->
-                store.put(cleanup.copy(attempts = cleanup.attempts + 1, error = failure.message))
+                cleanups.put(cleanup.copy(attempts = cleanup.attempts + 1, error = failure.message))
                 log.warn(failure) { "Failed to delete ${cleanup.path}" }
             }
     }

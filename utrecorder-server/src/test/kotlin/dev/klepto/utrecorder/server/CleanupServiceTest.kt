@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server
 
 import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.server.database.DocumentStore
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldHaveSize
@@ -36,14 +37,13 @@ class CleanupServiceTest :
             }
         }
 
-        suspend fun <T> withStore(
+        suspend fun <T> withCleanups(
             database: Path,
-            cache: Path,
-            block: suspend (DemoStore) -> T,
+            block: suspend (DocumentStore.Collection<Cleanup>) -> T,
         ): T {
-            val store = DemoStore.open(database, cache)
+            val store = DocumentStore.open(database)
             return try {
-                block(store)
+                block(store.collection("cleanups", Cleanup.serializer()) { it.path.toString() })
             } finally {
                 store.close()
             }
@@ -51,51 +51,51 @@ class CleanupServiceTest :
 
         test("deletes a file and removes its cleanup row") {
             withDirectories { database, cache ->
-                withStore(database, cache) { store ->
+                withCleanups(database) { cleanups ->
                     val file = cache["stale.mp4"]
                     file.writeText("data")
 
-                    CleanupService(store).delete(file)
+                    CleanupService(cleanups).delete(file)
 
                     file.exists() shouldBe false
-                    store.load().cleanups.shouldBeEmpty()
+                    cleanups.all().shouldBeEmpty()
                 }
             }
         }
 
         test("deletes a directory recursively") {
             withDirectories { database, cache ->
-                withStore(database, cache) { store ->
+                withCleanups(database) { cleanups ->
                     val directory = cache["workspace"].createDirectories()
                     directory["file.txt"].writeText("data")
 
-                    CleanupService(store).delete(directory)
+                    CleanupService(cleanups).delete(directory)
 
                     directory.exists() shouldBe false
-                    store.load().cleanups.shouldBeEmpty()
+                    cleanups.all().shouldBeEmpty()
                 }
             }
         }
 
         test("deleting a path that no longer exists counts as success") {
             withDirectories { database, cache ->
-                withStore(database, cache) { store ->
-                    CleanupService(store).delete(cache["missing.mp4"])
+                withCleanups(database) { cleanups ->
+                    CleanupService(cleanups).delete(cache["missing.mp4"])
 
-                    store.load().cleanups.shouldBeEmpty()
+                    cleanups.all().shouldBeEmpty()
                 }
             }
         }
 
         test("keeps a failed deletion's row with its attempts and error") {
             withDirectories { database, cache ->
-                withStore(database, cache) { store ->
+                withCleanups(database) { cleanups ->
                     val file = cache["locked.mp4"]
                     file.writeText("data")
 
-                    FileOutputStream(file.toFile()).use { CleanupService(store).delete(file) }
+                    FileOutputStream(file.toFile()).use { CleanupService(cleanups).delete(file) }
 
-                    val rows = store.load().cleanups
+                    val rows = cleanups.all()
                     rows shouldHaveSize 1
                     rows.single().path shouldBe file
                     rows.single().attempts shouldBe 1
@@ -106,27 +106,27 @@ class CleanupServiceTest :
 
         test("a retry pass removes a row once the deletion succeeds") {
             withDirectories { database, cache ->
-                withStore(database, cache) { store ->
+                withCleanups(database) { cleanups ->
                     val file = cache["locked.mp4"]
                     file.writeText("data")
-                    val cleanupService = CleanupService(store)
+                    val cleanupService = CleanupService(cleanups)
                     FileOutputStream(file.toFile()).use { cleanupService.delete(file) }
-                    store.load().cleanups shouldHaveSize 1
+                    cleanups.all() shouldHaveSize 1
 
                     cleanupService.retry()
 
                     file.exists() shouldBe false
-                    store.load().cleanups.shouldBeEmpty()
+                    cleanups.all().shouldBeEmpty()
                 }
             }
         }
 
         test("the loop retries at startup and then hourly until cancelled") {
             withDirectories { database, cache ->
-                withStore(database, cache) { store ->
+                withCleanups(database) { cleanups ->
                     val first = cache["first.mp4"]
                     first.writeText("data")
-                    store.put(Cleanup(first))
+                    cleanups.put(Cleanup(first))
 
                     runTest {
                         // Waits for a condition an in-flight background deletion or store write is racing to
@@ -143,13 +143,13 @@ class CleanupServiceTest :
                             }
                         }
 
-                        val job = launch { CleanupService(store).loop() }
+                        val job = launch { CleanupService(cleanups).loop() }
                         waitUntil { !first.exists() }
-                        waitUntil { store.load().cleanups.isEmpty() }
+                        waitUntil { cleanups.all().isEmpty() }
 
                         val second = cache["second.mp4"]
                         second.writeText("data")
-                        store.put(Cleanup(second))
+                        cleanups.put(Cleanup(second))
 
                         advanceTimeBy(59.minutes)
                         runCurrent()
@@ -157,7 +157,7 @@ class CleanupServiceTest :
 
                         advanceTimeBy(2.minutes)
                         waitUntil { !second.exists() }
-                        waitUntil { store.load().cleanups.isEmpty() }
+                        waitUntil { cleanups.all().isEmpty() }
 
                         job.cancelAndJoin()
                     }

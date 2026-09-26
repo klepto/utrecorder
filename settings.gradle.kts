@@ -15,6 +15,12 @@ dependencyResolutionManagement {
     repositoriesMode = RepositoriesMode.PREFER_SETTINGS
     repositories {
         mavenCentral()
+        ivy("https://nodejs.org/dist/") {
+            name = "Node.js"
+            patternLayout { artifact("v[revision]/[artifact](-v[revision]-[classifier]).[ext]") }
+            metadataSources { artifact() }
+            content { includeModule("org.nodejs", "node") }
+        }
     }
 }
 
@@ -28,3 +34,4 @@ include("utrecorder-hooks")
 include("utrecorder-core")
 include("utrecorder-cli")
 include("utrecorder-server")
+include("utrecorder-web")

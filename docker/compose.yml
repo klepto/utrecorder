@@ -18,7 +18,22 @@ services:
       - installs:/var/lib/utrecorder/installs
       - gradle:/root/.gradle
 
+  server:
+    build:
+      context: ..
+      dockerfile: docker/server/Dockerfile
+    image: utrecorder-server
+    init: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - server-home:/var/lib/utrecorder
+    environment:
+      UTRECORDER_SERVER_ARCHIVE_ACCESS_KEY:
+      UTRECORDER_SERVER_ARCHIVE_SECRET_KEY:
+
 volumes:
   checkout:
   installs:
   gradle:
+  server-home:

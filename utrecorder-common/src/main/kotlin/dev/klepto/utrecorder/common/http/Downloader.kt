@@ -74,7 +74,7 @@ class Downloader(
 
         workspace("download", config = directories) {
             val temporary = tempFile()
-            log.info { "Downloading $url to $outputPath" }
+            log.debug { "Downloading $url to $outputPath" }
             try {
                 fetch(temporary, listener)
                 verifyHash(temporary)

@@ -1,0 +1,136 @@
+# Production image: builds the server distribution from source, then runs it with the runtime the dev container
+# already proves out (docker/dev/Dockerfile).
+
+FROM eclipse-temurin:25-jdk AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# uthooks.so is compiled for Linux here, and UTRecorderConsole compiles against a materialized UT99 install, which
+# runs the game's own Linux binaries under a virtual display, so the builder needs the same 32-bit runtime the final
+# image does, plus the C toolchain.
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        gcc \
+        gcc-multilib \
+        libc6-dev-i386 \
+        xvfb \
+        x11-utils \
+        libc6:i386 \
+        libstdc++6:i386 \
+        libgcc-s1:i386 \
+        libgl1:i386 \
+        libglx-mesa0:i386 \
+        libgl1-mesa-dri:i386 \
+        libglu1-mesa:i386 \
+        libsdl2-2.0-0:i386 \
+        libopenal1:i386 \
+        libpulse0:i386 \
+        libx11-6:i386 \
+        libxext6:i386 \
+        libxrandr2:i386 \
+        libxcursor1:i386 \
+        libxi6:i386 \
+        libxfixes3:i386 \
+        libxss1:i386 \
+    && (apt-get install -y --no-install-recommends libasound2t64:i386 \
+        || apt-get install -y --no-install-recommends libasound2:i386) \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV DISPLAY=:99 \
+    SCREEN_SIZE=1920x1080 \
+    LIBGL_ALWAYS_SOFTWARE=1 \
+    GALLIUM_DRIVER=llvmpipe \
+    GRADLE_OPTS=-Dorg.gradle.daemon=false
+
+WORKDIR /utrecorder
+COPY . .
+
+RUN Xvfb "$DISPLAY" -screen 0 "${SCREEN_SIZE}x24" -nolisten tcp -ac >/dev/null 2>&1 & \
+    for _ in $(seq 1 100); do \
+        xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break; \
+        sleep 0.1; \
+    done \
+    && xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 \
+    && { ./gradlew --no-daemon :utrecorder-server:installDist \
+        || { cat utrecorder-hooks/build/native-logs/*/compile.log 2>/dev/null; exit 1; }; }
+
+FROM eclipse-temurin:25-jre
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# The recorder launches Unreal Tournament's Linux port to capture footage; both it and the bundled ffmpeg are 32-bit
+# except ffmpeg's own binary, which is 64-bit and links libxcb, libasound and libpulse without shipping them.
+RUN dpkg --add-architecture i386 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        xvfb \
+        x11-utils \
+        libxcb1 \
+        libxcb-shm0 \
+        libxcb-shape0 \
+        libxcb-xfixes0 \
+        libpulse0 \
+        libc6:i386 \
+        libstdc++6:i386 \
+        libgcc-s1:i386 \
+        libgl1:i386 \
+        libglx-mesa0:i386 \
+        libgl1-mesa-dri:i386 \
+        libglu1-mesa:i386 \
+        libsdl2-2.0-0:i386 \
+        libopenal1:i386 \
+        libpulse0:i386 \
+        libx11-6:i386 \
+        libxext6:i386 \
+        libxrandr2:i386 \
+        libxcursor1:i386 \
+        libxi6:i386 \
+        libxfixes3:i386 \
+        libxss1:i386 \
+    && (apt-get install -y --no-install-recommends libasound2t64 libasound2t64:i386 \
+        || apt-get install -y --no-install-recommends libasound2 libasound2:i386) \
+    && rm -rf /var/lib/apt/lists/*
+
+# A newer Mesa than the distribution ships, for both architectures. Build with --build-arg MESA_PPA= to skip it.
+ARG MESA_PPA=kisak/kisak-mesa
+ARG MESA_PPA_FINGERPRINT=EB8B81E14DA65431D7504EA8F63F0F2B90935439
+RUN if [ -n "$MESA_PPA" ]; then \
+        set -eu; \
+        . /etc/os-release; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends curl gnupg; \
+        mkdir -p /etc/apt/keyrings; \
+        curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${MESA_PPA_FINGERPRINT}" -o /tmp/mesa-ppa.asc; \
+        gpg --batch --show-keys --with-colons /tmp/mesa-ppa.asc \
+            | grep -q "^fpr:::::::::${MESA_PPA_FINGERPRINT}:"; \
+        gpg --batch --dearmor -o /etc/apt/keyrings/mesa-ppa.gpg /tmp/mesa-ppa.asc; \
+        rm /tmp/mesa-ppa.asc; \
+        printf 'Types: deb\nURIs: https://ppa.launchpadcontent.net/%s/ubuntu\nSuites: %s\nComponents: main\nSigned-By: /etc/apt/keyrings/mesa-ppa.gpg\n' \
+            "$MESA_PPA" "$VERSION_CODENAME" > /etc/apt/sources.list.d/mesa-ppa.sources; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends \
+            libgl1-mesa-dri libglx-mesa0 libglu1-mesa \
+            libgl1-mesa-dri:i386 libglx-mesa0:i386 libglu1-mesa:i386; \
+        apt-get purge -y curl gnupg; \
+        apt-get autoremove -y; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
+ENV DISPLAY=:99 \
+    SCREEN_SIZE=1920x1080 \
+    LIBGL_ALWAYS_SOFTWARE=1 \
+    GALLIUM_DRIVER=llvmpipe \
+    UTRECORDER_HOME=/var/lib/utrecorder
+
+COPY --from=builder /utrecorder/utrecorder-server/build/install/utrecorder-server /opt/utrecorder-server
+COPY docker/server/entrypoint.sh /usr/local/bin/entrypoint
+RUN chmod +x /usr/local/bin/entrypoint
+
+VOLUME /var/lib/utrecorder
+EXPOSE 8080
+
+ENTRYPOINT ["entrypoint"]
+CMD ["/opt/utrecorder-server/bin/utrecorder-server"]

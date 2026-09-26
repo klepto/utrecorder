@@ -6,11 +6,11 @@ import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.server.Demo
-import dev.klepto.utrecorder.server.DemoStore
-import dev.klepto.utrecorder.server.Recording
-import dev.klepto.utrecorder.server.RecordingLane
-import dev.klepto.utrecorder.server.RecordingState
 import dev.klepto.utrecorder.server.ServerConfig
+import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.recording.Recording
+import dev.klepto.utrecorder.server.recording.RecordingLane
+import dev.klepto.utrecorder.server.recording.RecordingState
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.nulls.shouldNotBeNull
@@ -38,14 +38,12 @@ class RecordingCacheTest :
     FunSpec({
         val demo =
             Demo(
-                id = 0,
-                sourceId = "7f0e2a52",
+                id = "7f0e2a52",
                 map = "CTF-BT-Maverick",
                 player = "klepto",
                 capTime = 83.seconds,
                 duration = 4.minutes,
                 addedAt = Instant.parse("2026-09-01T12:00:00Z"),
-                recordingId = 0,
             )
         val bytes = "recorded-mp4-bytes".toByteArray()
 
@@ -80,7 +78,7 @@ class RecordingCacheTest :
             }
         }
 
-        suspend fun <T> withCache(block: suspend (RecordingCache, DemoStore, Path) -> T): T {
+        suspend fun <T> withCache(block: suspend (RecordingCache, DocumentStore.Collection<Recording>, Path) -> T): T {
             val directory = createTempDirectory("utrecorder-recording-cache-test")
             try {
                 val cache = directory["recordings"].createDirectories()
@@ -91,12 +89,13 @@ class RecordingCacheTest :
                         directories = DirectoriesConfig(ConfigReader.EMPTY, home = home),
                         cache = cache,
                     )
-                val store = DemoStore.open(directory["server.db"], cache)
-                val recordingCache = RecordingCache(store, { identifier, file -> "$baseUrl/$identifier/$file" }, config)
+                val database = DocumentStore.open(directory["server.db"])
                 return try {
-                    block(recordingCache, store, cache)
+                    val recordings = database.collection("recordings", Recording.serializer(), Recording::demoId)
+                    val recordingCache = RecordingCache(recordings, { identifier, file -> "$baseUrl/$identifier/$file" }, config)
+                    block(recordingCache, recordings, cache)
                 } finally {
-                    store.close()
+                    database.close()
                 }
             } finally {
                 directory.deleteRecursively()
@@ -105,27 +104,26 @@ class RecordingCacheTest :
 
         test("file answers null for a recording without a local mp4") {
             withCache { cache, _, _ ->
-                cache.file(Recording(lane = RecordingLane.SHORT)).shouldBeNull()
+                cache.file(Recording(demoId = demo.id, lane = RecordingLane.SHORT)).shouldBeNull()
             }
         }
 
         test("file resolves the recording's file name against the cache directory") {
             withCache { cache, _, cacheDir ->
-                cache.file(Recording(lane = RecordingLane.SHORT, file = "1.mp4")) shouldBe cacheDir["1.mp4"]
+                cache.file(Recording(demoId = demo.id, lane = RecordingLane.SHORT, file = "7f0e2a52.mp4")) shouldBe cacheDir["7f0e2a52.mp4"]
             }
         }
 
-        test("touch sets accessed_at to now and persists it through the store") {
-            withCache { cache, store, _ ->
-                val (_, recording) =
-                    store.insert(demo, Recording(lane = RecordingLane.SHORT, state = RecordingState.RECORDED))
+        test("touch sets accessed_at to now and persists it through the recordings") {
+            withCache { cache, recordings, _ ->
+                val recording = Recording(demoId = demo.id, lane = RecordingLane.SHORT, state = RecordingState.RECORDED)
+                recordings.put(recording)
 
                 val touched = cache.touch(recording)
 
                 touched.accessedAt.shouldNotBeNull()
-                store
-                    .load()
-                    .recordings
+                recordings
+                    .all()
                     .single()
                     .accessedAt shouldBe touched.accessedAt
             }
@@ -133,19 +131,16 @@ class RecordingCacheTest :
 
         test("starting a re-cache downloads the mp4 into the cache directory and sets file and accessed_at") {
             serveBytes(bytes)
-            withCache { cache, store, cacheDir ->
-                val (_, recording) =
-                    store.insert(
-                        demo,
-                        Recording(lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item"),
-                    )
+            withCache { cache, recordings, cacheDir ->
+                val recording = Recording(demoId = demo.id, lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item")
+                recordings.put(recording)
 
                 cache.startRecache(recording)
                 cache.close()
                 cache.run()
 
-                val stored = store.load().recordings.single()
-                stored.file shouldBe "${recording.id}.mp4"
+                val stored = recordings.all().single()
+                stored.file shouldBe "7f0e2a52.mp4"
                 stored.accessedAt.shouldNotBeNull()
                 cacheDir[stored.file!!].readBytes() shouldBe bytes
                 requests shouldBe 1
@@ -154,12 +149,9 @@ class RecordingCacheTest :
 
         test("a second start while one is queued does not start another download") {
             serveBytes(bytes)
-            withCache { cache, store, _ ->
-                val (_, recording) =
-                    store.insert(
-                        demo,
-                        Recording(lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item"),
-                    )
+            withCache { cache, recordings, _ ->
+                val recording = Recording(demoId = demo.id, lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item")
+                recordings.put(recording)
 
                 cache.startRecache(recording)
                 cache.startRecache(recording)
@@ -167,11 +159,10 @@ class RecordingCacheTest :
                 cache.run()
 
                 requests shouldBe 1
-                store
-                    .load()
-                    .recordings
+                recordings
+                    .all()
                     .single()
-                    .file shouldBe "${recording.id}.mp4"
+                    .file shouldBe "7f0e2a52.mp4"
             }
         }
 
@@ -186,24 +177,20 @@ class RecordingCacheTest :
                     exchange.responseBody.use { it.write(bytes) }
                 }
             }
-            withCache { cache, store, cacheDir ->
-                val (_, recording) =
-                    store.insert(
-                        demo,
-                        Recording(lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item"),
-                    )
+            withCache { cache, recordings, cacheDir ->
+                val recording = Recording(demoId = demo.id, lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item")
+                recordings.put(recording)
 
                 coroutineScope {
                     val job = launch { cache.run() }
                     cache.startRecache(recording)
                     withTimeout(5.seconds) { while (attempt < 1) delay(10) }
                     delay(200)
-                    cacheDir["${recording.id}.mp4"].exists() shouldBe false
+                    cacheDir["7f0e2a52.mp4"].exists() shouldBe false
                     cache.startRecache(recording)
                     withTimeout(5.seconds) {
-                        while (store
-                                .load()
-                                .recordings
+                        while (recordings
+                                .all()
                                 .single()
                                 .file == null
                         ) {
@@ -215,32 +202,27 @@ class RecordingCacheTest :
                 }
 
                 attempt shouldBe 2
-                store
-                    .load()
-                    .recordings
+                recordings
+                    .all()
                     .single()
-                    .file shouldBe "${recording.id}.mp4"
-                cacheDir["${recording.id}.mp4"].readBytes() shouldBe bytes
+                    .file shouldBe "7f0e2a52.mp4"
+                cacheDir["7f0e2a52.mp4"].readBytes() shouldBe bytes
             }
         }
 
         test("a failed re-cache leaves no output file in the cache directory") {
             handler = { exchange -> exchange.sendResponseHeaders(500, -1) }
-            withCache { cache, store, cacheDir ->
-                val (_, recording) =
-                    store.insert(
-                        demo,
-                        Recording(lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item"),
-                    )
+            withCache { cache, recordings, cacheDir ->
+                val recording = Recording(demoId = demo.id, lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED, archiveId = "item")
+                recordings.put(recording)
 
                 cache.startRecache(recording)
                 cache.close()
                 cache.run()
 
-                cacheDir["${recording.id}.mp4"].shouldNotExist()
-                store
-                    .load()
-                    .recordings
+                cacheDir["7f0e2a52.mp4"].shouldNotExist()
+                recordings
+                    .all()
                     .single()
                     .file
                     .shouldBeNull()

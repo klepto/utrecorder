@@ -2,10 +2,10 @@ package dev.klepto.utrecorder.server.cache
 
 import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.logger
-import dev.klepto.utrecorder.server.DemoStore
-import dev.klepto.utrecorder.server.Recording
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.archive.InternetArchive
+import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.recording.Recording
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
@@ -14,7 +14,7 @@ import java.nio.file.Path
 import java.time.Instant
 
 /**
- * In-memory index of the cache directory's mp4 files, backed by [DemoStore].
+ * Cache directory of recorded mp4 files, backed by the stored recordings.
  *
  * The path of a cached recording is answered by [file], and every access is recorded with [touch]. A recording
  * without a local mp4 is fetched back from the Internet Archive by [startRecache], which queues the download on a
@@ -22,24 +22,24 @@ import java.time.Instant
  * own channel. [startRecache] does nothing for a recording already queued or downloading, so a second request never
  * starts a second download of the same recording.
  *
- * @property store The store a touch or a completed re-cache is written through.
+ * @property recordings The collection a touch or a completed re-cache is written through.
  * @property downloadUrl Builds the Archive download URL of a file in an item. Production passes
  *   [InternetArchive.downloadUrl]; a test passes a URL pointing at a local server instead.
  * @property config The cache directory downloads land in, and the directories a download's workspace is opened in.
  */
 class RecordingCache(
-    private val store: DemoStore,
+    private val recordings: DocumentStore.Collection<Recording>,
     private val downloadUrl: (identifier: String, file: String) -> String,
     private val config: ServerConfig = ServerConfig(),
 ) {
     constructor(
-        store: DemoStore,
+        recordings: DocumentStore.Collection<Recording>,
         archive: InternetArchive,
         config: ServerConfig = ServerConfig(),
-    ) : this(store, archive::downloadUrl, config)
+    ) : this(recordings, archive::downloadUrl, config)
 
     private val channel = Channel<Recording>(Channel.UNLIMITED)
-    private val recaching = mutableSetOf<Long>()
+    private val recaching = mutableSetOf<String>()
     private val mutex = Mutex()
 
     /**
@@ -48,11 +48,11 @@ class RecordingCache(
     fun file(recording: Recording): Path? = recording.file?.let(config.cache::resolve)
 
     /**
-     * Sets [recording]'s [Recording.accessedAt] to now, in [store], and returns the updated recording.
+     * Sets [recording]'s [Recording.accessedAt] to now, in [recordings], and returns the updated recording.
      */
     suspend fun touch(recording: Recording): Recording {
         val touched = recording.copy(accessedAt = Instant.now())
-        store.update(touched)
+        recordings.put(touched)
         return touched
     }
 
@@ -60,9 +60,17 @@ class RecordingCache(
      * Queues a re-cache of [recording] from the Archive, unless one is already queued or running for it.
      */
     suspend fun startRecache(recording: Recording) {
-        val started = mutex.withLock { recaching.add(recording.id) }
+        val started = mutex.withLock { recaching.add(recording.demoId) }
         if (!started) return
         channel.send(recording)
+    }
+
+    /**
+     * Returns the Archive URL [recording]'s mp4 is downloaded from.
+     */
+    fun downloadUrl(recording: Recording): String {
+        val identifier = requireNotNull(recording.archiveId) { "Recording of demo ${recording.demoId} has no archive id" }
+        return downloadUrl(identifier, fileName(recording))
     }
 
     /**
@@ -83,19 +91,21 @@ class RecordingCache(
 
     private suspend fun recache(recording: Recording) {
         try {
-            val identifier = requireNotNull(recording.archiveId) { "recording ${recording.id} has no archive id" }
-            val file = "${recording.id}.mp4"
-            val url = downloadUrl(identifier, file)
+            val file = fileName(recording)
+            val url = downloadUrl(recording)
             Downloader(url, recording.md5, directories = config.directories).download(config.cache.resolve(file))
-            store.update(recording.copy(file = file, accessedAt = Instant.now()))
+            val cached = recording.copy(file = file, accessedAt = Instant.now())
+            recordings.put(cached)
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {
-            log.warn(failure) { "Failed to re-cache recording ${recording.id}" }
+            log.warn(failure) { "Failed to re-cache the recording of demo ${recording.demoId}" }
         } finally {
-            mutex.withLock { recaching.remove(recording.id) }
+            mutex.withLock { recaching.remove(recording.demoId) }
         }
     }
+
+    private fun fileName(recording: Recording): String = "${recording.demoId}.mp4"
 
     companion object {
         private val log = logger<RecordingCache>()

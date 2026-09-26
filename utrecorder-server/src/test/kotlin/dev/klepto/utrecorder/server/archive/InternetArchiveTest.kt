@@ -22,14 +22,12 @@ class InternetArchiveTest :
     FunSpec({
         val demo =
             Demo(
-                id = 1,
-                sourceId = "7f0e2a52",
+                id = "7f0e2a52",
                 map = "CTF-BT-Maverick",
                 player = "klepto",
                 capTime = 83.seconds,
                 duration = 4.minutes,
                 addedAt = Instant.parse("2026-09-01T12:00:00Z"),
-                recordingId = 1,
             )
         val config =
             ArchiveConfig(
@@ -42,7 +40,7 @@ class InternetArchiveTest :
 
         test("builds the identifier from the prefix and the source id") {
             val archive = InternetArchive(config, MockEngine { respond("") })
-            archive.identifier(demo.sourceId) shouldBe "utrecorder-7f0e2a52"
+            archive.identifier(demo.id) shouldBe "utrecorder-7f0e2a52"
         }
 
         test("builds the download url") {

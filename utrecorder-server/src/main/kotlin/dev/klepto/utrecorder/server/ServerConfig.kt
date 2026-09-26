@@ -19,7 +19,7 @@ import kotlin.time.Duration.Companion.minutes
  * @param reader The source of the `server.*` keys and of the keys every nested configuration reads.
  * @property directories The application directories the database and the cache directory default to.
  * @property port The HTTP port the server listens on.
- * @property database The SQLite database file.
+ * @property database The SQLite file of the demos, recordings and cleanups.
  * @property cache The directory of recorded mp4 files.
  * @property longThreshold The demo duration from which a demo is recorded in the long lane.
  * @property maxAttempts The number of recording attempts after which a recording fails for good.
@@ -34,7 +34,7 @@ class ServerConfig(
     reader: ConfigReader = SystemConfigReader(),
     val directories: DirectoriesConfig = DirectoriesConfig(reader),
     val port: Int = reader.get("server.port", 8080, String::toInt),
-    val database: Path = reader.get("server.database", directories.home["server.db"], String::toAbsolutePath),
+    val database: Path = reader.get("server.database", directories.home["database"]["server.db"], String::toAbsolutePath),
     val cache: Path = reader.get("server.cache", directories.home["recordings"], String::toAbsolutePath),
     val longThreshold: Duration = reader.duration("server.long_threshold", 5.minutes),
     val maxAttempts: Int = reader.get("server.max_attempts", 3, String::toInt),

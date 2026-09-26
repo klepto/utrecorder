@@ -14,6 +14,7 @@ kotest = "6.2.4"
 ffmpeg = "8.1.2-1.5.14"
 javacpp = "1.5.14"
 kotlinx-serialization = "1.11.0"
+node-gradle = "7.1.0"
 
 [libraries]
 loop-fs-iso = { module = "com.github.stephenc.java-iso-tools:loop-fs-iso-impl", version.ref = "loop-fs" }
@@ -25,6 +26,8 @@ ktor-client-cio = { module = "io.ktor:ktor-client-cio", version.ref = "ktor" }
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-partial-content = { module = "io.ktor:ktor-server-partial-content", version.ref = "ktor" }
+ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
 kotlin-logging = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlin-logging" }
@@ -33,12 +36,14 @@ kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotl
 kotest-runner-junit5 = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
 kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+kotlin-serialization-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-serialization", version.ref = "kotlin" }
 ktlint-gradle-plugin = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlint-plugin" }
+node-gradle-plugin = { module = "com.github.node-gradle:gradle-node-plugin", version.ref = "node-gradle" }
 ffmpeg = { module = "org.bytedeco:ffmpeg", version.ref = "ffmpeg" }
 javacpp = { module = "org.bytedeco:javacpp", version.ref = "javacpp" }
 
 [bundles]
 archives = ["loop-fs-iso", "commons-compress"]
 ktor-client = ["ktor-client-core", "ktor-client-cio"]
-ktor-server = ["ktor-server-core", "ktor-server-cio"]
+ktor-server = ["ktor-server-core", "ktor-server-cio", "ktor-server-partial-content"]
 kotest = ["kotest-runner-junit5", "kotest-assertions-core"]

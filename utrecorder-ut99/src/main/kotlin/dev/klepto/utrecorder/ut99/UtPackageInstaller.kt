@@ -132,7 +132,7 @@ class UtPackageInstaller(
         val extension = servedExtension(base, required.name) ?: return null
         val url = redirectUrl(base, required.name, extension)
         val fileName = "${required.name}.$extension"
-        log.info { "Fetching ${required.name} from $url" }
+        log.debug { "Fetching ${required.name} from $url" }
 
         return workspace("uz-installer", config = config.directoriesConfig) { workspace ->
             val archive = workspace["$fileName.uz"]

@@ -1,13 +1,15 @@
 package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.ProgressListener
+import dev.klepto.utrecorder.common.asDownloadListener
+import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.part
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
 import dev.klepto.utrecorder.core.RecorderStage.PreparingInstallation
 import dev.klepto.utrecorder.core.RecorderStage.ResolvingPackages
-import dev.klepto.utrecorder.core.demo.DemoFetcher
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
 import dev.klepto.utrecorder.core.demo.DemoPlaybackResources
@@ -18,9 +20,12 @@ import dev.klepto.utrecorder.ut99.UtMapInstaller
 import dev.klepto.utrecorder.ut99.UtPackageException
 import dev.klepto.utrecorder.ut99.UtPackageInstaller
 import dev.klepto.utrecorder.ut99.demo.UtDemo
+import java.net.URI
 import java.nio.file.Path
+import kotlin.io.path.div
 import kotlin.io.path.name
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * Recorder of Unreal Tournament demos in one installation.
@@ -85,9 +90,24 @@ class Recorder(
         onProgress: (RecorderProgress) -> Unit = {},
     ): Path =
         workspace("record", config = directories) {
-            val demo = DemoFetcher(directories).fetch(url, directory, FetchingDemo.start(onProgress))
+            val demo = downloadDemo(url, FetchingDemo.start(onProgress))
             recordDemo(demo, name ?: demo.name.substringBeforeLast(DEMO_EXTENSION), onProgress)
         }
+
+    /**
+     * Returns the demo at [url] downloaded into this workspace, named after the last segment of the path of [url].
+     *
+     * [onProgress] receives how much of the demo is downloaded, and `1.0` once the download is done.
+     */
+    private suspend fun Workspace.downloadDemo(
+        url: String,
+        onProgress: ProgressListener,
+    ): Path {
+        val demo = directory / URI(url).path.substringAfterLast('/')
+        Downloader(url, timeout = 10.minutes, directories = directories).download(demo, onProgress.asDownloadListener())
+        onProgress(1.0)
+        return demo
+    }
 
     /**
      * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo].

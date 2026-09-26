@@ -58,7 +58,7 @@ class ServerConfigTest :
 
             with(ServerConfig(reader)) {
                 port shouldBe 8080
-                database shouldBe home.resolve("server.db")
+                database shouldBe home.resolve("database").resolve("server.db")
                 cache shouldBe home.resolve("recordings")
                 longThreshold shouldBe 5.minutes
                 maxAttempts shouldBe 3

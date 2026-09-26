@@ -59,6 +59,8 @@
 #define GL_ENTRY
 #endif
 
+/* SDL_GL_GetProcAddress, through which the Linux port resolves OpenGL entry points. */
+typedef void *(*GetProcAddressFunction)(const char *);
 typedef void(GL_ENTRY *GetIntegervFunction)(unsigned int, int *);
 typedef void(GL_ENTRY *ReadPixelsFunction)(int, int, int, int, unsigned int, unsigned int, void *);
 
@@ -506,7 +508,6 @@ typedef struct {
 } Time;
 
 typedef Time (*TimeFunction)(void);
-typedef void *(*GetProcAddressFunction)(const char *);
 typedef double (*SecondsFunction)(void);
 
 /* The Core library, opened on the first export not found in the global scope. */

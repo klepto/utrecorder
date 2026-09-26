@@ -1,11 +1,17 @@
-package dev.klepto.utrecorder.server
+@file:UseSerializers(InstantSerializer::class)
 
+package dev.klepto.utrecorder.server.recording
+
+import dev.klepto.utrecorder.server.Demo
+import dev.klepto.utrecorder.server.database.InstantSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.UseSerializers
 import java.time.Instant
 
 /**
  * The mp4 recording of one [Demo], from the first attempt until the mp4 is archived or expired.
  *
- * @property id The local key. `0` for a recording that is not stored yet.
+ * @property demoId The [Demo.id] of the recorded demo.
  * @property lane The queue lane the demo is recorded in.
  * @property state The stage of the recording.
  * @property attempts The number of recording attempts made.
@@ -18,8 +24,9 @@ import java.time.Instant
  * @property archivedAt The time the mp4 was archived, or `null` until it is archived.
  * @property accessedAt The time the mp4 was last recorded, served or cached again, or `null` if never.
  */
+@Serializable
 data class Recording(
-    val id: Long = 0,
+    val demoId: String,
     val lane: RecordingLane,
     val state: RecordingState = RecordingState.PENDING,
     val attempts: Int = 0,
@@ -32,61 +39,3 @@ data class Recording(
     val archivedAt: Instant? = null,
     val accessedAt: Instant? = null,
 )
-
-/**
- * Stage of a [Recording].
- *
- * @property value The name the state is stored under.
- */
-enum class RecordingState(
-    val value: String,
-) {
-    /** Waiting in the queue for its next attempt. */
-    PENDING("pending"),
-
-    /** Being recorded. */
-    RECORDING("recording"),
-
-    /** Recorded to a cached mp4 that is not archived yet. */
-    RECORDED("recorded"),
-
-    /** Uploaded to the Internet Archive. */
-    ARCHIVED("archived"),
-
-    /** Out of attempts. */
-    FAILED("failed"),
-
-    /** Removed from the cache without ever being archived. */
-    EXPIRED("expired"),
-    ;
-
-    companion object {
-        /**
-         * Returns the state stored under [value].
-         */
-        fun of(value: String): RecordingState = entries.first { it.value == value }
-    }
-}
-
-/**
- * Queue lane a [Recording] waits in, chosen by the length of its demo.
- *
- * @property value The name the lane is stored under.
- */
-enum class RecordingLane(
-    val value: String,
-) {
-    /** Demos shorter than the long threshold. */
-    SHORT("short"),
-
-    /** Demos at least as long as the long threshold. */
-    LONG("long"),
-    ;
-
-    companion object {
-        /**
-         * Returns the lane stored under [value].
-         */
-        fun of(value: String): RecordingLane = entries.first { it.value == value }
-    }
-}

@@ -1,10 +1,10 @@
 package dev.klepto.utrecorder.server.cache
 
 import dev.klepto.utrecorder.server.CleanupService
-import dev.klepto.utrecorder.server.DemoStore
-import dev.klepto.utrecorder.server.Recording
-import dev.klepto.utrecorder.server.RecordingState
 import dev.klepto.utrecorder.server.ServerConfig
+import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.recording.Recording
+import dev.klepto.utrecorder.server.recording.RecordingState
 import kotlinx.coroutines.delay
 import java.time.Instant
 import kotlin.time.Duration.Companion.days
@@ -20,12 +20,12 @@ import kotlin.time.toJavaDuration
  *   [RecordingState.EXPIRED], because it has no other copy.
  * - [RecordingState.RECORDED] with the uploader enabled: kept until it is archived.
  *
- * @property store The store recordings are read from and eviction is written through.
+ * @property recordings The collection recordings are read from and eviction is written through.
  * @property cleanup The service the mp4 of an evicted recording is deleted through.
  * @property config The cache directory a recording's mp4 is resolved against, the archive settings and the TTL.
  */
 class CacheEvictor(
-    private val store: DemoStore,
+    private val recordings: DocumentStore.Collection<Recording>,
     private val cleanup: CleanupService,
     private val config: ServerConfig = ServerConfig(),
 ) {
@@ -34,9 +34,8 @@ class CacheEvictor(
      */
     suspend fun pass() {
         val cutoff = Instant.now().minus(config.cacheTtl.toJavaDuration())
-        store
-            .load()
-            .recordings
+        recordings
+            .all()
             .filter { it.file != null }
             .filter { recording -> recording.accessedAt?.isBefore(cutoff) == true }
             .forEach { evictIfDue(it) }
@@ -66,12 +65,12 @@ class CacheEvictor(
     ) {
         val file = requireNotNull(recording.file)
         cleanup.delete(config.cache.resolve(file))
-        store.update(
+        val evicted =
             recording.copy(
                 file = null,
                 state = if (expire) RecordingState.EXPIRED else recording.state,
-            ),
-        )
+            )
+        recordings.put(evicted)
     }
 
     companion object {

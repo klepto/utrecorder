@@ -4,11 +4,11 @@ import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.server.ArchiveConfig
 import dev.klepto.utrecorder.server.Demo
-import dev.klepto.utrecorder.server.DemoStore
-import dev.klepto.utrecorder.server.Recording
-import dev.klepto.utrecorder.server.RecordingLane
-import dev.klepto.utrecorder.server.RecordingState
 import dev.klepto.utrecorder.server.ServerConfig
+import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.recording.Recording
+import dev.klepto.utrecorder.server.recording.RecordingLane
+import dev.klepto.utrecorder.server.recording.RecordingState
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
@@ -36,14 +36,12 @@ class UploaderTest :
     FunSpec({
         val demo =
             Demo(
-                id = 0,
-                sourceId = "7f0e2a52",
+                id = "7f0e2a52",
                 map = "CTF-BT-Maverick",
                 player = "klepto",
                 capTime = 83.seconds,
                 duration = 4.minutes,
                 addedAt = Instant.parse("2026-09-01T12:00:00Z"),
-                recordingId = 0,
             )
         val md5 = "d41d8cd98f00b204e9800998ecf8427e"
         val enabledConfig =
@@ -69,7 +67,7 @@ class UploaderTest :
         suspend fun withUploader(
             engine: MockEngine,
             archiveConfig: ArchiveConfig,
-            block: suspend (Uploader, DemoStore, Path) -> Unit,
+            block: suspend (Uploader, DocumentStore.Collection<Recording>, Path) -> Unit,
         ) {
             val directory = createTempDirectory("utrecorder-uploader-test")
             try {
@@ -81,11 +79,12 @@ class UploaderTest :
                         cache = cache,
                         archive = archiveConfig,
                     )
-                val store = DemoStore.open(directory["server.db"], cache)
+                val database = DocumentStore.open(directory["server.db"])
                 try {
-                    block(Uploader(InternetArchive(archiveConfig, engine), store, config), store, cache)
+                    val recordings = database.collection("recordings", Recording.serializer(), Recording::demoId)
+                    block(Uploader(InternetArchive(archiveConfig, engine), recordings, config), recordings, cache)
                 } finally {
-                    store.close()
+                    database.close()
                 }
             } finally {
                 directory.deleteRecursively()
@@ -98,20 +97,24 @@ class UploaderTest :
                     MockEngine { request ->
                         if (request.method == HttpMethod.Put) respond("") else matchingMetadataResponse()
                     }
-                withUploader(engine, enabledConfig) { uploader, store, cache ->
+                withUploader(engine, enabledConfig) { uploader, recordings, cache ->
                     cache["demo.mp4"].writeText("mp4")
-                    val (storedDemo, recording) =
-                        store.insert(
-                            demo,
-                            Recording(lane = RecordingLane.SHORT, state = RecordingState.RECORDED, file = "demo.mp4", md5 = md5),
+                    val recording =
+                        Recording(
+                            demoId = demo.id,
+                            lane = RecordingLane.SHORT,
+                            state = RecordingState.RECORDED,
+                            file = "demo.mp4",
+                            md5 = md5,
                         )
+                    recordings.put(recording)
 
-                    uploader.send(storedDemo, recording)
+                    uploader.send(demo, recording)
                     uploader.isEmpty shouldBe false
                     uploader.close()
                     uploader.run()
 
-                    val archived = store.load().recordings.single()
+                    val archived = recordings.all().single()
                     archived.state shouldBe RecordingState.ARCHIVED
                     archived.archiveId shouldBe "utrecorder-7f0e2a52"
                     archived.collection shouldBe "test_collection"
@@ -132,22 +135,25 @@ class UploaderTest :
                             matchingMetadataResponse()
                         }
                     }
-                withUploader(engine, enabledConfig) { uploader, store, cache ->
+                withUploader(engine, enabledConfig) { uploader, recordings, cache ->
                     cache["demo.mp4"].writeText("mp4")
-                    val (storedDemo, recording) =
-                        store.insert(
-                            demo,
-                            Recording(lane = RecordingLane.SHORT, state = RecordingState.RECORDED, file = "demo.mp4", md5 = md5),
+                    val recording =
+                        Recording(
+                            demoId = demo.id,
+                            lane = RecordingLane.SHORT,
+                            state = RecordingState.RECORDED,
+                            file = "demo.mp4",
+                            md5 = md5,
                         )
+                    recordings.put(recording)
 
-                    uploader.send(storedDemo, recording)
+                    uploader.send(demo, recording)
                     uploader.close()
                     uploader.run()
 
                     putAttempts shouldBe 3
-                    store
-                        .load()
-                        .recordings
+                    recordings
+                        .all()
                         .single()
                         .state shouldBe RecordingState.ARCHIVED
                 }
@@ -167,22 +173,25 @@ class UploaderTest :
                             if (getAttempts < 3) emptyMetadataResponse() else matchingMetadataResponse()
                         }
                     }
-                withUploader(engine, enabledConfig) { uploader, store, cache ->
+                withUploader(engine, enabledConfig) { uploader, recordings, cache ->
                     cache["demo.mp4"].writeText("mp4")
-                    val (storedDemo, recording) =
-                        store.insert(
-                            demo,
-                            Recording(lane = RecordingLane.SHORT, state = RecordingState.RECORDED, file = "demo.mp4", md5 = md5),
+                    val recording =
+                        Recording(
+                            demoId = demo.id,
+                            lane = RecordingLane.SHORT,
+                            state = RecordingState.RECORDED,
+                            file = "demo.mp4",
+                            md5 = md5,
                         )
+                    recordings.put(recording)
 
-                    uploader.send(storedDemo, recording)
+                    uploader.send(demo, recording)
                     uploader.close()
                     uploader.run()
 
                     getAttempts shouldBe 3
-                    store
-                        .load()
-                        .recordings
+                    recordings
+                        .all()
                         .single()
                         .state shouldBe RecordingState.ARCHIVED
                 }
@@ -205,18 +214,28 @@ class UploaderTest :
                             }
                         }
                     }
-                withUploader(engine, enabledConfig) { uploader, store, cache ->
+                withUploader(engine, enabledConfig) { uploader, recordings, cache ->
                     cache["demo.mp4"].writeText("mp4")
-                    val (firstDemo, firstRecording) =
-                        store.insert(
-                            demo,
-                            Recording(lane = RecordingLane.SHORT, state = RecordingState.RECORDED, file = "demo.mp4", md5 = md5),
+                    val firstDemo = demo
+                    val firstRecording =
+                        Recording(
+                            demoId = firstDemo.id,
+                            lane = RecordingLane.SHORT,
+                            state = RecordingState.RECORDED,
+                            file = "demo.mp4",
+                            md5 = md5,
                         )
-                    val (secondDemo, secondRecording) =
-                        store.insert(
-                            demo.copy(sourceId = "9a1b3c4d"),
-                            Recording(lane = RecordingLane.SHORT, state = RecordingState.RECORDED, file = "demo.mp4", md5 = md5),
+                    recordings.put(firstRecording)
+                    val secondDemo = demo.copy(id = "9a1b3c4d")
+                    val secondRecording =
+                        Recording(
+                            demoId = secondDemo.id,
+                            lane = RecordingLane.SHORT,
+                            state = RecordingState.RECORDED,
+                            file = "demo.mp4",
+                            md5 = md5,
                         )
+                    recordings.put(secondRecording)
 
                     uploader.send(firstDemo, firstRecording)
                     uploader.send(secondDemo, secondRecording)
@@ -224,7 +243,7 @@ class UploaderTest :
                     uploader.run()
 
                     getAttempts shouldBe 4
-                    store.load().recordings.map { it.state } shouldBe
+                    recordings.all().map { it.state } shouldBe
                         listOf(RecordingState.ARCHIVED, RecordingState.ARCHIVED)
                 }
                 currentTime shouldBe 6_000_000L
@@ -234,22 +253,25 @@ class UploaderTest :
         test("a disabled uploader never calls the engine") {
             runTest {
                 val engine = MockEngine { error("the disabled uploader must never call the engine") }
-                withUploader(engine, disabledConfig) { uploader, store, cache ->
+                withUploader(engine, disabledConfig) { uploader, recordings, cache ->
                     cache["demo.mp4"].writeText("mp4")
-                    val (storedDemo, recording) =
-                        store.insert(
-                            demo,
-                            Recording(lane = RecordingLane.SHORT, state = RecordingState.RECORDED, file = "demo.mp4", md5 = md5),
+                    val recording =
+                        Recording(
+                            demoId = demo.id,
+                            lane = RecordingLane.SHORT,
+                            state = RecordingState.RECORDED,
+                            file = "demo.mp4",
+                            md5 = md5,
                         )
+                    recordings.put(recording)
 
-                    uploader.send(storedDemo, recording)
+                    uploader.send(demo, recording)
                     uploader.isEmpty shouldBe true
                     uploader.close()
                     uploader.run()
 
-                    store
-                        .load()
-                        .recordings
+                    recordings
+                        .all()
                         .single()
                         .state shouldBe RecordingState.RECORDED
                 }

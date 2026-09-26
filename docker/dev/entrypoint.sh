@@ -4,7 +4,8 @@ set -e
 
 # Gradle writes build/, .gradle/ and .kotlin/ next to the sources, so it builds a copy on the container's filesystem
 # instead of the checkout, where the Linux outputs would overwrite the Windows ones. The excludes are anchored to the
-# root and to the projects one level under it, because sources hold a package named build.
+# root and to the projects one level under it, because sources hold a package named build. node_modules/ is excluded
+# too, because npm installs native packages for the platform it runs on.
 rsync -a --delete \
     --exclude '/.git/' \
     --exclude '/.idea/' \
@@ -12,6 +13,7 @@ rsync -a --delete \
     --exclude '/build/' --exclude '/*/build/' \
     --exclude '/.gradle/' --exclude '/*/.gradle/' \
     --exclude '/.kotlin/' --exclude '/*/.kotlin/' \
+    --exclude '/*/node_modules/' \
     /source/ /utrecorder/
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime}"

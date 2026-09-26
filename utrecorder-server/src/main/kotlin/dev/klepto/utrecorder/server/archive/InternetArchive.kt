@@ -42,10 +42,10 @@ class InternetArchive(
         }
 
     /**
-     * Returns the Archive item identifier of a demo whose source id is [sourceId]: [ArchiveConfig.prefix] followed by
-     * a hyphen and the source id.
+     * Returns the Archive item identifier of the demo [demoId]: [ArchiveConfig.prefix] followed by a hyphen and the
+     * demo id.
      */
-    fun identifier(sourceId: String): String = "${config.prefix}-$sourceId"
+    fun identifier(demoId: String): String = "${config.prefix}-$demoId"
 
     /**
      * Returns the URL [file] of item [identifier] is downloaded from.

@@ -2,11 +2,13 @@ package dev.klepto.utrecorder.server.archive
 
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.server.Demo
-import dev.klepto.utrecorder.server.DemoStore
-import dev.klepto.utrecorder.server.Recording
-import dev.klepto.utrecorder.server.RecordingState
 import dev.klepto.utrecorder.server.ServerConfig
+import dev.klepto.utrecorder.server.archive.Uploader.Companion.MAX_BACKOFF
+import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.recording.Recording
+import dev.klepto.utrecorder.server.recording.RecordingState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import java.time.Instant
@@ -19,19 +21,19 @@ import kotlin.time.Duration.Companion.minutes
  * Receives recordings on a channel with [send], and processes them in [run] until [close] ends the channel. A failed
  * upload or metadata check never fails permanently: it is logged and retried with exponential backoff capped at
  * [MAX_BACKOFF], so one failing recording never stops the recordings queued behind it. A
- * recording is written [RecordingState.ARCHIVED] through [store] only once the Archive's metadata confirms the file
+ * recording is written [RecordingState.ARCHIVED] through [recordings] only once the Archive's metadata confirms the file
  * with a matching checksum, because a successful `PUT` only means the file is staged.
  *
  * With [ServerConfig.archive] disabled, [send] and [run] are no-ops: nothing is ever queued, and [archive] is never
  * called.
  *
  * @property archive The Internet Archive client the uploads and metadata checks run through.
- * @property store The store a recording is written [RecordingState.ARCHIVED] through.
+ * @property recordings The collection a recording is written [RecordingState.ARCHIVED] through.
  * @property config The cache directory recordings are resolved against, and the Archive settings.
  */
 class Uploader(
     private val archive: InternetArchive,
-    private val store: DemoStore,
+    private val recordings: DocumentStore.Collection<Recording>,
     private val config: ServerConfig = ServerConfig(),
 ) {
     private val channel = Channel<Pair<Demo, Recording>>(Channel.UNLIMITED)
@@ -39,6 +41,7 @@ class Uploader(
     /**
      * Whether the channel holds no recording waiting to be uploaded.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     val isEmpty: Boolean
         get() = channel.isEmpty
 
@@ -75,22 +78,22 @@ class Uploader(
         demo: Demo,
         recording: Recording,
     ) {
-        val identifier = archive.identifier(demo.sourceId)
-        val file = requireNotNull(recording.file) { "recording ${recording.id} has no file to archive" }
-        val md5 = requireNotNull(recording.md5) { "recording ${recording.id} has no md5 to archive" }
+        val identifier = archive.identifier(demo.id)
+        val file = requireNotNull(recording.file) { "Recording of demo ${demo.id} has no file to archive" }
+        val md5 = requireNotNull(recording.md5) { "Recording of demo ${demo.id} has no md5 to archive" }
         val path = config.cache.resolve(file)
 
         retryingOnFailure { archive.upload(identifier, path, demo) }
         retryingUntilTrue { archive.isArchived(identifier, file, md5) }
 
-        store.update(
+        val archived =
             recording.copy(
                 state = RecordingState.ARCHIVED,
                 archiveId = identifier,
                 collection = config.archive.collection,
                 archivedAt = Instant.now(),
-            ),
-        )
+            )
+        recordings.put(archived)
     }
 
     private suspend fun retryingOnFailure(action: suspend () -> Unit) {

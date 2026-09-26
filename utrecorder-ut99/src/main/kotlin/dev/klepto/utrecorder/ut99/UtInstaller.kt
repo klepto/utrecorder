@@ -49,12 +49,12 @@ class UtInstaller(
      */
     override suspend fun install(onProgress: ProgressListener) {
         if (isInstalled()) {
-            log.info { "UT installation detected, skipping..." }
+            log.debug { "UT installation detected, skipping..." }
             onProgress(1.0)
             return
         }
 
-        log.info { "Installing UT..." }
+        log.debug { "Installing UT..." }
         workspace("ut-installer") {
             installIso(onProgress.part(0.0, 0.8))
             installPatch(onProgress.part(0.8, 1.0))
@@ -62,7 +62,7 @@ class UtInstaller(
             withContext(Dispatchers.IO) { versionFile.writeText(config.patchFileName) }
         }
         onProgress(1.0)
-        log.info { "UT installation complete" }
+        log.debug { "UT installation complete" }
     }
 
     /**
@@ -76,7 +76,7 @@ class UtInstaller(
         val downloader = Downloader(config.isoUrl, config.isoMd5, directories = config.directoriesConfig)
         downloader.download(isoPath, onProgress.part(0.0, 0.75).asDownloadListener())
 
-        log.info { "Extracting UT iso..." }
+        log.debug { "Extracting UT iso..." }
         isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }.forEach(::track)
 
         val system400 = directory[System400]
@@ -93,7 +93,7 @@ class UtInstaller(
         val downloader = Downloader(patchUrl, directories = config.directoriesConfig)
         downloader.download(patchPath, onProgress.part(0.0, 0.5).asDownloadListener())
 
-        log.info { "Extracting UT patch..." }
+        log.debug { "Extracting UT patch..." }
         patchPath.extract(directory).forEach(::track)
         onProgress(1.0)
     }

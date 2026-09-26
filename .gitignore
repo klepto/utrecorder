@@ -49,3 +49,7 @@ bin/
 ### utrecorder ###
 .utrecorder/*
 !.utrecorder/packages/
+
+### utrecorder-web ###
+# Node and npm are downloaded by the node-gradle plugin into the root .gradle/, which is ignored above.
+utrecorder-web/node_modules/

@@ -5,14 +5,12 @@ import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.core.RecorderProgress
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.server.ArchiveConfig
+import dev.klepto.utrecorder.server.Cleanup
 import dev.klepto.utrecorder.server.CleanupService
 import dev.klepto.utrecorder.server.Demo
-import dev.klepto.utrecorder.server.DemoStore
-import dev.klepto.utrecorder.server.Recording
-import dev.klepto.utrecorder.server.RecordingLane
-import dev.klepto.utrecorder.server.RecordingState
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.archive.InternetArchive
+import dev.klepto.utrecorder.server.database.DocumentStore
 import dev.klepto.utrecorder.ut99.UtPackageException
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -46,19 +44,17 @@ class LaneTest :
     FunSpec({
         val demo =
             Demo(
-                id = 0,
-                sourceId = "7f0e2a52",
+                id = "7f0e2a52",
                 map = "CTF-BT-Maverick",
                 player = "klepto",
                 capTime = 83.seconds,
                 duration = 4.minutes,
                 addedAt = Instant.parse("2026-09-01T12:00:00Z"),
-                recordingId = 0,
             )
 
         class Harness(
             val directory: Path,
-            val store: DemoStore,
+            val recordings: DocumentStore.Collection<Recording>,
             val queue: RecordingQueue,
             val config: ServerConfig,
             val sent: MutableList<Recording>,
@@ -67,12 +63,13 @@ class LaneTest :
             val workspace: Path = directory["workspace"]
 
             suspend fun enqueue(demo: Demo): Recording {
-                val (storedDemo, recording) = store.insert(demo, Recording(lane = RecordingLane.SHORT))
-                queue.enqueue(storedDemo to recording)
+                val recording = Recording(demoId = demo.id, lane = RecordingLane.SHORT)
+                recordings.put(recording)
+                queue.enqueue(demo to recording)
                 return recording
             }
 
-            suspend fun stored(recording: Recording): Recording = store.load().recordings.single { it.id == recording.id }
+            suspend fun stored(recording: Recording): Recording = recordings.all().single { it.demoId == recording.demoId }
         }
 
         suspend fun withLane(
@@ -105,18 +102,20 @@ class LaneTest :
                 MockEngine {
                     respond(metadata, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
                 }
-            val store = DemoStore.open(config.database, cache)
+            val database = DocumentStore.open(config.database)
             try {
+                val recordings = database.collection("recordings", Recording.serializer(), Recording::demoId)
+                val cleanups = database.collection("cleanups", Cleanup.serializer()) { it.path.toString() }
                 val queue = RecordingQueue()
                 val sent = mutableListOf<Recording>()
                 val urls = mutableListOf<String>()
-                val fixture = Harness(directory, store, queue, config, sent, urls)
+                val fixture = Harness(directory, recordings, queue, config, sent, urls)
                 val lane =
                     Lane(
                         RecordingLane.SHORT,
                         queue,
-                        store,
-                        CleanupService(store),
+                        recordings,
+                        CleanupService(cleanups),
                         InternetArchive(archiveConfig, engine),
                         upload = { _, recording -> sent += recording },
                         config = config,
@@ -126,7 +125,7 @@ class LaneTest :
                     }
                 fixture.block(lane)
             } finally {
-                store.close()
+                database.close()
                 directory.deleteRecursively()
             }
         }
@@ -140,11 +139,11 @@ class LaneTest :
                 urls shouldBe listOf("http://demos.test/7f0e2a52")
                 val stored = stored(recording)
                 stored.state shouldBe RecordingState.RECORDED
-                stored.file shouldBe "${recording.id}.mp4"
+                stored.file shouldBe "7f0e2a52.mp4"
                 stored.md5 shouldBe "8d777f385d3dfec8815d20f7496026dc"
                 stored.recordedAt.shouldNotBeNull()
                 stored.accessedAt shouldBe stored.recordedAt
-                config.cache["${recording.id}.mp4"].readText() shouldBe "data"
+                config.cache["7f0e2a52.mp4"].readText() shouldBe "data"
                 workspace.exists() shouldBe false
                 sent shouldBe listOf(stored)
             }
@@ -229,7 +228,7 @@ class LaneTest :
         }
 
         test("writes a recording the Archive already lists archived without recording it") {
-            withLane(metadata = """{"files":[{"name":"1.mp4","md5":"abc"}]}""", archiveEnabled = true) { lane ->
+            withLane(metadata = """{"files":[{"name":"7f0e2a52.mp4","md5":"abc"}]}""", archiveEnabled = true) { lane ->
                 val recording = enqueue(demo)
 
                 lane.recordNext()

@@ -1,5 +1,6 @@
 plugins {
     id("utrecorder.kotlin-application")
+    id("utrecorder.kotlin-serialization")
 }
 
 dependencies {
@@ -12,6 +13,7 @@ dependencies {
     implementation(projects.utrecorderCore)
     implementation(projects.utrecorderUt99)
     testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotlinx.coroutines.test)
 }
 
