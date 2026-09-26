@@ -7,7 +7,7 @@ import dev.klepto.utrecorder.common.ProgressListener
  */
 enum class RecorderStage {
     /**
-     * The demo is downloaded into the demo cache.
+     * The demo is downloaded into the recording's workspace.
      */
     FetchingDemo,
 

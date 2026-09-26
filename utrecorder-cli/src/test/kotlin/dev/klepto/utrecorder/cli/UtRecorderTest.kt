@@ -41,7 +41,7 @@ class UtRecorderTest :
             shouldThrow<Exception> { UtRecorder.main("http://127.0.0.1:1/demos/never.dem", directories) }
         }
 
-        test("main keeps the download workspace when it is cancelled during the fetch") {
+        test("main keeps the recording's workspace when it is cancelled during the fetch") {
             directories.workspace.toFile().deleteRecursively()
             val requestReceived = CompletableDeferred<Unit>()
             val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
@@ -64,7 +64,7 @@ class UtRecorderTest :
                     .listDirectoryEntries()
                     .single()
                     .fileName
-                    .toString() shouldStartWith "download-"
+                    .toString() shouldStartWith "record-"
             } finally {
                 server.stop(0)
             }
