@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.Installer
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.http.encodeUrlPathSegment
@@ -57,12 +58,12 @@ class UtPackageInstaller(
     /**
      * Resolves the packages one after another, reporting the share of packages resolved to [onProgress].
      */
-    override suspend fun install(onProgress: ProgressListener) {
+    override suspend fun install(onProgress: ProgressListener<Unit>) {
         packages.forEachIndexed { index, required ->
             install(required)
-            onProgress((index + 1).toDouble() / packages.size)
+            onProgress(Progress((index + 1).toDouble() / packages.size))
         }
-        onProgress(1.0)
+        onProgress(Progress(1.0))
     }
 
     /**

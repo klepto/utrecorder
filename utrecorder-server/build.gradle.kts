@@ -18,5 +18,5 @@ dependencies {
 }
 
 application {
-    mainClass = "dev.klepto.utrecorder.server.UtRecorderServer"
+    mainClass = "dev.klepto.utrecorder.server.Server"
 }

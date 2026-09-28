@@ -3,7 +3,7 @@ package dev.klepto.utrecorder.cli
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
-import dev.klepto.utrecorder.core.RecorderProgress
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.core.RecorderStage.Capturing
 import dev.klepto.utrecorder.core.RecorderStage.Muxing
 import io.kotest.assertions.throwables.shouldThrow
@@ -33,8 +33,8 @@ class UtRecorderTest :
         }
 
         test("progressLine prints the stage and the whole percent done") {
-            UtRecorder.progressLine(RecorderProgress(Capturing, 0.426)) shouldBe "Capturing 42%"
-            UtRecorder.progressLine(RecorderProgress(Muxing, 1.0)) shouldBe "Muxing 100%"
+            UtRecorder.progressLine(Progress(Capturing, 0.426)) shouldBe "Capturing 42%"
+            UtRecorder.progressLine(Progress(Muxing, 1.0)) shouldBe "Muxing 100%"
         }
 
         test("main throws when the demo cannot be fetched") {

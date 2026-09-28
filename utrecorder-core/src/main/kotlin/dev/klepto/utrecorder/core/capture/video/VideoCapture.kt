@@ -17,6 +17,6 @@ interface VideoCapture {
      */
     suspend fun record(
         demo: Path,
-        onProgress: ProgressListener = {},
+        onProgress: ProgressListener<Unit> = {},
     ): VideoTrack
 }

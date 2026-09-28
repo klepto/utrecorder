@@ -13,7 +13,7 @@ interface Installer {
      * [onProgress] receives how much of the script is done. It is called from any thread, and at least once with
      * `1.0` when the script finishes.
      */
-    suspend fun install(onProgress: ProgressListener = {})
+    suspend fun install(onProgress: ProgressListener<Unit> = {})
 
     /**
      * Uninstalls the dependencies [install] put on disk.

@@ -1,8 +1,8 @@
 package dev.klepto.utrecorder.core
 
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.ProgressListener
-import dev.klepto.utrecorder.common.asDownloadListener
 import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.workspace
@@ -87,7 +87,7 @@ class Recorder(
     suspend fun record(
         url: String,
         name: String? = null,
-        onProgress: (RecorderProgress) -> Unit = {},
+        onProgress: ProgressListener<RecorderStage> = {},
     ): Path =
         workspace("record", config = directories) {
             val demo = downloadDemo(url, FetchingDemo.start(onProgress))
@@ -101,11 +101,11 @@ class Recorder(
      */
     private suspend fun Workspace.downloadDemo(
         url: String,
-        onProgress: ProgressListener,
+        onProgress: ProgressListener<Unit>,
     ): Path {
         val demo = directory / URI(url).path.substringAfterLast('/')
-        Downloader(url, timeout = 10.minutes, directories = directories).download(demo, onProgress.asDownloadListener())
-        onProgress(1.0)
+        Downloader(url, timeout = 10.minutes, directories = directories).download(demo, onProgress)
+        onProgress(Progress(1.0))
         return demo
     }
 
@@ -129,7 +129,7 @@ class Recorder(
     suspend fun record(
         demo: Path,
         name: String = demo.name.substringBeforeLast(DEMO_EXTENSION),
-        onProgress: (RecorderProgress) -> Unit = {},
+        onProgress: ProgressListener<RecorderStage> = {},
     ): Path = workspace("record", config = directories) { recordDemo(demo, name, onProgress) }
 
     /**
@@ -138,7 +138,7 @@ class Recorder(
     private suspend fun Workspace.recordDemo(
         demo: Path,
         name: String,
-        onProgress: (RecorderProgress) -> Unit,
+        onProgress: ProgressListener<RecorderStage>,
     ): Path {
         val preparing = PreparingInstallation.start(onProgress)
         UtInstaller(config.ut).install(preparing.part(0.0, 0.8))

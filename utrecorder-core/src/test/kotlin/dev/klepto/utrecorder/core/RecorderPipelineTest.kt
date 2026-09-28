@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.core
 
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.ProgressListener
@@ -60,10 +61,10 @@ class RecorderPipelineTest :
         ) : VideoCapture {
             override suspend fun record(
                 demo: Path,
-                onProgress: ProgressListener,
+                onProgress: ProgressListener<Unit>,
             ): VideoTrack {
                 audioThreadStarted?.await()
-                onProgress(0.5)
+                onProgress(Progress(0.5))
                 events += videoCapturePlayed
                 audioThreadReleased?.countDown()
                 return VideoTrack(file = videoFile, length = 8.0, demoEnd = 300.75)
@@ -79,7 +80,7 @@ class RecorderPipelineTest :
         ) : AudioCapture {
             override suspend fun record(
                 demo: Path,
-                onProgress: ProgressListener,
+                onProgress: ProgressListener<Unit>,
             ): AudioTrack {
                 events += audioThreadLaunched
                 audioThreadStarted?.countDown()
@@ -98,7 +99,7 @@ class RecorderPipelineTest :
                 offset: Double,
                 length: Double,
                 target: Path,
-                onProgress: ProgressListener,
+                onProgress: ProgressListener<Unit>,
             ): Path {
                 events += muxRan
                 video.copyTo(target, overwrite = true)
@@ -182,7 +183,7 @@ class RecorderPipelineTest :
                         offset: Double,
                         length: Double,
                         target: Path,
-                        onProgress: ProgressListener,
+                        onProgress: ProgressListener<Unit>,
                     ): Path {
                         merged = Triple(audio, offset, length)
                         return target
@@ -207,7 +208,7 @@ class RecorderPipelineTest :
         }
 
         test("record reports the capture with the lesser progress of the two captures, then the mux") {
-            val reports = ConcurrentLinkedQueue<RecorderProgress>()
+            val reports = ConcurrentLinkedQueue<Progress<RecorderStage>>()
 
             workspace("record", config = directories) { recording ->
                 pipeline(ConcurrentLinkedQueue(), track("audio.wav")).record(demoIn(recording), "demo-file") { reports += it }
@@ -215,10 +216,10 @@ class RecorderPipelineTest :
 
             reports.toList() shouldBe
                 listOf(
-                    RecorderProgress(RecorderStage.Capturing, 0.0),
-                    RecorderProgress(RecorderStage.Capturing, 0.0),
-                    RecorderProgress(RecorderStage.Capturing, 1.0),
-                    RecorderProgress(RecorderStage.Muxing, 0.0),
+                    Progress(RecorderStage.Capturing, 0.0),
+                    Progress(RecorderStage.Capturing, 0.0),
+                    Progress(RecorderStage.Capturing, 1.0),
+                    Progress(RecorderStage.Muxing, 0.0),
                 )
         }
 
@@ -252,7 +253,7 @@ class RecorderPipelineTest :
                 object : VideoCapture {
                     override suspend fun record(
                         demo: Path,
-                        onProgress: ProgressListener,
+                        onProgress: ProgressListener<Unit>,
                     ): VideoTrack =
                         try {
                             videoCaptureStarted.complete(Unit)
@@ -265,7 +266,7 @@ class RecorderPipelineTest :
                 object : AudioCapture {
                     override suspend fun record(
                         demo: Path,
-                        onProgress: ProgressListener,
+                        onProgress: ProgressListener<Unit>,
                     ): AudioTrack =
                         try {
                             audioCaptureStarted.complete(Unit)

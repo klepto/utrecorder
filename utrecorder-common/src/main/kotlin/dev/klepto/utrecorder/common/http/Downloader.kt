@@ -1,6 +1,8 @@
 package dev.klepto.utrecorder.common.http
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.Progress
+import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.digest
 import dev.klepto.utrecorder.common.io.move
@@ -25,12 +27,6 @@ import kotlin.io.path.outputStream
 import kotlin.time.Duration
 
 /**
- * A callback receiving download progress: the bytes [received] so far and the [total] size, or `-1` if the size is
- * unknown.
- */
-typealias DownloadListener = (received: Long, total: Long) -> Unit
-
-/**
  * A file fetched over HTTP, verified against a hash, and written out only once it is complete.
  *
  * Construct one per URL, then call [download] to write the file to a path.
@@ -51,24 +47,25 @@ class Downloader(
     private val expectedHash: String? = hash?.lowercase()
 
     /**
-     * Downloads the file to [outputPath], reporting progress to [listener].
+     * Downloads the file to [outputPath], reporting the bytes received out of the total size to [onProgress]. While
+     * the total size is unknown, reports nothing.
      *
-     * If [outputPath] already holds the file, keeps it and reports it to [listener] as complete instead. The file is
+     * If [outputPath] already holds the file, keeps it and reports it to [onProgress] as complete instead. The file is
      * held if it matches the hash or the size the server reports when there is no hash.
      *
      * @throws HashMismatchException if the downloaded file does not match the expected hash.
      */
     suspend fun download(
         outputPath: Path,
-        listener: DownloadListener? = null,
-    ) = withContext(Dispatchers.IO) { downloadOrKeep(outputPath, listener) }
+        onProgress: ProgressListener<Unit> = {},
+    ) = withContext(Dispatchers.IO) { downloadOrKeep(outputPath, onProgress) }
 
     private suspend fun downloadOrKeep(
         outputPath: Path,
-        listener: DownloadListener?,
+        onProgress: ProgressListener<Unit>,
     ) {
         if (isUpToDate(outputPath)) {
-            reportDownloaded(outputPath, listener)
+            reportDownloaded(outputPath, onProgress)
             return
         }
 
@@ -76,7 +73,7 @@ class Downloader(
             val temporary = tempFile()
             log.debug { "Downloading $url to $outputPath" }
             try {
-                fetch(temporary, listener)
+                fetch(temporary, onProgress)
                 verifyHash(temporary)
                 temporary.move(outputPath)
             } finally {
@@ -104,38 +101,37 @@ class Downloader(
     private suspend fun remoteSize(): Long? = headCatching(url, timeout).getOrNull()?.takeIf { it >= 0 }
 
     /**
-     * Reports the file already held by [outputPath] to [listener] as a complete download.
+     * Reports the file already held by [outputPath] to [onProgress] as a complete download.
      */
     private fun reportDownloaded(
         outputPath: Path,
-        listener: DownloadListener?,
+        onProgress: ProgressListener<Unit>,
     ) {
         log.debug { "File $outputPath was already downloaded" }
-        val size = outputPath.fileSize()
-        listener?.invoke(size, size)
+        onProgress(Progress(1.0))
     }
 
     /**
-     * Fetches the file into [target], reporting progress to [listener].
+     * Fetches the file into [target], reporting progress to [onProgress].
      */
     private suspend fun fetch(
         target: Path,
-        listener: DownloadListener?,
+        onProgress: ProgressListener<Unit>,
     ) {
         target.outputStream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
             val channel = output.asByteWriteChannel()
-            useHttpClient(timeout) { copyTo(channel, listener) }
+            useHttpClient(timeout) { copyTo(channel, onProgress) }
         }
     }
 
     /**
-     * Copies the response body into [channel], reporting progress to [listener].
+     * Copies the response body into [channel], reporting progress to [onProgress].
      */
     private suspend fun HttpClient.copyTo(
         channel: ByteWriteChannel,
-        listener: DownloadListener?,
+        onProgress: ProgressListener<Unit>,
     ) = prepareGet(url) {
-        listener?.apply { onDownload { received, total -> this(received, total ?: -1) } }
+        onDownload { received, total -> if (total != null && total > 0) onProgress(Progress(received.toDouble() / total)) }
     }.execute { response: HttpResponse ->
         response.bodyAsChannel().copyAndClose(channel)
     }

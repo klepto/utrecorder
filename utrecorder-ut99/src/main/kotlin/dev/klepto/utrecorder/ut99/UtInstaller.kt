@@ -1,8 +1,8 @@
 package dev.klepto.utrecorder.ut99
 
 import dev.klepto.utrecorder.common.Installer
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
-import dev.klepto.utrecorder.common.asDownloadListener
 import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.extract
@@ -47,10 +47,10 @@ class UtInstaller(
      * Downloads and extracts the iso, then the patch. The iso download counts for most of the progress reported to
      * [onProgress], and each extraction is reported once it finishes.
      */
-    override suspend fun install(onProgress: ProgressListener) {
+    override suspend fun install(onProgress: ProgressListener<Unit>) {
         if (isInstalled()) {
             log.debug { "UT installation detected, skipping..." }
-            onProgress(1.0)
+            onProgress(Progress(1.0))
             return
         }
 
@@ -61,7 +61,7 @@ class UtInstaller(
             move(config.gameDirectory)
             withContext(Dispatchers.IO) { versionFile.writeText(config.patchFileName) }
         }
-        onProgress(1.0)
+        onProgress(Progress(1.0))
         log.debug { "UT installation complete" }
     }
 
@@ -71,31 +71,31 @@ class UtInstaller(
      *
      * The contents of `System400` are merged into `System`.
      */
-    private suspend fun Workspace.installIso(onProgress: ProgressListener) {
+    private suspend fun Workspace.installIso(onProgress: ProgressListener<Unit>) {
         val isoPath = config.directoriesConfig.cache[ISO_FILE]
         val downloader = Downloader(config.isoUrl, config.isoMd5, directories = config.directoriesConfig)
-        downloader.download(isoPath, onProgress.part(0.0, 0.75).asDownloadListener())
+        downloader.download(isoPath, onProgress.part(0.0, 0.75))
 
         log.debug { "Extracting UT iso..." }
         isoPath.extract(directory) { it.substringBefore('/') in ISO_ROOTS }.forEach(::track)
 
         val system400 = directory[System400]
         if (withContext(Dispatchers.IO) { system400.isDirectory() }) system400.move(directory[System])
-        onProgress(1.0)
+        onProgress(Progress(1.0))
     }
 
     /**
      * Downloads the configured OldUnreal patch and extracts it into this workspace, reporting progress to [onProgress].
      */
-    private suspend fun Workspace.installPatch(onProgress: ProgressListener) {
+    private suspend fun Workspace.installPatch(onProgress: ProgressListener<Unit>) {
         val patchPath = config.directoriesConfig.cache[config.patchFileName]
         val patchUrl = "${config.patchUrl}/v${config.patchVersion}/${config.patchFileName}"
         val downloader = Downloader(patchUrl, directories = config.directoriesConfig)
-        downloader.download(patchPath, onProgress.part(0.0, 0.5).asDownloadListener())
+        downloader.download(patchPath, onProgress.part(0.0, 0.5))
 
         log.debug { "Extracting UT patch..." }
         patchPath.extract(directory).forEach(::track)
-        onProgress(1.0)
+        onProgress(Progress(1.0))
     }
 
     override suspend fun uninstall() = withContext(Dispatchers.IO) { config.gameDirectory.deleteRecursively() }

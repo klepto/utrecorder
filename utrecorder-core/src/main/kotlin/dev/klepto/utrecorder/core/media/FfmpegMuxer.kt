@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.core.media
 
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,15 +26,15 @@ class FfmpegMuxer(
         offset: Double,
         length: Double,
         target: Path,
-        onProgress: ProgressListener,
+        onProgress: ProgressListener<Unit>,
     ): Path {
         withContext(Dispatchers.IO) { target.toFile().delete() }
         val arguments = arguments(video, audio, offset, length, target)
-        val merged = ffmpeg.run(*arguments.toTypedArray()) { onProgress(it.time.toDouble(SECONDS) / length) }
+        val merged = ffmpeg.run(*arguments.toTypedArray()) { onProgress(Progress(it.time.toDouble(SECONDS) / length)) }
         check(merged) {
             "Merging ${video.fileName} with ${audio.fileName} failed"
         }
-        onProgress(1.0)
+        onProgress(Progress(1.0))
         return target
     }
 

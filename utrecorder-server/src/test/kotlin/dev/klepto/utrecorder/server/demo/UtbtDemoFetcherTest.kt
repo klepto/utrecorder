@@ -1,304 +1,198 @@
 package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.ConfigReader
-import dev.klepto.utrecorder.common.io.get
-import dev.klepto.utrecorder.server.Demo
-import dev.klepto.utrecorder.server.ServerConfig
-import dev.klepto.utrecorder.server.database.DocumentStore
-import dev.klepto.utrecorder.server.recording.Recording
-import dev.klepto.utrecorder.server.recording.RecordingLane
-import dev.klepto.utrecorder.server.recording.RecordingQueue
-import dev.klepto.utrecorder.server.recording.RecordingState
-import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.matchers.collections.shouldBeEmpty
-import io.kotest.matchers.nulls.shouldBeNull
-import io.kotest.matchers.nulls.shouldNotBeNull
+import io.kotest.matchers.collections.shouldContainExactly
+import io.kotest.matchers.comparables.shouldBeGreaterThanOrEqualTo
+import io.kotest.matchers.ints.shouldBeGreaterThanOrEqual
+import io.kotest.matchers.ints.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import io.ktor.client.engine.mock.MockEngine
-import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
-import io.ktor.client.request.HttpRequestData
-import io.ktor.client.request.HttpResponseData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runTest
-import java.io.IOException
-import java.time.Instant
-import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.createTempDirectory
-import kotlin.io.path.deleteRecursively
-import kotlin.time.Duration.Companion.hours
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.minutes
-import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+import kotlin.time.TimeSource
 
-@OptIn(ExperimentalPathApi::class)
 class UtbtDemoFetcherTest :
     FunSpec({
-        val demoBytes = requireNotNull(UtbtDemoFetcherTest::class.java.getResource("/demo.dem")).readBytes()
-        val json = headersOf(HttpHeaders.ContentType, "application/json")
+        val config = UtbtConfig(ConfigReader.EMPTY, cooldown = 200.milliseconds)
 
-        fun capJson(number: Int): String =
-            """{"id":"cap-$number","map":"CTF-BT-Listed","alias":"player-$number","cap_time_seconds":83.25,""" +
-                """"added":"2026-09-01 12:00:0$number.5","has_ghost":true}"""
+        fun id(minute: Int): String = "00000000-0000-4000-8000-0000000000%02d".format(minute)
 
-        fun knownDemo(number: Int): Demo =
-            Demo(
-                id = "cap-$number",
-                map = "CTF-BT-II-CoZyliciouS",
-                player = "player-$number",
-                capTime = 83.seconds,
-                duration = 78.seconds,
-                addedAt = Instant.parse("2026-09-01T12:00:00Z").plusSeconds(number.toLong()),
-            )
+        fun cap(minute: Int): String =
+            """{"id":"${id(minute)}","map":"CTF-BT-A","alias":"a","cap_time_seconds":1,"added":"2026-09-26 12:%02d:00"}"""
+                .format(minute)
 
-        /**
-         * UTBT serving caps numbered [newest] down to 1, newest first, in pages of three. Demos default to [demoBytes].
-         */
-        class FakeUtbt(
-            val newest: Int,
-            val now: () -> Long = { 0 },
-            val capsStatus: HttpStatusCode = HttpStatusCode.OK,
-            val demos: Map<String, () -> ByteArray?> = emptyMap(),
-        ) {
-            val offsets = mutableListOf<Int>()
-            val downloads = mutableListOf<Pair<String, Long>>()
-
-            val engine =
-                MockEngine { request ->
-                    when (request.url.host) {
-                        "gateway.test" -> caps(request)
-                        else -> demo(request.url.segments.last())
-                    }
-                }
-
-            fun MockRequestHandleScope.caps(request: HttpRequestData): HttpResponseData {
-                val offset = request.url.parameters["offset"]!!.toInt()
-                offsets += offset
-                val page = (newest downTo 1).drop(offset).take(3).joinToString(",") { capJson(it) }
-                return respond("""{"data":[$page],"success":true}""", capsStatus, json)
-            }
-
-            fun MockRequestHandleScope.demo(id: String): HttpResponseData {
-                downloads += id to now()
-                val bytes = demos.getOrElse(id) { { demoBytes } }()
-                return bytes?.let { respond(it) } ?: respond("", HttpStatusCode.NotFound)
-            }
-        }
-
-        class Harness(
-            val demos: DocumentStore.Collection<Demo>,
-            val recordings: DocumentStore.Collection<Recording>,
-            val queue: RecordingQueue,
-        ) {
-            suspend fun stored(): List<Pair<Demo, Recording>> = demos.all().map { demo -> demo to recordings[demo.id]!! }
-
-            suspend fun queued(): List<String> {
-                val ids = mutableListOf<String>()
-                while (!queue.isEmpty) ids += queue.take(RecordingLane.SHORT).first.id
-                return ids
-            }
-        }
-
-        fun withFetcher(
-            utbt: FakeUtbt,
-            known: List<Demo> = emptyList(),
-            longThreshold: kotlin.time.Duration = 5.minutes,
-            uploaderIsEmpty: () -> Boolean = { true },
-            block: suspend TestScope.(UtbtDemoFetcher, Harness) -> Unit,
-        ) = runTest {
-            val directory = createTempDirectory("utrecorder-fetcher-test")
-            val config =
-                ServerConfig(
-                    ConfigReader.EMPTY,
-                    database = directory["server.db"],
-                    cache = directory["cache"],
-                    longThreshold = longThreshold,
-                    backfillCooldown = 5.minutes,
-                    sourceUrl = "https://gateway.test",
-                    demoUrl = "http://demos.test/demos",
+        fun engine(
+            minutes: List<Int>,
+            requests: MutableList<String> = CopyOnWriteArrayList(),
+            reads: MutableList<TimeSource.Monotonic.ValueTimeMark> = CopyOnWriteArrayList(),
+            inclusive: Boolean = false,
+            failFirst: Boolean = false,
+        ): MockEngine =
+            MockEngine { request ->
+                requests += request.url.toString()
+                reads += TimeSource.Monotonic.markNow()
+                val before = request.url.parameters["before"]?.toDouble() ?: Double.MAX_VALUE
+                val after = request.url.parameters["after"]?.toDouble() ?: 0.0
+                val caps =
+                    minutes
+                        .filter {
+                            val epoch = 1790424000.0 + it * 60
+                            if (inclusive) epoch in after..before else epoch > after && epoch < before
+                        }.sortedDescending()
+                val failed = failFirst && requests.size == 1
+                respond(
+                    if (failed) "" else caps.joinToString(",", """{"data":[""", "]}") { cap(it) },
+                    if (failed) HttpStatusCode.BadGateway else HttpStatusCode.OK,
+                    headersOf(HttpHeaders.ContentType, "application/json"),
                 )
-            val store = DocumentStore.open(config.database)
-            try {
-                val demos = store.collection("demos", Demo.serializer(), Demo::id)
-                val recordings = store.collection("recordings", Recording.serializer(), Recording::demoId)
-                known.forEach {
-                    recordings.put(Recording(demoId = it.id, lane = RecordingLane.SHORT, state = RecordingState.ARCHIVED))
-                    demos.put(it)
-                }
-                val queue = RecordingQueue()
-                block(
-                    UtbtDemoFetcher(demos, recordings, queue, uploaderIsEmpty, config, known, utbt.engine),
-                    Harness(demos, recordings, queue),
+            }
+
+        suspend fun collecting(
+            fetcher: UtbtDemoFetcher,
+            emitted: MutableList<String> = CopyOnWriteArrayList(),
+            block: suspend () -> Unit,
+        ) {
+            coroutineScope {
+                val job = launch { fetcher.fetch().collect { emitted += it.capId } }
+                block()
+                job.cancelAndJoin()
+            }
+        }
+
+        test("requests one page of verified caps, newest first") {
+            val requests = CopyOnWriteArrayList<String>()
+            val fetcher = UtbtDemoFetcher(config, engine(listOf(0), requests))
+
+            fetcher.fetch().first()
+
+            requests shouldContainExactly listOf("https://gateway.utbt.net/caps?limit=100&order=desc&verified=true")
+        }
+
+        test("maps every field of a cap") {
+            val body =
+                """
+                {"data":[{
+                    "id":"0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",
+                    "map":"CTF-BT-Maverick",
+                    "alias":"klepto",
+                    "cap_time_seconds":12.34,
+                    "added":"2026-09-26 12:19:59.891708",
+                    "verified":true
+                }]}
+                """.trimIndent()
+            val engine = MockEngine { respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) }
+            val fetcher = UtbtDemoFetcher(config, engine)
+
+            fetcher.fetch().first() shouldBe
+                Demo(
+                    capId = "0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",
+                    map = "CTF-BT-Maverick",
+                    player = "klepto",
+                    capTime = 12340.milliseconds,
+                    timestamp = Instant.parse("2026-09-26T12:19:59.891708Z"),
+                    demoUrl = "http://api.utbt.net/demos/0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",
                 )
-            } finally {
-                store.close()
-                directory.deleteRecursively()
+        }
+
+        test("skips a cap whose id is not a UUID") {
+            val invalid = """{"id":"../etc","map":"CTF-BT-A","alias":"a","cap_time_seconds":1,"added":"2026-09-26 12:01:00"}"""
+            val body = """{"data":[$invalid,${cap(0)}]}"""
+            val engine = MockEngine { respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) }
+            val fetcher = UtbtDemoFetcher(config, engine)
+
+            fetcher.fetch().first().capId shouldBe id(0)
+        }
+
+        test("emits the caps added after the newest demo seen ahead of the backlog") {
+            val minutes = CopyOnWriteArrayList(listOf(3, 2, 1))
+            val requests = CopyOnWriteArrayList<String>()
+            val fetcher = UtbtDemoFetcher(config, engine(minutes, requests))
+
+            val emitted =
+                fetcher
+                    .fetch()
+                    .onEach {
+                        if (it.capId != id(3)) return@onEach
+                        minutes += 4
+                        delay(300.milliseconds)
+                    }.take(4)
+                    .toList()
+
+            emitted.map { it.capId } shouldContainExactly listOf(id(3), id(4), id(2), id(1))
+            requests shouldContainExactly
+                listOf(
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true",
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true&after=1790424180.000000",
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true&before=1790424240.000000&after=1790424180.000000",
+                )
+        }
+
+        test("ends the backlog at an empty page, then reads only the caps added after the newest, once per cooldown") {
+            val requests = CopyOnWriteArrayList<String>()
+            val reads = CopyOnWriteArrayList<TimeSource.Monotonic.ValueTimeMark>()
+            val fetcher = UtbtDemoFetcher(config, engine(listOf(0), requests, reads))
+
+            collecting(fetcher) { eventually(5.seconds) { requests.size shouldBeGreaterThanOrEqual 4 } }
+
+            requests.take(4) shouldContainExactly
+                listOf(
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true",
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true&before=1790424000.000000",
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true&after=1790424000.000000",
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true&after=1790424000.000000",
+                )
+            reads[3] - reads[2] shouldBeGreaterThanOrEqualTo 200.milliseconds
+        }
+
+        test("reads the newest caps when the backlog ends before any demo is read") {
+            val minutes = CopyOnWriteArrayList<Int>()
+            val requests = CopyOnWriteArrayList<String>()
+            val emitted = CopyOnWriteArrayList<String>()
+            val fetcher = UtbtDemoFetcher(config, engine(minutes, requests))
+
+            collecting(fetcher, emitted) {
+                eventually(5.seconds) { requests.size shouldBeGreaterThanOrEqual 1 }
+                minutes += 0
+                eventually(5.seconds) { emitted shouldContainExactly listOf(id(0)) }
             }
         }
 
-        test("requests pages of verified caps newest first at the offset") {
-            val utbt = FakeUtbt(newest = 1)
-            withFetcher(utbt) { fetcher, _ ->
-                fetcher.poll()
+        test("emits each demo once when a bound also matches the cap added at it") {
+            val requests = CopyOnWriteArrayList<String>()
+            val emitted = CopyOnWriteArrayList<String>()
+            val fetcher = UtbtDemoFetcher(config, engine(listOf(1, 0), requests, inclusive = true))
 
-                utbt.engine.requestHistory
-                    .first()
-                    .url
-                    .toString() shouldBe "https://gateway.test/caps?limit=100&offset=0&order=desc&verified=true"
-                utbt.engine.requestHistory
-                    .last()
-                    .url
-                    .toString() shouldBe "http://demos.test/demos/cap-1"
-            }
+            collecting(fetcher, emitted) { delay(700.milliseconds) }
+
+            emitted shouldContainExactly listOf(id(1), id(0))
+            requests.size shouldBeLessThan 10
         }
 
-        test("live poll pages until a known cap and handles the unseen caps oldest first") {
-            val utbt = FakeUtbt(newest = 8)
-            withFetcher(utbt, known = listOf(knownDemo(1), knownDemo(2))) { fetcher, harness ->
-                fetcher.poll()
+        test("reads the backlog again after the cooldown when a read fails") {
+            val requests = CopyOnWriteArrayList<String>()
+            val fetcher = UtbtDemoFetcher(config, engine(listOf(0), requests, failFirst = true))
 
-                utbt.offsets shouldBe listOf(0, 3, 6)
-                utbt.downloads.map { it.first } shouldBe listOf("cap-3", "cap-4", "cap-5", "cap-6", "cap-7", "cap-8")
-                harness.queued() shouldBe listOf("cap-3", "cap-4", "cap-5", "cap-6", "cap-7", "cap-8")
-            }
-        }
-
-        test("live poll stores the demo's map and duration with the cap's player, cap time and added time") {
-            withFetcher(FakeUtbt(newest = 2), known = listOf(knownDemo(1))) { fetcher, harness ->
-                fetcher.poll()
-
-                val (demo, recording) = harness.stored().last()
-                demo.id shouldBe "cap-2"
-                demo.map shouldBe "CTF-BT-II-CoZyliciouS"
-                demo.duration shouldBe 78362098694.nanoseconds
-                demo.player shouldBe "player-2"
-                demo.capTime shouldBe 83250.milliseconds
-                demo.addedAt shouldBe Instant.parse("2026-09-01T12:00:02.5Z")
-                recording.state shouldBe RecordingState.PENDING
-                recording.lane shouldBe RecordingLane.SHORT
-            }
-        }
-
-        test("a demo at the long threshold goes to the long lane") {
-            withFetcher(FakeUtbt(newest = 2), known = listOf(knownDemo(1)), longThreshold = 78362.milliseconds) { fetcher, harness ->
-                fetcher.poll()
-
-                harness
-                    .stored()
-                    .last()
-                    .second.lane shouldBe RecordingLane.LONG
-                harness.queue
-                    .take(RecordingLane.LONG)
-                    .first.id shouldBe "cap-2"
-            }
-        }
-
-        test("on an empty database the live poll takes only the newest cap") {
-            val utbt = FakeUtbt(newest = 8)
-            withFetcher(utbt) { fetcher, harness ->
-                fetcher.poll()
-
-                utbt.offsets shouldBe listOf(0)
-                harness.stored().map { it.first.id } shouldBe listOf("cap-8")
-                harness.queued() shouldBe listOf("cap-8")
-            }
-        }
-
-        test("a failed page read fails the poll") {
-            withFetcher(FakeUtbt(newest = 2, capsStatus = HttpStatusCode.BadGateway)) { fetcher, _ ->
-                shouldThrow<IOException> { fetcher.poll() }
-            }
-        }
-
-        test("a demo UTBT does not serve is stored failed and not enqueued") {
-            val utbt = FakeUtbt(newest = 2, demos = mapOf("cap-2" to { null }))
-            withFetcher(utbt, known = listOf(knownDemo(1))) { fetcher, harness ->
-                fetcher.poll()
-
-                val (demo, recording) = harness.stored().last()
-                demo.map.shouldBeNull()
-                demo.duration.shouldBeNull()
-                recording.state shouldBe RecordingState.FAILED
-                recording.error.shouldNotBeNull()
-                harness.queued().shouldBeEmpty()
-            }
-        }
-
-        test("a demo that does not parse is stored failed and not enqueued") {
-            val utbt = FakeUtbt(newest = 2, demos = mapOf("cap-2" to { byteArrayOf(1, 2, 3) }))
-            withFetcher(utbt, known = listOf(knownDemo(1))) { fetcher, harness ->
-                fetcher.poll()
-
-                val (demo, recording) = harness.stored().last()
-                demo.map.shouldBeNull()
-                recording.state shouldBe RecordingState.FAILED
-                harness.queued().shouldBeEmpty()
-            }
-        }
-
-        test("a failed download writes nothing and the next pass retries it") {
-            var failing = true
-            val utbt = FakeUtbt(newest = 3, demos = mapOf("cap-2" to { if (failing) throw IOException("503") else null }))
-            withFetcher(utbt, known = listOf(knownDemo(1))) { fetcher, harness ->
-                fetcher.poll()
-
-                harness.stored().map { it.first.id } shouldBe listOf("cap-1")
-
-                failing = false
-                fetcher.poll()
-
-                harness.stored().map { it.first.id } shouldBe listOf("cap-1", "cap-2", "cap-3")
-            }
-        }
-
-        test("backfill walks older caps newest first from the stored count, skipping known ones, until an empty page") {
-            val utbt = FakeUtbt(newest = 6)
-            withFetcher(utbt, known = listOf(knownDemo(6), knownDemo(3))) { fetcher, harness ->
-                backgroundScope.launch { while (true) harness.queue.take(RecordingLane.SHORT) }
-                fetcher.backfill()
-
-                utbt.offsets shouldBe listOf(2, 5, 6)
-                utbt.downloads.map { it.first } shouldBe listOf("cap-4", "cap-2", "cap-1")
-                harness.stored().map { it.first.id } shouldBe listOf("cap-6", "cap-3", "cap-4", "cap-2", "cap-1")
-            }
-        }
-
-        test("backfill waits the cooldown after each demo") {
-            lateinit var scope: TestScope
-            val utbt = FakeUtbt(newest = 3, now = { scope.testScheduler.currentTime })
-            withFetcher(utbt, known = listOf(knownDemo(3))) { fetcher, harness ->
-                scope = this
-                backgroundScope.launch { while (true) harness.queue.take(RecordingLane.SHORT) }
-                fetcher.backfill()
-
-                utbt.downloads.map { it.second } shouldBe listOf(0L, 5.minutes.inWholeMilliseconds)
-            }
-        }
-
-        test("backfill takes a demo only when the queue and the uploader are both empty") {
-            var uploaderIsEmpty = false
-            val utbt = FakeUtbt(newest = 2)
-            withFetcher(utbt, known = listOf(knownDemo(2)), uploaderIsEmpty = { uploaderIsEmpty }) { fetcher, harness ->
-                harness.queue.enqueue(knownDemo(9) to Recording(demoId = "cap-9", lane = RecordingLane.SHORT))
-                val backfill = launch { fetcher.backfill() }
-
-                advanceTimeBy(1.hours)
-                utbt.downloads.shouldBeEmpty()
-
-                uploaderIsEmpty = true
-                advanceTimeBy(1.hours)
-                utbt.downloads.shouldBeEmpty()
-
-                harness.queue.take(RecordingLane.SHORT)
-                backfill.join()
-                utbt.downloads.map { it.first } shouldBe listOf("cap-1")
-            }
+            fetcher.fetch().first().capId shouldBe id(0)
+            requests shouldContainExactly
+                listOf(
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true",
+                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true",
+                )
         }
     })

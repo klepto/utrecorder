@@ -1,6 +1,8 @@
 package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.Progress
+import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.slowest
 import dev.klepto.utrecorder.core.RecorderStage.Capturing
@@ -78,7 +80,7 @@ class RecorderPipeline(
     suspend fun record(
         demo: Path,
         name: String,
-        onProgress: (RecorderProgress) -> Unit = {},
+        onProgress: ProgressListener<RecorderStage> = {},
     ): Path =
         workspace("record", config = directories) { output ->
             val capturing = Capturing.start(onProgress)
@@ -89,7 +91,7 @@ class RecorderPipeline(
                     val audioTrack = async(Dispatchers.IO) { audioCapture.record(demo, audioProgress) }
                     videoTrack.await() to audioTrack.await()
                 }
-            capturing(1.0)
+            capturing(Progress(1.0))
 
             val muxing = Muxing.start(onProgress)
             val target = output["$name.mp4"]

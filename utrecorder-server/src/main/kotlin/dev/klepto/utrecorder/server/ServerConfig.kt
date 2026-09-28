@@ -5,9 +5,9 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.SystemConfigReader
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.toAbsolutePath
+import dev.klepto.utrecorder.server.demo.UtbtConfig
 import java.nio.file.Path
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.minutes
 
 /**
@@ -16,58 +16,20 @@ import kotlin.time.Duration.Companion.minutes
  * Use the constructor. A property that is not provided takes the value its key configures, or else its literal
  * default. Without arguments, it reads the configuration of the current process.
  *
- * @param reader The source of the `server.*` keys and of the keys every nested configuration reads.
- * @property directories The application directories the database and the cache directory default to.
- * @property port The HTTP port the server listens on.
- * @property database The SQLite file of the demos, recordings and cleanups.
- * @property cache The directory of recorded mp4 files.
- * @property longThreshold The demo duration from which a demo is recorded in the long lane.
- * @property maxAttempts The number of recording attempts after which a recording fails for good.
- * @property cacheTtl The time a cached mp4 is kept without being accessed.
- * @property pollInterval The time between two polls of the demo source.
- * @property backfillCooldown The time between two backfill requests to the demo source.
- * @property sourceUrl The base URL of the API that lists new demos.
- * @property demoUrl The base URL demo files are downloaded from.
- * @property archive The settings of the Internet Archive uploader.
+ * @param reader The source of the keys every nested configuration reads.
+ * @property utbt The settings of the UTBT cap list, its cooldown and the demo downloads.
+ * @property recordings The directory that holds one `<capId>.mp4` per recorded demo. If not provided, uses the
+ * `recordings` subdirectory of the home directory that [reader] resolves.
+ * @property longThreshold The longest cap time of a short demo. A demo with a longer cap time is a long demo.
+ * @property maxAttempts How many times a demo is recorded before the server gives up on it.
+ * @property cooldown How long a recorder waits after each recording.
  */
 class ServerConfig(
     reader: ConfigReader = SystemConfigReader(),
-    val directories: DirectoriesConfig = DirectoriesConfig(reader),
-    val port: Int = reader.get("server.port", 8080, String::toInt),
-    val database: Path = reader.get("server.database", directories.home["database"]["server.db"], String::toAbsolutePath),
-    val cache: Path = reader.get("server.cache", directories.home["recordings"], String::toAbsolutePath),
+    val utbt: UtbtConfig = UtbtConfig(reader),
+    val recordings: Path =
+        reader.get("server.recordings", DirectoriesConfig(reader).home["recordings"], String::toAbsolutePath),
     val longThreshold: Duration = reader.duration("server.long_threshold", 5.minutes),
     val maxAttempts: Int = reader.get("server.max_attempts", 3, String::toInt),
-    val cacheTtl: Duration = reader.duration("server.cache_ttl", 30.days),
-    val pollInterval: Duration = reader.duration("server.poll_interval", 10.minutes),
-    val backfillCooldown: Duration = reader.duration("server.backfill_cooldown", 5.minutes),
-    val sourceUrl: String = reader.get("server.source_url", "https://gateway.utbt.net"),
-    val demoUrl: String = reader.get("server.demo_url", "http://api.utbt.net/demos"),
-    val archive: ArchiveConfig = ArchiveConfig(reader),
+    val cooldown: Duration = reader.duration("server.cooldown", 1.minutes),
 )
-
-/**
- * Settings of the Internet Archive uploader.
- *
- * Use the constructor. A property that is not provided takes the value its key configures, or else its literal
- * default. Without arguments, it reads the configuration of the current process.
- *
- * @param reader The source of the `server.archive.*` keys.
- * @property accessKey The S3 access key of the Internet Archive account, or `null` if none is configured.
- * @property secretKey The S3 secret key of the Internet Archive account, or `null` if none is configured.
- * @property collection The collection mp4 files are uploaded to.
- * @property prefix The prefix of every item identifier.
- */
-class ArchiveConfig(
-    reader: ConfigReader = SystemConfigReader(),
-    val accessKey: String? = reader["server.archive.access_key"],
-    val secretKey: String? = reader["server.archive.secret_key"],
-    val collection: String = reader.get("server.archive.collection", "test_collection"),
-    val prefix: String = reader.get("server.archive.prefix", "utrecorder"),
-) {
-    /**
-     * Whether both keys are configured, so the uploader runs.
-     */
-    val enabled: Boolean
-        get() = accessKey != null && secretKey != null
-}

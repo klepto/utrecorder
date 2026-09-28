@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.core
 
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 
 /**
@@ -39,9 +40,9 @@ enum class RecorderStage {
      * The listener clamps the progress to the range from `0.0` to `1.0`, and reports progress that is not finite as
      * `0.0`.
      */
-    fun start(onProgress: (RecorderProgress) -> Unit): ProgressListener {
-        val listener: ProgressListener = { progress -> onProgress(RecorderProgress(this, clamp(progress))) }
-        return listener.apply { invoke(0.0) }
+    fun start(onProgress: ProgressListener<RecorderStage>): ProgressListener<Unit> {
+        val listener: ProgressListener<Unit> = { report -> onProgress(Progress(this, clamp(report.progress))) }
+        return listener.apply { invoke(Progress(0.0)) }
     }
 
     private companion object {

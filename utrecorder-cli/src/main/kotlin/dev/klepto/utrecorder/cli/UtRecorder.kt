@@ -3,7 +3,8 @@ package dev.klepto.utrecorder.cli
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.Recorder
-import dev.klepto.utrecorder.core.RecorderProgress
+import dev.klepto.utrecorder.common.Progress
+import dev.klepto.utrecorder.core.RecorderStage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -59,7 +60,7 @@ object UtRecorder {
     /**
      * Returns the line that logs [progress]: the stage followed by how much of it is done, in whole percent.
      */
-    fun progressLine(progress: RecorderProgress): String = "%s %d%%".format(Locale.ROOT, progress.stage, (progress.progress * 100).toInt())
+    fun progressLine(progress: Progress<RecorderStage>): String = "%s %d%%".format(Locale.ROOT, progress.state, (progress.progress * 100).toInt())
 
     /**
      * Records the demo that [url] names and prints the path of the mp4 on standard out.
@@ -74,7 +75,7 @@ object UtRecorder {
         url: String,
         directories: DirectoriesConfig = DirectoriesConfig(),
     ) {
-        val progress = MutableStateFlow<RecorderProgress?>(null)
+        val progress = MutableStateFlow<Progress<RecorderStage>?>(null)
         val mp4 =
             coroutineScope {
                 val progressLogger = launch { logProgress(progress) }
@@ -91,11 +92,11 @@ object UtRecorder {
      * finished.
      */
     private fun report(
-        progress: MutableStateFlow<RecorderProgress?>,
-        next: RecorderProgress,
+        progress: MutableStateFlow<Progress<RecorderStage>?>,
+        next: Progress<RecorderStage>,
     ) {
         progress.value
-            ?.takeIf { it.stage != next.stage }
+            ?.takeIf { it.state != next.state }
             ?.let { log.info { progressLine(it) } }
         progress.value = next
     }
@@ -104,10 +105,10 @@ object UtRecorder {
      * Logs the latest value of [progress] when its stage changes, and every 5 seconds after that
      * until the stage changes again. Never returns; cancel it to stop logging.
      */
-    private suspend fun logProgress(progress: StateFlow<RecorderProgress?>) {
+    private suspend fun logProgress(progress: StateFlow<Progress<RecorderStage>?>) {
         progress
             .filterNotNull()
-            .distinctUntilChangedBy { it.stage }
+            .distinctUntilChangedBy { it.state }
             .collectLatest {
                 while (true) {
                     progress.value?.let { log.info { progressLine(it) } }

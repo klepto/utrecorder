@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.core.capture.video
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.EmbeddedArtifacts
 import dev.klepto.utrecorder.common.io.Workspace
@@ -51,7 +52,7 @@ class FfmpegVideoCapture(
 
     override suspend fun record(
         demo: Path,
-        onProgress: ProgressListener,
+        onProgress: ProgressListener<Unit>,
     ): VideoTrack =
         workspace(VIDEO_CAPTURE, config = directories) { output ->
             val target = output[VIDEO_NAME]
@@ -70,10 +71,10 @@ class FfmpegVideoCapture(
      */
     private fun frameProgress(
         description: DemoPlaybackConfig,
-        onProgress: ProgressListener,
+        onProgress: ProgressListener<Unit>,
     ): (MediaProgress) -> Unit {
         val frames = description.demoDuration.toDouble(DurationUnit.SECONDS) * config.fps
-        return { onProgress(it.frames / frames) }
+        return { onProgress(Progress(it.frames / frames)) }
     }
 
     /**

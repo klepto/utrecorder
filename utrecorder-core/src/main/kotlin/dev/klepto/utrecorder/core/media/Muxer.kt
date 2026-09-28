@@ -24,6 +24,6 @@ interface Muxer {
         offset: Double,
         length: Double,
         target: Path,
-        onProgress: ProgressListener = {},
+        onProgress: ProgressListener<Unit> = {},
     ): Path
 }

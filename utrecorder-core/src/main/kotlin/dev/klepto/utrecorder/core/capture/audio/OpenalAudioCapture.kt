@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.core.capture.audio
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
@@ -56,7 +57,7 @@ class OpenalAudioCapture(
 
     override suspend fun record(
         demo: Path,
-        onProgress: ProgressListener,
+        onProgress: ProgressListener<Unit>,
     ): AudioTrack =
         workspace(AUDIO_CAPTURE, config = directories) { output ->
             playback.play(demo, STAGED_DEMO_PREFIX, AUDIO_CAPTURE) { description, system ->
@@ -78,12 +79,12 @@ class OpenalAudioCapture(
     private suspend fun reportProgress(
         wav: Path,
         description: DemoPlaybackConfig,
-        onProgress: ProgressListener,
+        onProgress: ProgressListener<Unit>,
     ) {
         val demoSeconds = description.demoDuration.toDouble(DurationUnit.SECONDS)
         while (true) {
             val bytes = withContext(Dispatchers.IO) { wav.toFile().length() }
-            onProgress(bytes / WAVE_BYTES_PER_SECOND / demoSeconds)
+            onProgress(Progress(bytes / WAVE_BYTES_PER_SECOND / demoSeconds))
             delay(1.seconds)
         }
     }

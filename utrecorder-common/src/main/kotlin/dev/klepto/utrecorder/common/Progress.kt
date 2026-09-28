@@ -1,38 +1,52 @@
 package dev.klepto.utrecorder.common
 
-import dev.klepto.utrecorder.common.http.DownloadListener
+/**
+ * One progress report of a piece of work: the state the work is in and an estimate of how much of that state is done.
+ *
+ * Work that has no state of its own reports `Progress(progress)`, a report with the [Unit] state.
+ *
+ * @property state The state the work is in.
+ * @property progress How much of [state] is done, from `0.0` to `1.0`.
+ */
+data class Progress<T>(
+    val state: T,
+    val progress: Double,
+) {
+    companion object {
+        /**
+         * Returns a progress report of work that has no state of its own.
+         */
+        operator fun invoke(progress: Double): Progress<Unit> = Progress(Unit, progress)
+    }
+}
 
 /**
- * A callback receiving how much of a piece of work is done, from `0.0` to `1.0`.
+ * A callback receiving progress reports of a piece of work.
  */
-typealias ProgressListener = (progress: Double) -> Unit
+typealias ProgressListener<T> = (progress: Progress<T>) -> Unit
 
 /**
  * Returns a listener for one part of the work this listener tracks, the part running from [start] to [end] of the
- * whole. The progress of the part is reported to this listener as the matching progress of the whole.
+ * whole. The progress of the part is reported to this listener as the matching progress of the whole, with the state
+ * the part reports.
  */
-fun ProgressListener.part(
+fun <T> ProgressListener<T>.part(
     start: Double,
     end: Double,
-): ProgressListener = { progress -> this(start + (end - start) * progress.coerceIn(0.0, 1.0)) }
-
-/**
- * Returns a download listener that reports the bytes received out of the total size to this listener. While the total
- * size is unknown, reports nothing.
- */
-fun ProgressListener.asDownloadListener(): DownloadListener = { received, total -> if (total > 0) this(received.toDouble() / total) }
+): ProgressListener<T> = { report -> this(report.copy(progress = start + (end - start) * report.progress.coerceIn(0.0, 1.0))) }
 
 /**
  * Returns [count] listeners for parts of the work this listener tracks that run side by side. Each report of a part
- * reports the least progress of all parts to this listener. A part that has not reported yet counts as `0.0`.
+ * reports the least progress of all parts to this listener, with the state of that report. A part that has not
+ * reported yet counts as `0.0`.
  */
-fun ProgressListener.slowest(count: Int): List<ProgressListener> {
+fun <T> ProgressListener<T>.slowest(count: Int): List<ProgressListener<T>> {
     val progress = DoubleArray(count)
     return List(count) { index ->
-        { value ->
+        { report ->
             synchronized(progress) {
-                progress[index] = value
-                this(progress.min())
+                progress[index] = report.progress
+                this(report.copy(progress = progress.min()))
             }
         }
     }

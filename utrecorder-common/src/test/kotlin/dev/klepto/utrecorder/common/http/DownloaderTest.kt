@@ -128,22 +128,22 @@ class DownloaderTest :
             output.readBytes().size shouldBe 0
         }
 
-        test("reports progress with the total size when the length is known") {
+        test("reports the bytes received out of the total size when the length is known") {
             serve()
-            val progress = mutableListOf<Pair<Long, Long>>()
+            val progress = mutableListOf<Double>()
 
-            Downloader(url, directories = directories).download(root / "progress") { received, total -> progress += received to total }
+            Downloader(url, directories = directories).download(root / "progress") { progress += it.progress }
 
-            progress.last() shouldBe (sample.length.toLong() to sample.length.toLong())
+            progress.last() shouldBe 1.0
         }
 
-        test("reports a total of -1 when the length is unknown") {
+        test("reports nothing when the length is unknown") {
             serve(chunked = true)
-            val progress = mutableListOf<Pair<Long, Long>>()
+            val progress = mutableListOf<Double>()
 
-            Downloader(url, directories = directories).download(root / "chunked") { received, total -> progress += received to total }
+            Downloader(url, directories = directories).download(root / "chunked") { progress += it.progress }
 
-            progress.last() shouldBe (sample.length.toLong() to -1L)
+            progress shouldBe emptyList()
         }
 
         test("accepts a matching md5 hash") {
@@ -198,12 +198,12 @@ class DownloaderTest :
         test("keeps an existing output that matches the hash without a request, reporting it as complete") {
             serve()
             val output = (root / "cached").apply { writeText(sample) }
-            val progress = mutableListOf<Pair<Long, Long>>()
+            val progress = mutableListOf<Double>()
 
-            Downloader(url, sampleMd5, directories = directories).download(output) { received, total -> progress += received to total }
+            Downloader(url, sampleMd5, directories = directories).download(output) { progress += it.progress }
 
             requests shouldBe 0
-            progress shouldBe listOf(sample.length.toLong() to sample.length.toLong())
+            progress shouldBe listOf(1.0)
         }
 
         test("re-downloads an existing output that does not match the hash") {

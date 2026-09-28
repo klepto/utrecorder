@@ -1,16 +1,16 @@
 package dev.klepto.utrecorder.server.demo
 
-import dev.klepto.utrecorder.server.Demo
-import dev.klepto.utrecorder.server.recording.Recording
+import kotlinx.coroutines.flow.Flow
 
 /**
- * Finder of new demos, which stores each as a [Demo] with a [Recording] and enqueues the recording.
- *
- * The UTBT fetcher is [UtbtDemoFetcher].
+ * Source of the demos to record.
  */
 interface DemoFetcher {
     /**
-     * Fetches new demos until cancelled.
+     * Returns the demos to record, each emitted at most once per collection.
+     *
+     * The flow never completes. It emits the next demo only when its collector asks for one. Each collection emits every
+     * demo, whatever other collections have emitted.
      */
-    suspend fun run(): Nothing
+    suspend fun fetch(): Flow<Demo>
 }

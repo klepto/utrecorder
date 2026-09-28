@@ -2,303 +2,253 @@ package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.http.HTTP_SOCKET_TIMEOUT
 import dev.klepto.utrecorder.common.logger
-import dev.klepto.utrecorder.server.Demo
-import dev.klepto.utrecorder.server.ServerConfig
-import dev.klepto.utrecorder.server.database.DocumentStore
-import dev.klepto.utrecorder.server.recording.Recording
-import dev.klepto.utrecorder.server.recording.RecordingLane
-import dev.klepto.utrecorder.server.recording.RecordingQueue
-import dev.klepto.utrecorder.server.recording.RecordingState
-import dev.klepto.utrecorder.ut99.demo.UtDemo
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsBytes
 import io.ktor.client.statement.bodyAsText
 import io.ktor.client.statement.request
-import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.double
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneOffset
-import kotlin.math.roundToLong
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
+import kotlin.uuid.Uuid
 
 /**
- * [DemoFetcher] over the cap list of UTBT and its demo downloads.
+ * [DemoFetcher] over the verified cap list of UTBT, read newest first one page at a time.
  *
- * Two loops find caps: [poll] takes the caps added since the newest known one, and [backfill] walks the older ones
- * while the server is idle. Each cap is handled once: its demo is downloaded into memory, read with [UtDemo.read] for
- * its map and duration, stored, and enqueued in the lane its duration picks. A demo UTBT does not serve, or that does
- * not parse, is stored with a [RecordingState.FAILED] recording and not enqueued. A failed download stores nothing, so
- * a later pass retries it.
+ * Each collection merges two streams, and the head always goes first:
+ * - The head: once per cooldown, before the next demo is emitted, reads the caps added after the newest demo seen, and
+ *   queues them. If the backlog ended before any demo was read, reads the newest caps instead.
+ * - The backlog: on demand, reads the page of caps added before the oldest demo it has read, and emits every demo not
+ *   seen yet. The first page is the newest page. A page without an unseen demo ends it.
  *
- * @property demos The collection the demo of every handled cap is written to.
- * @property recordings The collection the recording of every handled cap is written to, before its demo.
- * @property queue The queue every stored recording is enqueued in.
- * @property uploaderIsEmpty Returns whether the uploader has no recording waiting to be uploaded.
- * @property config The base URL of the cap list, [ServerConfig.sourceUrl], and of the demos, [ServerConfig.demoUrl],
- * the poll interval, the backfill cooldown and the long lane threshold.
- * @param storedDemos The demos stored when the server started.
+ * If neither stream holds a demo, the collection waits the cooldown. A failed read is logged. A failed head read
+ * discards that poll, and a failed backlog read is retried after the cooldown.
+ *
+ * Each cap becomes one [Demo] whose [Demo.demoUrl] names its download under [UtbtConfig.demoUrl]. A cap whose id is
+ * not a UUID is skipped with a warning.
+ *
+ * @property config The base URLs of the cap list and of the demo downloads, and the cooldown.
  * @param engine The Ktor client engine the requests run over.
  */
 class UtbtDemoFetcher(
-    private val demos: DocumentStore.Collection<Demo>,
-    private val recordings: DocumentStore.Collection<Recording>,
-    private val queue: RecordingQueue,
-    private val uploaderIsEmpty: () -> Boolean,
-    private val config: ServerConfig = ServerConfig(),
-    storedDemos: List<Demo> = emptyList(),
+    private val config: UtbtConfig = UtbtConfig(),
     engine: HttpClientEngine = CIO.create(),
 ) : DemoFetcher {
-    private val client =
+    private val client: HttpClient =
         HttpClient(engine) {
-            install(HttpTimeout) {
-                socketTimeoutMillis = HTTP_SOCKET_TIMEOUT.inWholeMilliseconds
-            }
-        }
-    private val mutex = Mutex()
-    private val known = storedDemos.mapTo(mutableSetOf()) { it.id }
-    private var backfillOffset = storedDemos.size
-    private var firstPoll = storedDemos.isEmpty()
-
-    /**
-     * Runs [backfill] once, and [poll] every [ServerConfig.pollInterval], until cancelled. A failed poll is logged and
-     * retried at the next one.
-     */
-    override suspend fun run(): Nothing =
-        coroutineScope {
-            launch { backfill() }
-            pollForever()
+            install(HttpTimeout) { socketTimeoutMillis = HTTP_SOCKET_TIMEOUT.inWholeMilliseconds }
         }
 
-    private suspend fun pollForever(): Nothing {
-        while (true) {
-            try {
-                poll()
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (failure: Exception) {
-                log.warn(failure) { "Demo poll failed, retrying in ${config.pollInterval}" }
-            }
-            delay(config.pollInterval)
-        }
-    }
-
-    /**
-     * Handles, oldest first, every cap added since the newest known one.
-     *
-     * Reads pages from offset `0` until a page holds a known cap or is empty. When no demo was stored at startup, the
-     * first pass takes only the newest cap and leaves the older ones to [backfill]. A pass stops at the first failed
-     * download, so the next pass retries it before any newer cap.
-     *
-     * @throws IOException If UTBT cannot be reached or answers a page with an error.
-     */
-    suspend fun poll() {
-        val unseen = mutableListOf<Cap>()
-        var offset = 0
-        while (true) {
-            val page = fetchCaps(offset)
-            val fresh = page.takeWhile { it.id !in known }
-            if (firstPoll) {
-                unseen += fresh.take(1)
-                break
-            }
-            unseen += fresh
-            if (page.isEmpty() || fresh.size < page.size) break
-            offset += page.size
-        }
-        for (cap in unseen.asReversed()) {
-            if (!handle(cap)) return
-        }
-        firstPoll = false
-    }
-
-    /**
-     * Walks the caps older than those known at startup, newest first, until a page comes back empty.
-     *
-     * Starts at the number of demos stored at startup and skips every known cap. Before each cap it waits until both
-     * the [queue] and the uploader are empty, and after each it waits [ServerConfig.backfillCooldown]. A failed page
-     * read or download is logged and retried after the cooldown.
-     */
-    suspend fun backfill() {
-        while (true) {
-            val page =
-                retrying("Backfill page read at offset $backfillOffset") { fetchCaps(backfillOffset) }
-            if (page.isEmpty()) return
-            for (cap in page) {
-                while (cap.id !in known) {
-                    awaitIdle()
-                    val handled = handle(cap)
-                    delay(config.backfillCooldown)
-                    if (handled) break
-                }
-            }
-            backfillOffset += page.size
-        }
-    }
-
-    private suspend fun awaitIdle() {
-        while (!queue.isEmpty || !uploaderIsEmpty()) delay(IDLE_CHECK_INTERVAL)
-    }
-
-    private suspend fun <T> retrying(
-        action: String,
-        block: suspend () -> T,
-    ): T {
-        while (true) {
-            try {
-                return block()
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (failure: Exception) {
-                log.warn(failure) { "$action failed, retrying in ${config.backfillCooldown}" }
-                delay(config.backfillCooldown)
-            }
-        }
-    }
-
-    /**
-     * Stores and enqueues [cap] unless it is known. Returns `false` if its download failed and nothing was stored.
-     */
-    private suspend fun handle(cap: Cap): Boolean =
-        mutex.withLock {
-            if (cap.id in known) return true
-            val bytes =
-                try {
-                    fetchDemo(cap.id)
-                } catch (cancellation: CancellationException) {
-                    throw cancellation
-                } catch (failure: Exception) {
-                    log.warn(failure) { "Download of demo ${cap.id} failed, retrying later" }
-                    return false
-                }
-            val parsed =
-                bytes?.let {
-                    try {
-                        Result.success(UtDemo.read(it))
-                    } catch (failure: Exception) {
-                        Result.failure(failure)
-                    }
-                } ?: Result.failure(IllegalStateException("UTBT does not serve demo ${cap.id}"))
-            val demo = parsed.getOrNull()
-            val stored =
-                Demo(
-                    id = cap.id,
-                    map = demo?.map,
-                    player = cap.alias,
-                    capTime = cap.capTime,
-                    duration = demo?.duration,
-                    addedAt = cap.added,
-                ) to
-                    Recording(
-                        demoId = cap.id,
-                        lane = if (demo != null && demo.duration >= config.longThreshold) RecordingLane.LONG else RecordingLane.SHORT,
-                        state = if (demo != null) RecordingState.PENDING else RecordingState.FAILED,
-                        error = parsed.exceptionOrNull()?.let { it.message ?: it.toString() },
-                    )
-            recordings.put(stored.second)
-            demos.put(stored.first)
-            known += cap.id
-            if (demo != null) {
-                queue.enqueue(stored)
-            } else {
-                log.warn(parsed.exceptionOrNull()) { "Demo ${cap.id} stored as failed" }
-            }
-            true
+    override suspend fun fetch(): Flow<Demo> =
+        flow {
+            val search = Search()
+            while (true) emit(search.next())
         }
 
     /**
-     * Returns the page of verified caps starting at [offset], newest first. An empty page means [offset] is past the
-     * oldest cap.
+     * Returns the page of up to [PAGE_LIMIT] demos added before [before] and after [after]. If the read fails, logs the
+     * failure and returns `null` instead.
      */
-    private suspend fun fetchCaps(offset: Int): List<Cap> {
+    private suspend fun fetchPageCatching(
+        before: Instant? = null,
+        after: Instant? = null,
+    ): List<Demo>? =
+        try {
+            fetchPage(before, after)
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            log.warn(exception) { "Could not fetch the demos added before $before and after $after" }
+            null
+        }
+
+    /**
+     * Returns the page of up to [PAGE_LIMIT] demos added before [before] and after [after], newest first. A bound that
+     * is `null` is left out of the request.
+     */
+    private suspend fun fetchPage(
+        before: Instant?,
+        after: Instant?,
+    ): List<Demo> {
         val response =
-            client.get("${config.sourceUrl}/caps") {
-                parameter("limit", PAGE_SIZE)
-                parameter("offset", offset)
+            client.get("${config.apiUrl}/caps") {
+                parameter("limit", PAGE_LIMIT)
                 parameter("order", "desc")
                 parameter("verified", true)
+                parameter("before", before?.toEpochParameter())
+                parameter("after", after?.toEpochParameter())
             }
-        response.requireSuccess()
-        return Json
-            .parseToJsonElement(response.bodyAsText())
-            .jsonObject
-            .getValue("data")
-            .jsonArray
-            .map { readCap(it.jsonObject) }
+        if (!response.status.isSuccess()) throw IOException("UTBT answered ${response.status} for ${response.request.url}")
+        return JSON
+            .decodeFromString<CapList>(response.bodyAsText())
+            .data
+            .mapNotNull { toDemo(it) }
+    }
+
+    private fun toDemo(cap: Cap): Demo? {
+        if (Uuid.parseOrNull(cap.id) == null) {
+            log.warn { "Skipping cap ${cap.id}, its id is not a UUID" }
+            return null
+        }
+        return Demo(
+            capId = cap.id,
+            map = cap.map,
+            player = cap.alias,
+            capTime = cap.capTimeSeconds.seconds,
+            timestamp = Instant.parse("${cap.added.replace(' ', 'T')}Z"),
+            demoUrl = "${config.demoUrl}/${cap.id}",
+        )
     }
 
     /**
-     * Returns the bytes of the demo of the cap [id], or `null` if UTBT does not serve it.
-     */
-    private suspend fun fetchDemo(id: String): ByteArray? {
-        val response = client.get("${config.demoUrl}/$id")
-        if (response.status == HttpStatusCode.NotFound) return null
-        response.requireSuccess()
-        return response.bodyAsBytes()
-    }
-
-    private fun HttpResponse.requireSuccess() {
-        if (!status.isSuccess()) throw IOException("${request.url} answered $status")
-    }
-
-    /**
-     * A capped run on the cap list.
+     * State of one collection of [fetch]: the head queue, the backlog cursor and the cap ids it has seen.
      *
-     * @property id The identifier of the cap at UTBT.
-     * @property alias The alias of the player who capped.
-     * @property capTime The time the cap took.
-     * @property added The time UTBT added the cap.
+     * A cap id is seen once it is queued at the head or emitted from the backlog.
      */
+    private inner class Search {
+        private val seen: MutableSet<String> = mutableSetOf()
+        private val head: ArrayDeque<Demo> = ArrayDeque()
+        private val backlog: ArrayDeque<Demo> = ArrayDeque()
+        private var newest: Instant? = null
+        private var oldest: Instant? = null
+        private var backlogEnded: Boolean = false
+        private var headPolled: TimeMark? = null
+
+        /**
+         * Returns the next demo to emit.
+         *
+         * Polls the head first once the cooldown has passed since the last poll. Returns a queued head demo if there is
+         * one, else the next backlog demo. If neither has a demo, waits the cooldown and tries again.
+         */
+        suspend fun next(): Demo {
+            while (true) {
+                if (isHeadDue()) pollHead()
+                val demo = head.removeFirstOrNull() ?: nextBacklogDemo()
+                if (demo != null) return demo
+                delay(config.cooldown)
+            }
+        }
+
+        /**
+         * Returns `true` if the head was never polled, or the cooldown has passed since the last poll.
+         */
+        private fun isHeadDue(): Boolean = headPolled?.let { it.elapsedNow() >= config.cooldown } ?: true
+
+        /**
+         * Queues the unseen demos added after the newest demo seen, ahead of the demos already queued. Before any
+         * demo is read, queues nothing while the backlog is open, and the unseen newest demos once it has ended.
+         */
+        private suspend fun pollHead() {
+            headPolled = TimeSource.Monotonic.markNow()
+            if (newest == null && !backlogEnded) return
+            val fresh = readHead(newest) ?: return
+            seen += fresh.map { it.capId }
+            advanceNewest(fresh)
+            head.addAll(0, fresh)
+        }
+
+        /**
+         * Returns the unseen demos added after [after], newest first. Reads pages until one holds no unseen demo. If
+         * [after] is `null`, reads from the newest demo on. If a read fails, returns `null` instead.
+         */
+        private suspend fun readHead(after: Instant?): List<Demo>? {
+            val fresh = mutableListOf<Demo>()
+            do {
+                val page = fetchPageCatching(fresh.lastOrNull()?.timestamp, after) ?: return null
+                val unseen = page.filter { it.capId !in seen && it !in fresh }
+                fresh += unseen
+            } while (unseen.isNotEmpty())
+            return fresh
+        }
+
+        /**
+         * Returns the next unseen demo of the backlog, reading the next page when the read ones run out. If the backlog
+         * has ended, or a read fails, returns `null` instead.
+         */
+        private suspend fun nextBacklogDemo(): Demo? {
+            while (backlog.isNotEmpty() || readBacklogPage()) {
+                val demo = backlog.removeFirst()
+                if (seen.add(demo.capId)) return demo
+            }
+            return null
+        }
+
+        /**
+         * Reads the unseen demos of the page added before the oldest demo of the backlog. Returns `false` if the page
+         * holds no unseen demo, the backlog has ended, or the read fails. A page without an unseen demo ends the
+         * backlog.
+         */
+        private suspend fun readBacklogPage(): Boolean {
+            if (backlogEnded) return false
+            val page = fetchPageCatching(before = oldest) ?: return false
+            val unseen = page.filter { it.capId !in seen }
+            backlogEnded = unseen.isEmpty()
+            oldest = page.lastOrNull()?.timestamp ?: oldest
+            advanceNewest(page)
+            backlog += unseen
+            return unseen.isNotEmpty()
+        }
+
+        /**
+         * Moves the newest time seen up to the newest of [demos].
+         */
+        private fun advanceNewest(demos: List<Demo>) {
+            newest = (demos.map { it.timestamp } + listOfNotNull(newest)).maxOrNull()
+        }
+    }
+
+    /**
+     * One page of the UTBT cap list.
+     *
+     * @property data The caps of the page, newest first. UTBT leaves it out of a page without caps.
+     */
+    @Serializable
+    private data class CapList(
+        val data: List<Cap> = emptyList(),
+    )
+
+    /**
+     * One cap of the UTBT cap list.
+     *
+     * @property id The UTBT identifier of the cap.
+     * @property map The name of the map the cap was made on.
+     * @property alias The alias of the player who capped.
+     * @property capTimeSeconds The time the cap took, in seconds.
+     * @property added The time UTBT added the cap, in UTC without a zone, such as `2026-09-26 12:19:59.891708`.
+     */
+    @Serializable
     private data class Cap(
         val id: String,
+        val map: String,
         val alias: String,
-        val capTime: Duration,
-        val added: Instant,
+        @SerialName("cap_time_seconds") val capTimeSeconds: Double,
+        val added: String,
     )
 
     private companion object {
-        /** The number of caps a page holds. */
-        const val PAGE_SIZE = 100
+        const val PAGE_LIMIT = 100
 
-        /** The time between two checks of whether the queue and the uploader are empty. */
-        val IDLE_CHECK_INTERVAL = 10.seconds
+        val JSON: Json = Json { ignoreUnknownKeys = true }
 
         val log = logger<UtbtDemoFetcher>()
 
-        fun readCap(cap: JsonObject): Cap =
-            Cap(
-                id = cap.string("id"),
-                alias = cap.string("alias"),
-                capTime = (cap.getValue("cap_time_seconds").jsonPrimitive.double * 1000).roundToLong().milliseconds,
-                added = readAdded(cap.string("added")),
-            )
-
-        fun JsonObject.string(key: String): String = getValue(key).jsonPrimitive.content
-
         /**
-         * Reads UTBT's `added` timestamp, a UTC date and time without a zone such as `2026-09-26 12:19:59.891708`.
+         * Returns this time as the UTBT query parameter: Unix epoch seconds with a fraction of microseconds, such as
+         * `1790533924.038369`.
          */
-        fun readAdded(added: String): Instant = LocalDateTime.parse(added.replace(' ', 'T')).toInstant(ZoneOffset.UTC)
+        fun Instant.toEpochParameter(): String = "$epochSeconds.${(nanosecondsOfSecond / 1_000).toString().padStart(6, '0')}"
     }
 }
