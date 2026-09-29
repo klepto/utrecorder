@@ -1,16 +1,18 @@
 package dev.klepto.utrecorder.core.demo
 
 import dev.klepto.utrecorder.ut99.UtIni
+import dev.klepto.utrecorder.ut99.UtPackage
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
 /**
  * Settings of one run that plays a demo through the recorder console.
  *
- * Use [of] to create one from a demo file name and a demo duration.
+ * Use [of] to create one from a demo file name, a demo duration and the packages the demo loads.
  *
  * @property demoFileName The file name of the demo in the installation's `System` directory, without extension.
  * @property demoDuration How long the demo runs.
+ * @property packages The packages the demo loads.
  * @property execLine The exec script line playing the demo.
  * @property console The console class the run sets `[Engine.Engine] Console` to.
  * @property exitDelay The `ExitDelay` the run writes to `UTRecorder.ini`.
@@ -21,6 +23,7 @@ import kotlin.time.Duration.Companion.seconds
 data class DemoPlaybackConfig(
     val demoFileName: String,
     val demoDuration: Duration,
+    val packages: List<UtPackage>,
     val execLine: String,
     val console: String,
     val exitDelay: Duration,
@@ -64,15 +67,18 @@ data class DemoPlaybackConfig(
         private val EXIT_DELAY = 5.seconds
 
         /**
-         * Returns the settings of a run that plays the demo file [demoFileName], which is [demoDuration] long.
+         * Returns the settings of a run that plays the demo file [demoFileName], which is [demoDuration] long and loads
+         * [packages].
          */
         fun of(
             demoFileName: String,
             demoDuration: Duration,
+            packages: List<UtPackage> = emptyList(),
         ): DemoPlaybackConfig =
             DemoPlaybackConfig(
                 demoFileName = demoFileName,
                 demoDuration = demoDuration,
+                packages = packages,
                 execLine = "demoplay $demoFileName",
                 console = RECORDER_CONSOLE,
                 exitDelay = EXIT_DELAY,

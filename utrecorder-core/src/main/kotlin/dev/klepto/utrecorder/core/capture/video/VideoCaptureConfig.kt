@@ -28,13 +28,14 @@ import kotlin.time.Duration.Companion.seconds
  * @property timeout How long the video capture may run before it is killed, render- and encode-bound rather than
  * demo-bound.
  * @property arguments Extra arguments appended to the capture command line, split on spaces.
+ * @property smoothRecorder Whether the capture smooths the movement and view of the player who recorded the demo.
  * @property linuxMesa The Mesa tuning of the video capture on Linux.
  */
 class VideoCaptureConfig(
     reader: ConfigReader = SystemConfigReader(),
     val fps: Int = reader.get("record.fps", 60, String::toInt),
     val codec: String = reader.get("record.codec", "libsvtav1"),
-    val preset: String = reader.get("record.preset", "4"),
+    val preset: String = reader.get("record.preset", "3"),
     val crf: String = reader.get("record.crf", "28"),
     val bitrate: String = reader.get("record.bitrate", "4800k"),
     val svtav1Params: String = reader.get("record.svtav1_params", "tune=0"),
@@ -45,6 +46,7 @@ class VideoCaptureConfig(
     val port: Int = reader.get("record.frame_port", 0, String::toInt),
     val timeout: Duration = reader.duration("record.frame_timeout", 1800.seconds),
     val arguments: String = reader.get("record.arguments", ""),
+    val smoothRecorder: Boolean = reader.get("record.smooth_recorder", true, String::toBoolean),
     val linuxMesa: LinuxMesaConfig = LinuxMesaConfig(reader),
 ) {
     /**

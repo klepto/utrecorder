@@ -146,7 +146,8 @@ class FfmpegVideoCapture(
 
     /**
      * Returns the unstarted run that plays [description]: without sound, and playing the exec script. On Windows the
-     * injector of [hooks] starts the game executable copy, and on Linux the copy starts directly.
+     * injector of [hooks] starts the game executable copy, and on Linux the copy starts directly. The HUD is hidden
+     * when the demo loads a Bunny Track mod older than `UTBT_BTMod_v18`.
      */
     fun process(
         description: DemoPlaybackConfig,
@@ -161,6 +162,7 @@ class FfmpegVideoCapture(
             exec += execScript()
             sound = false
             environment += this@FfmpegVideoCapture.environment(port, hooks)
+            if (hidesHud(description)) userIni { this["Botpack.ChallengeHUD", "bHideHUD"] = "True" }
         }
 
     /**
@@ -174,13 +176,15 @@ class FfmpegVideoCapture(
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays the demo: the console's trim
-     * command `DemoFrames <fps>`, and `HideMessages`, which keeps chat and progress messages off the recorded HUD.
+     * command `DemoFrames <fps>`, `HideMessages`, which keeps chat and progress messages off the recorded HUD, and
+     * `SmoothRecorder` when [VideoCaptureConfig.smoothRecorder] is on.
      */
     fun execScript(): List<String> =
-        listOf(
-            "DemoFrames %.6f".format(Locale.ROOT, config.fps.toDouble()),
-            "HideMessages",
-        )
+        buildList {
+            this += "DemoFrames %.6f".format(Locale.ROOT, config.fps.toDouble())
+            this += "HideMessages"
+            if (config.smoothRecorder) this += "SmoothRecorder"
+        }
 
     companion object {
         /**
@@ -204,9 +208,27 @@ class FfmpegVideoCapture(
         private const val HOOK_LIBRARY = "uthooks"
 
         /**
+         * The oldest version of the Bunny Track mod whose HUD the capture records.
+         */
+        private const val BT_MOD_HUD_VERSION = 18
+
+        /**
          * The native artifacts the hooks module embeds in its jar.
          */
         private val ARTIFACTS = EmbeddedArtifacts("native")
+
+        /**
+         * The name of a Bunny Track mod package, capturing its version.
+         */
+        private val BT_MOD = Regex("""UTBT_BTMod_v(\d+)""", RegexOption.IGNORE_CASE)
+
+        /**
+         * Returns whether the demo of [description] loads a Bunny Track mod older than [BT_MOD_HUD_VERSION].
+         */
+        private fun hidesHud(description: DemoPlaybackConfig): Boolean =
+            description.packages
+                .mapNotNull { BT_MOD.matchEntire(it.name) }
+                .any { it.groupValues[1].toInt() < BT_MOD_HUD_VERSION }
 
         /**
          * Returns the hook library of [hooks], or `null` if [hooks] holds none.

@@ -14,7 +14,9 @@
 //   HideMessages      keep chat and progress messages off the HUD,
 //   RewindStart       seek back to the demo start once ticks settle,
 //   DemoFrames <fps>  log a spawn mark and reset the demo speed to 1 once the
-//                     followed player spawns.
+//                     followed player spawns,
+//   SmoothRecorder    smooth the followed player's movement and view with a
+//                     UTRecorderSmooth.
 //=============================================================================
 class UTRecorderConsole extends UTConsole
 	config(UTRecorder);
@@ -70,6 +72,8 @@ var bool bMarkedEnd;      // the end mark has been logged
 var bool bRewindStart;    // seek back to the demo's start once ticks settle
 var bool bRewound;        // the rewind seek has been issued
 var int SettledTicks;     // settled ticks in a row before the rewind
+var bool bSmoothRecorder; // SmoothRecorder was run
+var UTRecorderSmooth Smoother; // the smoother spawned in the demo level
 
 var float Elapsed;        // seconds since this console was created
 var float SinceEnd;       // seconds since the demo last looked finished
@@ -122,6 +126,9 @@ event Tick(float Delta)
 
 	if (PlaybackFrameRate > 0.0)
 		CheckSpawn(Delta);
+
+	if (bSmoothRecorder)
+		SpawnSmoother();
 
 	if (bAutoExit)
 		DisableWarpSimulation();
@@ -296,6 +303,32 @@ function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
 	Log("UTRecorder: rewinding from" @ Spec.Driver.GetCurrentTime(), 'UTRecorder');
 	Spec.SeekTo("0");
 	return True;
+}
+
+// Keeps a UTRecorderSmooth spawned in the demo level from the next tick on.
+exec function SmoothRecorder()
+{
+	bSmoothRecorder = True;
+	Log("UTRecorder: smoothing the followed player", 'UTRecorder');
+}
+
+// Spawns a UTRecorderSmooth in the demo level unless one is still there.
+function SpawnSmoother()
+{
+	local DemoPlaybackSpec Spec;
+
+	if (Smoother != None && !Smoother.bDeleteMe)
+		return;
+
+	if (Viewport == None)
+		return;
+
+	Spec = DemoPlaybackSpec(Viewport.Actor);
+	if (Spec == None)
+		return;
+
+	Smoother = Spec.Spawn(class'UTRecorderSmooth');
+	Log("UTRecorder: spawned recorder smoother" @ Smoother, 'UTRecorder');
 }
 
 // Sets PlaybackFrameRate to Rate, which turns on the spawn check.

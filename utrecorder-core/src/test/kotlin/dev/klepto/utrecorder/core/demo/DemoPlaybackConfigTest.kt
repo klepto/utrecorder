@@ -13,6 +13,7 @@ class DemoPlaybackConfigTest :
                 DemoPlaybackConfig(
                     demoFileName = "ut-2026-09-13-1030-05",
                     demoDuration = 10.minutes,
+                    packages = emptyList(),
                     execLine = "demoplay ut-2026-09-13-1030-05",
                     console = "UTRecorder.UTRecorderConsole",
                     exitDelay = 5.seconds,
@@ -27,6 +28,7 @@ class DemoPlaybackConfigTest :
                 DemoPlaybackConfig(
                     demoFileName = "ut-2026-09-13-1030-05",
                     demoDuration = 10.minutes,
+                    packages = emptyList(),
                     execLine = "demoplay ut-2026-09-13-1030-05",
                     console = "UTRecorder.UTRecorderConsole",
                     exitDelay = 7900.milliseconds,

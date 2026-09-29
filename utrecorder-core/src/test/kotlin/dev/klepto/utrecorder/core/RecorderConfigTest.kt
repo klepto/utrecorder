@@ -79,7 +79,7 @@ class RecorderConfigTest :
             with(config.video) {
                 fps shouldBe 60
                 codec shouldBe "libsvtav1"
-                preset shouldBe "4"
+                preset shouldBe "3"
                 crf shouldBe "28"
                 bitrate shouldBe "4800k"
                 svtav1Params shouldBe "tune=0"

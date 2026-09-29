@@ -6,7 +6,9 @@ import dev.klepto.utrecorder.common.io.Executable
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.ut99.UtConfig
+import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtInstallation
+import dev.klepto.utrecorder.ut99.UtPackage
 import dev.klepto.utrecorder.ut99.UtPlatform
 import dev.klepto.utrecorder.ut99.UtProcessFiles
 import io.kotest.core.spec.style.FunSpec
@@ -150,7 +152,28 @@ class FfmpegVideoCaptureTest :
             executable.arguments shouldContain "-windowed"
         }
 
-        test("execScript trims the demo to the configured fps and hides messages") {
-            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30)).execScript() shouldBe listOf("DemoFrames 30.000000", "HideMessages")
+        fun hideHud(btMod: String): List<String> {
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, listOf(UtPackage.named(btMod, "")))
+            val userIni = UtIni("")
+            capture().process(description, 100, hooks).userIniEdits.forEach { userIni.it() }
+            return userIni["Botpack.ChallengeHUD", "bHideHUD"]
+        }
+
+        test("process hides the HUD of a demo that loads a Bunny Track mod older than version 18") {
+            hideHud("UTBT_BTMod_v13") shouldBe listOf("True")
+        }
+
+        test("process leaves the HUD of a demo that loads Bunny Track mod version 18 alone") {
+            hideHud("UTBT_BTMod_v18") shouldBe emptyList()
+        }
+
+        test("execScript trims the demo to the configured fps, hides messages and smooths the recorder") {
+            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30)).execScript() shouldBe
+                listOf("DemoFrames 30.000000", "HideMessages", "SmoothRecorder")
+        }
+
+        test("execScript leaves the recorder unsmoothed when the config turns smoothing off") {
+            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30, smoothRecorder = false)).execScript() shouldBe
+                listOf("DemoFrames 30.000000", "HideMessages")
         }
     })
