@@ -80,8 +80,9 @@ class Recorder(
      *
      * @param name The name of the mp4 without its extension. If not provided, uses the file name of the downloaded demo
      * without its `.dem` extension.
-     * @throws IllegalStateException If the demo cannot be fetched or resolved, or if a capture fails the recording. A
-     * failed audio capture always fails the recording.
+     * @throws IllegalStateException If the demo cannot be fetched or resolved, if a capture fails the recording, or if
+     * the length of the mp4 does not match the run time the demo reports. A failed audio capture always fails the
+     * recording.
      * @throws UtPackageException If no source serves one of the packages the demo names at the GUID it recorded.
      */
     suspend fun record(
@@ -122,8 +123,8 @@ class Recorder(
      *
      * @param name The name of the mp4 without its extension. If not provided, uses the file name of [demo] without its
      * `.dem` extension.
-     * @throws IllegalStateException If the demo cannot be resolved, or if a capture fails the recording. A failed audio
-     * capture always fails the recording.
+     * @throws IllegalStateException If the demo cannot be resolved, if a capture fails the recording, or if the length
+     * of the mp4 does not match the run time the demo reports. A failed audio capture always fails the recording.
      * @throws UtPackageException If no source serves one of the packages the demo names at the GUID it recorded.
      */
     suspend fun record(
@@ -146,9 +147,10 @@ class Recorder(
         DemoPlaybackUscript(installation).install()
         DemoPlaybackResources.installHudLayout(installation)
         UtMapInstaller(installation).install(preparing.part(0.8, 1.0))
-        val packages = UtDemo.read(demo).packages
-        UtPackageInstaller(packages, installation, config.ut).install(ResolvingPackages.start(onProgress))
-        return RecorderPipeline(config.video, config.audio, installation, directories).record(demo, name, onProgress)
+        val parsed = UtDemo.read(demo)
+        UtPackageInstaller(parsed.packages, installation, config.ut).install(ResolvingPackages.start(onProgress))
+        val pipeline = RecorderPipeline(config.video, config.audio, installation, directories)
+        return pipeline.record(demo, name, parsed.cap?.runTime, onProgress)
     }
 
     companion object {

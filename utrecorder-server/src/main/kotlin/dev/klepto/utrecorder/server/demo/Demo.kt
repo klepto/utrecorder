@@ -32,7 +32,7 @@ data class Demo(
     /**
      * Returns [capTime] as `mm:ss.SSS`. If [capTime] is under a minute, returns `ss.SSS` instead.
      */
-    private fun formatCapTime(): String =
+    fun formatCapTime(): String =
         capTime.toComponents { minutes, seconds, nanoseconds ->
             val milliseconds = nanoseconds / 1_000_000
             when (minutes) {

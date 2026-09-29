@@ -3,10 +3,12 @@ package dev.klepto.utrecorder.server
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.common.suspendCatching
 import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.demo.DemoFetchService
 import dev.klepto.utrecorder.server.demo.UtbtDemoFetcher
-import dev.klepto.utrecorder.server.recording.RecordingQueue
-import dev.klepto.utrecorder.server.recording.RecordingQueueService
+import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingService
+import dev.klepto.utrecorder.server.upload.ArchiveMediaUploader
+import dev.klepto.utrecorder.server.upload.UploadService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
@@ -32,14 +34,30 @@ object Server {
     suspend fun run(config: ServerConfig = ServerConfig()) {
         log.info { "Starting the server against ${config.utbt.apiUrl}" }
         DocumentStore.open(config.database) { store ->
-            val queue = RecordingQueue(store)
+            val repository = RecordingRepository(store, config.recording)
             val services: List<Service> =
-                listOf(
-                    RecordingQueueService(UtbtDemoFetcher(config.utbt), queue, config.utbt),
-                    RecordingService(queue, config = config),
+                listOfNotNull(
+                    DemoFetchService(UtbtDemoFetcher(config.utbt), repository, config.utbt),
+                    RecordingService(repository, config = config),
+                    uploadService(repository, config),
                 )
             runServices(services)
         }
+    }
+
+    /**
+     * Returns the service that uploads the recordings of [repository] to the Internet Archive. If the Archive keys of
+     * [config] are not both configured, logs a warning and returns `null` instead.
+     */
+    private fun uploadService(
+        repository: RecordingRepository,
+        config: ServerConfig,
+    ): UploadService? {
+        if (config.archive.accessKey == null || config.archive.secretKey == null) {
+            log.warn { "Not uploading recordings, the Internet Archive keys are not configured" }
+            return null
+        }
+        return UploadService(repository, ArchiveMediaUploader(config.archive), config)
     }
 
     /**

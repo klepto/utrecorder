@@ -10,6 +10,7 @@ import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
@@ -22,54 +23,46 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTimedValue
 
 /**
- * [Service] that records the demos of [queue] into [ServerConfig.recordings], newest first.
+ * [Service] that records the demos of [repository] into [ServerConfig.recordings], in the order [repository] gives
+ * them.
  *
- * A demo whose cap time is at most [RecordingConfig.longThreshold] is recorded on one of [primaryRecorders], a longer
- * one on one of [secondaryRecorders]. Each recorder takes its demos from [queue] on its own, so a busy secondary
- * recorder never holds up a short demo. If [secondaryRecorders] is empty, [primaryRecorders] record the long demos too.
- * Each recorder records one demo at a time, and waits [RecordingConfig.cooldown] after each attempt before it records
- * again. The cooldown after the last attempt starts once the recording is stored. A failed demo is recorded again on
- * the same recorder, up to [RecordingConfig.maxAttempts] attempts. A demo that names a package no source holds is
- * given up on at once. A demo whose mp4 is already stored is set to [Recorded] without recording it. Each recording is
- * tracked in [jobs] from its first attempt until its last one ends, and its outcome is set on [queue].
+ * Each of [recorders] takes its demos from [repository] on its own, and records one demo at a time. It waits
+ * [RecordingConfig.cooldown] after each attempt before it records again. The cooldown after the last attempt starts
+ * once the recording is stored. A failed demo is recorded again on the same recorder, up to
+ * [RecordingConfig.maxAttempts] attempts. A demo that names a package no source holds is given up on at once. A demo
+ * whose mp4 is already stored is set to [Recorded] without recording it. Each recording is tracked in [jobs] from its
+ * first attempt until its last one ends, and its outcome is set on [repository].
  *
- * @property queue The demos to record.
- * @property primaryRecorders The recorders of the demos up to the long threshold.
- * @property secondaryRecorders The recorders of the demos over the long threshold. May be empty.
- * @property config The recordings directory, the long threshold, the attempts and the cooldown.
+ * @property repository The demos to record.
+ * @property recorders The recorders that take the demos.
+ * @property config The recordings directory, the attempts and the cooldown.
  * @property jobs The list the running recordings are tracked in.
- * @throws IllegalArgumentException If [primaryRecorders] is empty.
+ * @throws IllegalArgumentException If [recorders] is empty.
  */
 class RecordingService(
-    private val queue: RecordingQueue,
-    private val primaryRecorders: List<RecorderProvider> = listOf(DefaultRecorderProvider()),
-    private val secondaryRecorders: List<RecorderProvider> = emptyList(),
+    private val repository: RecordingRepository,
+    private val recorders: List<RecorderProvider> = listOf(DefaultRecorderProvider()),
     private val config: ServerConfig = ServerConfig(),
     private val jobs: RecordingJobs = RecordingJobs(),
 ) : Service {
     init {
-        require(primaryRecorders.isNotEmpty()) { "Primary recorders must not be empty" }
+        require(recorders.isNotEmpty()) { "Recorders must not be empty" }
     }
 
     override suspend fun start(): Unit =
         coroutineScope {
-            primaryRecorders.forEach { recorder ->
-                launch { recorder.recordQueued { secondaryRecorders.isEmpty() || it.isShort() } }
-            }
-            secondaryRecorders.forEach { recorder ->
-                launch { recorder.recordQueued { !it.isShort() } }
-            }
+            recorders.forEach { launch { it.recordQueued() } }
             awaitCancellation()
         }
 
     /**
-     * Records the demos of [queue] that [accepts] returns `true` for on this recorder, one at a time.
+     * Records the demos of [repository] on this recorder, one at a time.
      */
-    private suspend fun RecorderProvider.recordQueued(accepts: (Demo) -> Boolean): Nothing {
-        while (true) {
-            val demo = queue.take(accepts)
+    private suspend fun RecorderProvider.recordQueued() {
+        while (isRunning()) {
+            val demo = repository.take()
             if (isRecorded(demo)) {
-                queue.finish(demo.capId, Recorded)
+                repository.finish(demo.capId, Recorded)
                 continue
             }
             processRecording(demo, recordTracked(demo))
@@ -78,12 +71,7 @@ class RecordingService(
     }
 
     /**
-     * Returns `true` if the cap time of this demo is at most [RecordingConfig.longThreshold].
-     */
-    private fun Demo.isShort(): Boolean = capTime <= config.recording.longThreshold
-
-    /**
-     * Stores the mp4 of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [queue].
+     * Stores the mp4 of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [repository].
      */
     private suspend fun processRecording(
         demo: Demo,
@@ -93,21 +81,21 @@ class RecordingService(
         when (result) {
             is RecorderResult.Done -> {
                 suspendCatching { store(demo, result.mp4) }
-                    .onSuccess { queue.finish(capId, result.status) }
+                    .onSuccess { repository.finish(capId, result.status) }
                     .onFailure {
                         log.error(it) { "Could not store recording $capId" }
-                        queue.finish(capId, Failed, it.toString())
+                        repository.finish(capId, Failed, it.toString())
                     }
             }
 
             is RecorderResult.Failed -> {
                 log.error(result.exception) { "Giving up on recording $capId after ${config.recording.maxAttempts} attempts" }
-                queue.finish(capId, result.status, result.exception.toString())
+                repository.finish(capId, result.status, result.exception.toString())
             }
 
             is RecorderResult.Unresolvable -> {
                 log.error(result.exception) { "Giving up on recording $capId, couldn't resolve required packages" }
-                queue.finish(capId, result.status, result.exception.toString())
+                repository.finish(capId, result.status, result.exception.toString())
             }
         }
     }
@@ -127,13 +115,15 @@ class RecordingService(
      * Returns the result of the last attempt at recording [demo] on this recorder. Records again after each
      * [RecorderResult.Failed], up to [RecordingConfig.maxAttempts] attempts, once the cooldown that follows the failed
      * attempt has passed. Each attempt and its progress are reported to [tracker].
+     *
+     * @throws CancellationException If the service stops running before the last attempt.
      */
     private suspend fun RecorderProvider.recordRetrying(
         demo: Demo,
         tracker: RecordingJobs.Tracker,
     ): RecorderResult {
         var attempt = 1
-        while (true) {
+        while (isRunning()) {
             tracker.startAttempt(attempt)
             val result = record(demo, tracker::report)
             if (result !is RecorderResult.Failed || attempt >= config.recording.maxAttempts) return result
@@ -141,6 +131,7 @@ class RecordingService(
             delay(config.recording.cooldown)
             attempt++
         }
+        throw CancellationException("Stopped recording ${demo.capId} before its last attempt")
     }
 
     /**

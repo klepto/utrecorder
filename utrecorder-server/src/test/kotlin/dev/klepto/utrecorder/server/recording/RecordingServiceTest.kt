@@ -37,6 +37,7 @@ import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
+import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -51,16 +52,20 @@ class RecordingServiceTest :
         fun demo(
             capId: String,
             minute: Int,
-            capTime: Duration = 10.seconds,
         ): Demo =
             Demo(
                 capId = capId,
                 map = "CTF-BT-Maverick",
                 player = "klepto",
-                capTime = capTime,
+                capTime = 10.seconds,
                 timestamp = Instant.parse("2026-09-26T12:00:00Z") + minute.minutes,
                 demoUrl = "http://api.utbt.net/demos/$capId",
             )
+
+        val clock =
+            object : Clock {
+                override fun now(): Instant = Instant.parse("2026-09-27T08:00:00Z")
+            }
 
         fun config(
             recordings: Path,
@@ -91,40 +96,18 @@ class RecordingServiceTest :
 
         suspend fun running(
             demos: List<Demo>,
-            service: (RecordingQueue) -> RecordingService,
-            block: suspend (RecordingQueue) -> Unit,
+            service: (RecordingRepository) -> RecordingService,
+            block: suspend (RecordingRepository) -> Unit,
         ) {
             DocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val queue = RecordingQueue(store)
-                queue += demos
+                val repository = RecordingRepository(store, RecordingConfig(ConfigReader.EMPTY), clock)
+                repository += demos
                 coroutineScope {
-                    val job = launch { service(queue).start() }
-                    block(queue)
+                    val job = launch { service(repository).start() }
+                    block(repository)
                     job.cancelAndJoin()
                 }
             }
-        }
-
-        test("records a demo up to the long threshold on a primary recorder and a longer one on a secondary recorder") {
-            val recordings = createTempDirectory(root, "recordings")
-            val primary = CopyOnWriteArrayList<String>()
-            val secondary = CopyOnWriteArrayList<String>()
-            running(
-                listOf(demo("short", 1, 5.minutes), demo("long", 0, 301.seconds)),
-                { queue ->
-                    RecordingService(
-                        queue,
-                        listOf(recorder { demo, _ -> done(demo).also { primary += demo.capId } }),
-                        listOf(recorder { demo, _ -> done(demo).also { secondary += demo.capId } }),
-                        config(recordings),
-                    )
-                },
-            ) {
-                eventually(5.seconds) { names(recordings) shouldContainExactlyInAnyOrder listOf("short.mp4", "long.mp4") }
-            }
-
-            primary shouldContainExactly listOf("short")
-            secondary shouldContainExactly listOf("long")
         }
 
         test("moves the mp4 into the recordings directory and deletes its workspace") {
@@ -132,13 +115,12 @@ class RecordingServiceTest :
             val mp4s = CopyOnWriteArrayList<Path>()
             running(
                 listOf(demo("cap", 0)),
-                { queue ->
+                { repository ->
                     RecordingService(
-                        queue,
+                        repository,
                         listOf(
                             recorder { demo, _ -> done(demo).also { mp4s.add((it as RecorderResult.Done).mp4) } },
                         ),
-                        listOf(recorder { _, _ -> error("No long demo") }),
                         config(recordings),
                     )
                 },
@@ -159,20 +141,19 @@ class RecordingServiceTest :
             val recorded = CopyOnWriteArrayList<String>()
             running(
                 listOf(demo("known", 1), demo("cap", 0)),
-                { queue ->
+                { repository ->
                     RecordingService(
-                        queue,
+                        repository,
                         listOf(
                             recorder { demo, _ -> done(demo).also { recorded += demo.capId } },
                         ),
-                        listOf(recorder { _, _ -> error("No long demo") }),
                         config(recordings),
                     )
                 },
-            ) { queue ->
+            ) { repository ->
                 eventually(5.seconds) { recordings.resolve("cap.mp4").exists() shouldBe true }
-                eventually(5.seconds) { queue["cap"]?.status shouldBe Recorded }
-                queue["known"]?.status shouldBe Recorded
+                eventually(5.seconds) { repository["cap"]?.status shouldBe Recorded }
+                repository["known"]?.status shouldBe Recorded
             }
 
             recorded shouldContainExactly listOf("cap")
@@ -186,9 +167,9 @@ class RecordingServiceTest :
             val recorded = CopyOnWriteArrayList<String>()
             running(
                 listOf(demo("newer", 1), demo("older", 0)),
-                { queue ->
+                { repository ->
                     RecordingService(
-                        queue,
+                        repository,
                         listOf(
                             recorder { demo, _ ->
                                 starts += TimeSource.Monotonic.markNow()
@@ -198,7 +179,6 @@ class RecordingServiceTest :
                                 done(demo).also { recorded += demo.capId }
                             },
                         ),
-                        listOf(recorder { _, _ -> error("No long demo") }),
                         config(recordings, cooldown = 200.milliseconds),
                     )
                 },
@@ -212,7 +192,7 @@ class RecordingServiceTest :
             starts[1] - starts[0] shouldBeGreaterThanOrEqualTo 250.milliseconds
         }
 
-        test("records on two primary recorders at once") {
+        test("records on two recorders at once") {
             val recordings = createTempDirectory(root, "recordings")
             val started = CopyOnWriteArrayList<String>()
             val gate = CompletableDeferred<Unit>()
@@ -223,11 +203,10 @@ class RecordingServiceTest :
             }
             running(
                 listOf(demo("first", 0), demo("second", 1)),
-                { queue ->
+                { repository ->
                     RecordingService(
-                        queue,
+                        repository,
                         listOf(recorder(record), recorder(record)),
-                        listOf(recorder { _, _ -> error("No long demo") }),
                         config(recordings),
                     )
                 },
@@ -238,44 +217,14 @@ class RecordingServiceTest :
             }
         }
 
-        test("records a short demo while long demos wait for the busy secondary recorder") {
-            val recordings = createTempDirectory(root, "recordings")
-            val secondary = CopyOnWriteArrayList<String>()
-            val gate = CompletableDeferred<Unit>()
-            running(
-                listOf(demo("long-newest", 2, 10.minutes), demo("long-newer", 1, 10.minutes), demo("short", 0)),
-                { queue ->
-                    RecordingService(
-                        queue,
-                        listOf(recorder { demo, _ -> done(demo) }),
-                        listOf(
-                            recorder { demo, _ ->
-                                secondary += demo.capId
-                                gate.await()
-                                done(demo)
-                            },
-                        ),
-                        config(recordings),
-                    )
-                },
-            ) {
-                eventually(5.seconds) { names(recordings) shouldContainExactly listOf("short.mp4") }
-                secondary shouldContainExactly listOf("long-newest")
-                gate.complete(Unit)
-                eventually(5.seconds) { names(recordings).size shouldBe 3 }
-            }
-
-            secondary shouldContainExactly listOf("long-newest", "long-newer")
-        }
-
         test("gives up on a demo after the maximum number of attempts") {
             val recordings = createTempDirectory(root, "recordings")
             val attempts = AtomicInteger()
             running(
                 listOf(demo("broken", 1), demo("cap", 0)),
-                { queue ->
+                { repository ->
                     RecordingService(
-                        queue,
+                        repository,
                         listOf(
                             recorder { demo, _ ->
                                 if (demo.capId == "cap") return@recorder done(demo)
@@ -283,13 +232,14 @@ class RecordingServiceTest :
                                 RecorderResult.Failed(IllegalStateException("Capture failed"))
                             },
                         ),
-                        listOf(recorder { _, _ -> error("No long demo") }),
                         config(recordings),
                     )
                 },
-            ) { queue ->
+            ) { repository ->
                 eventually(5.seconds) { names(recordings) shouldContainExactly listOf("cap.mp4") }
-                queue["broken"] shouldBe Recording(demo("broken", 1), Failed, "java.lang.IllegalStateException: Capture failed")
+                val broken = repository["broken"]
+                broken?.status shouldBe Failed
+                broken?.error shouldBe "java.lang.IllegalStateException: Capture failed"
             }
 
             attempts.get() shouldBe 3
@@ -300,9 +250,9 @@ class RecordingServiceTest :
             val attempts = AtomicInteger()
             running(
                 listOf(demo("unresolvable", 1), demo("cap", 0)),
-                { queue ->
+                { repository ->
                     RecordingService(
-                        queue,
+                        repository,
                         listOf(
                             recorder { demo, _ ->
                                 if (demo.capId == "cap") return@recorder done(demo)
@@ -310,33 +260,15 @@ class RecordingServiceTest :
                                 RecorderResult.Unresolvable(UtPackageException("BTPog", listOf("http://packages.example")))
                             },
                         ),
-                        listOf(recorder { _, _ -> error("No long demo") }),
                         config(recordings),
                     )
                 },
-            ) { queue ->
+            ) { repository ->
                 eventually(5.seconds) { names(recordings) shouldContainExactly listOf("cap.mp4") }
-                queue["unresolvable"]?.status shouldBe Unresolvable
+                repository["unresolvable"]?.status shouldBe Unresolvable
             }
 
             attempts.get() shouldBe 1
-        }
-
-        test("records short and long demos on the primary recorders when there is no secondary recorder") {
-            val recordings = createTempDirectory(root, "recordings")
-            running(
-                listOf(demo("short", 1), demo("long", 0, 10.minutes)),
-                { queue ->
-                    RecordingService(
-                        queue,
-                        listOf(recorder { demo, _ -> done(demo) }),
-                        emptyList(),
-                        config(recordings),
-                    )
-                },
-            ) {
-                eventually(5.seconds) { names(recordings) shouldContainExactlyInAnyOrder listOf("short.mp4", "long.mp4") }
-            }
         }
 
         test("tracks a recording in jobs with its attempt and last progress until it ends") {
@@ -345,9 +277,9 @@ class RecordingServiceTest :
             val jobs = RecordingJobs()
             running(
                 listOf(demo("cap", 0)),
-                { queue ->
+                { repository ->
                     RecordingService(
-                        queue,
+                        repository,
                         listOf(
                             recorder { demo, onProgress ->
                                 if (!gate.isCompleted) {
@@ -358,7 +290,6 @@ class RecordingServiceTest :
                                 done(demo)
                             },
                         ),
-                        emptyList(),
                         config(recordings),
                         jobs,
                     )
@@ -376,10 +307,10 @@ class RecordingServiceTest :
             }
         }
 
-        test("rejects an empty list of primary recorders") {
+        test("rejects an empty list of recorders") {
             shouldThrow<IllegalArgumentException> {
                 DocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                    RecordingService(RecordingQueue(store), emptyList(), listOf(recorder { demo, _ -> done(demo) }), config(root))
+                    RecordingService(RecordingRepository(store, RecordingConfig(ConfigReader.EMPTY), clock), emptyList(), config(root))
                 }
             }
         }

@@ -13,6 +13,8 @@ import dev.klepto.utrecorder.core.capture.audio.AudioTrack
 import dev.klepto.utrecorder.core.capture.video.VideoCapture
 import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig
 import dev.klepto.utrecorder.core.capture.video.VideoTrack
+import dev.klepto.utrecorder.core.media.MediaProgress
+import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.core.media.Muxer
 import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtInstallation
@@ -39,6 +41,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
+import kotlin.time.Duration.Companion.seconds
 
 class RecorderPipelineTest :
     FunSpec({
@@ -131,6 +134,31 @@ class RecorderPipelineTest :
                 muxer = FakeMuxer(events),
             )
 
+        class FakeMediaTool(
+            private val length: Double,
+        ) : MediaTool {
+            override suspend fun run(
+                vararg arguments: String,
+                onProgress: ((MediaProgress) -> Unit)?,
+            ): Boolean = true
+
+            override suspend fun duration(file: Path): Double = length
+
+            override suspend fun frames(file: Path): Int = 0
+        }
+
+        fun lengthCheckedPipeline(length: Double): RecorderPipeline =
+            RecorderPipeline(
+                VideoCaptureConfig(ConfigReader.EMPTY),
+                AudioCaptureConfig(ConfigReader.EMPTY),
+                installation,
+                directories,
+                FakeMediaTool(length),
+                FakeVideoCapture(ConcurrentLinkedQueue(), null, null),
+                FakeAudioCapture(ConcurrentLinkedQueue(), null, null, track("audio.wav"), null),
+                FakeMuxer(ConcurrentLinkedQueue()),
+            )
+
         fun demoIn(recording: Workspace): Path = recording["demo.dem"].also { it.writeBytes(byteArrayOf(1)) }
 
         afterSpec {
@@ -171,6 +199,37 @@ class RecorderPipelineTest :
             failure.message shouldContain "audio.wav"
             val kept = directories.workspace.listDirectoryEntries().single()
             kept.listDirectoryEntries().map { it.fileName.toString() } shouldNotContain "demo-file.mp4"
+        }
+
+        test("record returns the mp4 when it runs up to 2 seconds longer than the run") {
+            val produced =
+                workspace("record", config = directories) { recording ->
+                    lengthCheckedPipeline(24.533).record(demoIn(recording), "demo-file", 23.842.seconds)
+                }
+
+            produced.fileName.toString() shouldBe "demo-file.mp4"
+        }
+
+        test("record fails when the mp4 runs shorter than the run") {
+            val failure =
+                workspace("record", config = directories) { recording ->
+                    shouldThrow<IllegalStateException> {
+                        lengthCheckedPipeline(12.0).record(demoIn(recording), "demo-file", 23.842.seconds)
+                    }
+                }
+
+            failure.message shouldBe "The mp4 runs 12.000 seconds, but the run takes 23.842 seconds"
+        }
+
+        test("record fails when the mp4 runs more than 2 seconds longer than the run") {
+            val failure =
+                workspace("record", config = directories) { recording ->
+                    shouldThrow<IllegalStateException> {
+                        lengthCheckedPipeline(25.9).record(demoIn(recording), "demo-file", 23.842.seconds)
+                    }
+                }
+
+            failure.message shouldBe "The mp4 runs 25.900 seconds, but the run takes 23.842 seconds"
         }
 
         test("record hands the mux the track anchored on the end of the 8 second video and nudged by the sound offset") {

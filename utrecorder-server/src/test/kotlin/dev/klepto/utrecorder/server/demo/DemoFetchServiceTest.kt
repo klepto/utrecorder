@@ -1,10 +1,9 @@
-package dev.klepto.utrecorder.server.recording
+package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.server.database.DocumentStore
-import dev.klepto.utrecorder.server.demo.Demo
-import dev.klepto.utrecorder.server.demo.DemoFetcher
-import dev.klepto.utrecorder.server.demo.UtbtConfig
+import dev.klepto.utrecorder.server.recording.RecordingConfig
+import dev.klepto.utrecorder.server.recording.RecordingRepository
 import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
@@ -22,7 +21,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-class RecordingQueueServiceTest :
+class DemoFetchServiceTest :
     FunSpec({
         val config = UtbtConfig(ConfigReader.EMPTY, cooldown = 100.milliseconds)
         val start = Instant.parse("2026-09-26T12:00:00Z")
@@ -66,25 +65,25 @@ class RecordingQueueServiceTest :
 
         suspend fun syncing(
             fetcher: DemoFetcher,
-            block: suspend (RecordingQueue) -> Unit,
+            block: suspend (RecordingRepository) -> Unit,
         ) {
-            DocumentStore.open(createTempDirectory("utrecorder-recording-queue-service-test").resolve("server.db")) { store ->
-                val queue = RecordingQueue(store)
+            DocumentStore.open(createTempDirectory("utrecorder-demo-fetch-service-test").resolve("server.db")) { store ->
+                val repository = RecordingRepository(store, RecordingConfig(ConfigReader.EMPTY))
                 coroutineScope {
-                    val job = launch { RecordingQueueService(fetcher, queue, config).start() }
-                    block(queue)
+                    val job = launch { DemoFetchService(fetcher, repository, config).start() }
+                    block(repository)
                     job.cancelAndJoin()
                 }
             }
         }
 
-        suspend fun RecordingQueue.capIds(minutes: IntRange): List<String> = minutes.filter { "cap-$it" in this }.map { "cap-$it" }
+        suspend fun RecordingRepository.capIds(minutes: IntRange): List<String> = minutes.filter { "cap-$it" in this }.map { "cap-$it" }
 
         test("stores the newest page, then walks the backlog one page per cooldown until a page holds nothing new") {
             val requests = CopyOnWriteArrayList<String>()
 
-            syncing(fetcher(listOf(0, 1, 2, 3, 4), requests)) { queue ->
-                eventually(5.seconds) { queue.capIds(0..4) shouldContainExactly listOf("cap-0", "cap-1", "cap-2", "cap-3", "cap-4") }
+            syncing(fetcher(listOf(0, 1, 2, 3, 4), requests)) { repository ->
+                eventually(5.seconds) { repository.capIds(0..4) shouldContainExactly listOf("cap-0", "cap-1", "cap-2", "cap-3", "cap-4") }
                 delay(300.milliseconds)
             }
 
@@ -96,10 +95,10 @@ class RecordingQueueServiceTest :
             val minutes = CopyOnWriteArrayList(listOf(0))
             val requests = CopyOnWriteArrayList<String>()
 
-            syncing(fetcher(minutes, requests)) { queue ->
-                eventually(5.seconds) { queue.capIds(0..0) shouldContainExactly listOf("cap-0") }
+            syncing(fetcher(minutes, requests)) { repository ->
+                eventually(5.seconds) { repository.capIds(0..0) shouldContainExactly listOf("cap-0") }
                 minutes += listOf(1, 2, 3)
-                eventually(5.seconds) { queue.capIds(0..3) shouldContainExactly listOf("cap-0", "cap-1", "cap-2", "cap-3") }
+                eventually(5.seconds) { repository.capIds(0..3) shouldContainExactly listOf("cap-0", "cap-1", "cap-2", "cap-3") }
             }
 
             requests.windowed(3) shouldContain listOf("_..0", "2..0", "1..0")
@@ -110,14 +109,14 @@ class RecordingQueueServiceTest :
             val failing = mutableSetOf(1)
             val requests = CopyOnWriteArrayList<String>()
 
-            syncing(fetcher(minutes, requests, failing)) { queue ->
-                eventually(5.seconds) { queue.capIds(0..0) shouldContainExactly listOf("cap-0") }
+            syncing(fetcher(minutes, requests, failing)) { repository ->
+                eventually(5.seconds) { repository.capIds(0..0) shouldContainExactly listOf("cap-0") }
                 minutes += listOf(1, 2, 3)
                 eventually(5.seconds) { requests.count { it == "2..0" } shouldBe 1 }
                 delay(20.milliseconds)
-                queue.capIds(0..3) shouldContainExactly listOf("cap-0")
+                repository.capIds(0..3) shouldContainExactly listOf("cap-0")
                 failing.clear()
-                eventually(5.seconds) { queue.capIds(0..3) shouldContainExactly listOf("cap-0", "cap-1", "cap-2", "cap-3") }
+                eventually(5.seconds) { repository.capIds(0..3) shouldContainExactly listOf("cap-0", "cap-1", "cap-2", "cap-3") }
             }
         }
     })

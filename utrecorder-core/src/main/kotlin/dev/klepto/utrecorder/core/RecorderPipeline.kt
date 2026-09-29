@@ -23,6 +23,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.nio.file.Path
+import java.util.Locale
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.DurationUnit.SECONDS
 
 /**
  * A recording of demos in one installation: a video capture and an audio capture, muxed into one mp4.
@@ -71,15 +75,21 @@ class RecorderPipeline(
      * The audio capture runs beside the video capture, and the mux runs once both have finished. Cancelling this call
      * cancels both captures. The audio track is placed against the end mark of the video capture.
      *
+     * The last step checks the length of the mp4 against [runTime]. The mp4 must run at least [runTime], and at most
+     * [LENGTH_TOLERANCE] longer. If [runTime] is not provided, the length is not checked.
+     *
      * [onProgress] receives the [Capturing] stage and then the [Muxing] stage, each with an estimate of how much of it
      * is done. The progress of [Capturing] is the lesser progress of the two captures, and reaches `1.0` once both have
      * finished. [onProgress] is called from any thread.
      *
-     * @throws IllegalStateException If either capture fails.
+     * @param runTime The length of the run the demo records.
+     * @throws IllegalStateException If either capture fails, or if the length of the mp4 does not match [runTime]. The
+     * mp4 stays in the workspace either way.
      */
     suspend fun record(
         demo: Path,
         name: String,
+        runTime: Duration? = null,
         onProgress: ProgressListener<RecorderStage> = {},
     ): Path =
         workspace("record", config = directories) { output ->
@@ -96,6 +106,32 @@ class RecorderPipeline(
             val muxing = Muxing.start(onProgress)
             val target = output["$name.mp4"]
             val placement = AudioAlignment.place(audioTrack, videoTrack.length, videoTrack.demoEnd, audio.offset)
-            muxer.merge(videoTrack.file, audioTrack.file, placement.offset, placement.length, target, muxing)
+            val mp4 = muxer.merge(videoTrack.file, audioTrack.file, placement.offset, placement.length, target, muxing)
+            runTime?.let { checkLength(mp4, it) }
+            mp4
         }
+
+    /**
+     * Checks that [mp4] runs at least [runTime], and at most [LENGTH_TOLERANCE] longer.
+     *
+     * @throws IllegalStateException If the length of [mp4] is outside that range.
+     */
+    private suspend fun checkLength(
+        mp4: Path,
+        runTime: Duration,
+    ) {
+        val length = ffmpeg.duration(mp4).seconds
+        check(length in runTime..runTime + LENGTH_TOLERANCE) {
+            "The mp4 runs ${format(length)} seconds, but the run takes ${format(runTime)} seconds"
+        }
+    }
+
+    private companion object {
+        /**
+         * How much longer than the run the mp4 may run.
+         */
+        val LENGTH_TOLERANCE = 2.seconds
+
+        fun format(duration: Duration): String = "%.3f".format(Locale.ROOT, duration.toDouble(SECONDS))
+    }
 }
