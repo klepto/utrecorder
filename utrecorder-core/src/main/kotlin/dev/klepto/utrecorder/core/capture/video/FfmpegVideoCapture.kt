@@ -56,13 +56,12 @@ class FfmpegVideoCapture(
     ): VideoTrack =
         workspace(VIDEO_CAPTURE, config = directories) { output ->
             val target = output[VIDEO_NAME]
-            val marks =
-                playback.play(demo, STAGED_DEMO_PREFIX, VIDEO_CAPTURE) { description, system ->
-                    val onFrames = frameProgress(description, onProgress)
-                    val encoder = FrameEncoder(config, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
-                    DemoPlaybackMarks.parse(play(description, extractHooks(system), encoder))
-                }
-            track(target, marks)
+            playback.play(demo, STAGED_DEMO_PREFIX, VIDEO_CAPTURE) { description, system ->
+                val onFrames = frameProgress(description, onProgress)
+                val encoder = FrameEncoder(config, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
+                val marks = DemoPlaybackMarks.parse(play(description, extractHooks(system), encoder))
+                track(target, marks, smoothing(description))
+            }
         }
 
     /**
@@ -90,17 +89,30 @@ class FfmpegVideoCapture(
     }
 
     /**
-     * Returns the video track in [videoFile], ending at the end mark of [marks].
+     * Returns the video track in [videoFile], ending at the end mark of [marks]. The track shows the recorder's
+     * movement behind the demo by the movement delay of [smoothing].
      */
     private suspend fun track(
         videoFile: Path,
         marks: DemoPlaybackMarks,
+        smoothing: RecorderSmoothing?,
     ): VideoTrack =
         VideoTrack(
             file = videoFile,
             length = ffmpeg.duration(videoFile),
             demoEnd = marks.end.demoTime.toDouble(DurationUnit.SECONDS),
+            smoothingDelay = smoothing?.movement?.toDouble(DurationUnit.SECONDS) ?: 0.0,
         )
+
+    /**
+     * Returns the smoothing of the recorder for [description]'s demo. If [VideoCaptureConfig.smoothRecorder] is off,
+     * returns `null` instead.
+     */
+    fun smoothing(description: DemoPlaybackConfig): RecorderSmoothing? =
+        when {
+            config.smoothRecorder -> RecorderSmoothing.of(description.demoFrameInterval)
+            else -> null
+        }
 
     /**
      * Extracts the `uthooks` hook library and, on Windows, the `utinject` injector into [system], and returns their
@@ -159,7 +171,7 @@ class FfmpegVideoCapture(
                 program = injector
                 programArguments += hookLibrary(hooks)?.absolutePathString().orEmpty()
             }
-            exec += execScript()
+            exec += execScript(description)
             sound = false
             environment += this@FfmpegVideoCapture.environment(port, hooks)
             if (hidesHud(description)) userIni { this["Botpack.ChallengeHUD", "bHideHUD"] = "True" }
@@ -175,15 +187,15 @@ class FfmpegVideoCapture(
         }
 
     /**
-     * Returns the lines the capture adds to the exec script after the line that plays the demo: the console's trim
-     * command `DemoFrames <fps>`, `HideMessages`, which keeps chat and progress messages off the recorded HUD, and
-     * `SmoothRecorder` when [VideoCaptureConfig.smoothRecorder] is on.
+     * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo: the
+     * console's trim command `DemoFrames <fps>`, `HideMessages`, which keeps chat and progress messages off the
+     * recorded HUD, and the command of the recorder's [smoothing] when [VideoCaptureConfig.smoothRecorder] is on.
      */
-    fun execScript(): List<String> =
+    fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
             this += "DemoFrames %.6f".format(Locale.ROOT, config.fps.toDouble())
             this += "HideMessages"
-            if (config.smoothRecorder) this += "SmoothRecorder"
+            smoothing(description)?.let { this += it.command() }
         }
 
     companion object {

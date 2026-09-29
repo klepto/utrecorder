@@ -23,6 +23,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 class FfmpegVideoCaptureTest :
     FunSpec({
@@ -173,13 +174,17 @@ class FfmpegVideoCaptureTest :
             hideHud("UTBT_BTMod_v18") shouldBe emptyList()
         }
 
-        test("execScript trims the demo to the configured fps, hides messages and smooths the recorder") {
-            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30)).execScript() shouldBe
-                listOf("DemoFrames 30.000000", "HideMessages", "SmoothRecorder")
+        test("execScript trims the demo to the configured fps, hides messages and smooths the recorder at fixed delays") {
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, demoFrameInterval = 2.998.milliseconds)
+
+            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30)).execScript(description) shouldBe
+                listOf("DemoFrames 30.000000", "HideMessages", "SmoothRecorder 0.002998 0.030 0.015")
         }
 
         test("execScript leaves the recorder unsmoothed when the config turns smoothing off") {
-            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30, smoothRecorder = false)).execScript() shouldBe
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, demoFrameInterval = 2.998.milliseconds)
+
+            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30, smoothRecorder = false)).execScript(description) shouldBe
                 listOf("DemoFrames 30.000000", "HideMessages")
         }
     })

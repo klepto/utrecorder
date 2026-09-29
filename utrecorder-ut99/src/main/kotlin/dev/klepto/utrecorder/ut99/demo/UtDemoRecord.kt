@@ -11,9 +11,11 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Use [read] to read every record of a demo.
  *
+ * @property frame The demo frame the packet was recorded in. Records of one frame share its number.
  * @property time The demo time the packet was sent at.
  */
 class UtDemoRecord private constructor(
+    val frame: Int,
     val time: Duration,
     private val bunches: List<Bunch>,
 ) {
@@ -272,14 +274,15 @@ class UtDemoRecord private constructor(
          */
         private fun readRecord(buffer: ByteBuffer): UtDemoRecord? {
             if (buffer.remaining() < HEADER_BYTES) return null
-            val low = buffer.position(buffer.position() + Int.SIZE_BYTES).int // past the frame
+            val frame = buffer.int
+            val low = buffer.int
             val high = buffer.int
             val count = buffer.int
             if (count !in 0..buffer.remaining()) return null
 
             val packet = ByteArray(count).also { buffer.get(it) }
             val bunches = readBunches(packet) ?: return null
-            return UtDemoRecord(decodeTime(low, high), bunches)
+            return UtDemoRecord(frame, decodeTime(low, high), bunches)
         }
 
         /**

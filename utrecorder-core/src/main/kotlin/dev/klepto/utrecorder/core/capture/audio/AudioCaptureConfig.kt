@@ -22,7 +22,7 @@ import dev.klepto.utrecorder.core.demo.DemoPlaybackViewport
 class AudioCaptureConfig(
     reader: ConfigReader = SystemConfigReader(),
     val bitrate: String = reader.get("record.audio_bitrate", "192k"),
-    val filter: String = reader.get("record.audio_filter", "aresample=async=1,loudnorm=I=-34:TP=-1.5:LRA=11"),
+    val filter: String = reader.get("record.audio_filter", "aresample=async=1"),
     val offset: Double = reader.get("record.audio_offset", 0.0, String::toDouble),
     val render: Boolean = reader.get("record.sound_render", true, String::toBoolean),
     val width: Int = reader.get("record.sound_width", 64, String::toInt),

@@ -70,7 +70,7 @@ class RecorderPipelineTest :
                 onProgress(Progress(0.5))
                 events += videoCapturePlayed
                 audioThreadReleased?.countDown()
-                return VideoTrack(file = videoFile, length = 8.0, demoEnd = 300.75)
+                return VideoTrack(file = videoFile, length = 8.0, demoEnd = 300.75, smoothingDelay = 0.25)
             }
         }
 
@@ -232,7 +232,7 @@ class RecorderPipelineTest :
             failure.message shouldBe "The mp4 runs 25.900 seconds, but the run takes 23.842 seconds"
         }
 
-        test("record hands the mux the track anchored on the end of the 8 second video and nudged by the sound offset") {
+        test("record hands the mux the track anchored on the end of the 8 second video, nudged by the offset and the smoothing delay") {
             var merged: Triple<Path, Double, Double>? = null
             val capturingMuxer =
                 object : Muxer {
@@ -263,7 +263,7 @@ class RecorderPipelineTest :
                 nudgedPipeline.record(demoIn(recording), "demo-file")
             }
 
-            merged shouldBe Triple(Path.of("audio.wav"), 6.5, 8.0)
+            merged shouldBe Triple(Path.of("audio.wav"), 6.25, 8.0)
         }
 
         test("record reports the capture with the lesser progress of the two captures, then the mux") {

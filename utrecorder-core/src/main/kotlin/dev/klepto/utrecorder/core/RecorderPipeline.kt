@@ -73,7 +73,8 @@ class RecorderPipeline(
      * Returns the path of the mp4 `<name>.mp4` recorded from [demo], kept in a workspace of the recording's own.
      *
      * The audio capture runs beside the video capture, and the mux runs once both have finished. Cancelling this call
-     * cancels both captures. The audio track is placed against the end mark of the video capture.
+     * cancels both captures. The audio track is placed against the end mark of the video capture, and delayed by the
+     * smoothing delay of the video track.
      *
      * The last step checks the length of the mp4 against [runTime]. The mp4 must run at least [runTime], and at most
      * [LENGTH_TOLERANCE] longer. If [runTime] is not provided, the length is not checked.
@@ -105,7 +106,8 @@ class RecorderPipeline(
 
             val muxing = Muxing.start(onProgress)
             val target = output["$name.mp4"]
-            val placement = AudioAlignment.place(audioTrack, videoTrack.length, videoTrack.demoEnd, audio.offset)
+            val audioOffset = audio.offset - videoTrack.smoothingDelay
+            val placement = AudioAlignment.place(audioTrack, videoTrack.length, videoTrack.demoEnd, audioOffset)
             val mp4 = muxer.merge(videoTrack.file, audioTrack.file, placement.offset, placement.length, target, muxing)
             runTime?.let { checkLength(mp4, it) }
             mp4

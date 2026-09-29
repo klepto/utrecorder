@@ -19,16 +19,20 @@ import kotlin.time.Duration.Companion.seconds
  * @property packages The packages the demo loads, in the order the demo names them, with the level package first. A
  * package named more than once appears once, as its first entry, with names compared ignoring case.
  * @property duration The demo time of the last record. It can overshoot the played length by a fraction of a second.
+ * @property frameInterval The median demo time between two demo frames. If the demo holds no two frames less than
+ * 0.1 seconds apart, it is `null` instead.
  * @property cap The cap that ends the run the demo records. If the demo holds no cap, it is `null` instead.
  */
 data class UtDemo(
     val map: String,
     val packages: List<UtPackage>,
     val duration: Duration,
+    val frameInterval: Duration?,
     val cap: UtDemoCap?,
 ) {
     companion object {
         private val TOLERANCE = 50.milliseconds
+        private val MAX_FRAME_INTERVAL = 100.milliseconds
 
         private val SPAWN_MARKER = Regex("""BTPOG_SPAWN_MARKER:(\S+)""")
         private val CAP_MARKER = Regex("""BTPOG_CAP_MARKER:(\S+)""")
@@ -56,7 +60,33 @@ data class UtDemo(
                     .mapNotNull(::packageOf)
                     .distinctBy { it.name.lowercase() }
             val duration = records.lastOrNull()?.time ?: Duration.ZERO
-            return UtDemo(map, packages, duration, capOf(records))
+            return UtDemo(map, packages, duration, frameIntervalOf(records), capOf(records))
+        }
+
+        /**
+         * Returns the median demo time between two demo frames of [records], leaving out any interval longer than
+         * [MAX_FRAME_INTERVAL]. If no interval is left, returns `null` instead.
+         */
+        private fun frameIntervalOf(records: List<UtDemoRecord>): Duration? =
+            records
+                .filter { it.time > Duration.ZERO }
+                .distinctBy { it.frame }
+                .zipWithNext(::intervalOf)
+                .filterNotNull()
+                .sorted()
+                .takeIf { it.isNotEmpty() }
+                ?.let { (it[(it.size - 1) / 2] + it[it.size / 2]) / 2 }
+
+        /**
+         * Returns the demo time per demo frame between [first] and [second]. If [second] is not a later frame at a later
+         * time, or the interval is longer than [MAX_FRAME_INTERVAL], returns `null` instead.
+         */
+        private fun intervalOf(
+            first: UtDemoRecord,
+            second: UtDemoRecord,
+        ): Duration? {
+            if (second.frame <= first.frame || second.time <= first.time) return null
+            return ((second.time - first.time) / (second.frame - first.frame)).takeIf { it <= MAX_FRAME_INTERVAL }
         }
 
         /**

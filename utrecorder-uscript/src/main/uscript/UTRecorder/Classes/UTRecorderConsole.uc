@@ -15,8 +15,11 @@
 //   RewindStart       seek back to the demo start once ticks settle,
 //   DemoFrames <fps>  log a spawn mark and reset the demo speed to 1 once the
 //                     followed player spawns,
-//   SmoothRecorder    smooth the followed player's movement and view with a
-//                     UTRecorderSmooth.
+//   SmoothRecorder <interval> <movement> <rotation>
+//                     smooth the followed player's movement and view with a
+//                     UTRecorderSmooth, for a demo whose frames are
+//                     <interval> seconds apart, showing his movement and his
+//                     view the given seconds behind the demo.
 //=============================================================================
 class UTRecorderConsole extends UTConsole
 	config(UTRecorder);
@@ -73,6 +76,7 @@ var bool bRewindStart;    // seek back to the demo's start once ticks settle
 var bool bRewound;        // the rewind seek has been issued
 var int SettledTicks;     // settled ticks in a row before the rewind
 var bool bSmoothRecorder; // SmoothRecorder was run
+var float SmoothInterval, SmoothMovement, SmoothRotation; // what SmoothRecorder was run with
 var UTRecorderSmooth Smoother; // the smoother spawned in the demo level
 
 var float Elapsed;        // seconds since this console was created
@@ -305,11 +309,17 @@ function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
 	return True;
 }
 
-// Keeps a UTRecorderSmooth spawned in the demo level from the next tick on.
-exec function SmoothRecorder()
+// Keeps a UTRecorderSmooth spawned in the demo level from the next tick on,
+// for a demo whose frames are Interval seconds apart, showing the followed
+// player's movement Movement and his view Rotation seconds behind the demo.
+exec function SmoothRecorder(float Interval, float Movement, float Rotation)
 {
 	bSmoothRecorder = True;
-	Log("UTRecorder: smoothing the followed player", 'UTRecorder');
+	SmoothInterval = Interval;
+	SmoothMovement = Movement;
+	SmoothRotation = Rotation;
+	Log("UTRecorder: smoothing the followed player, demo frame interval" @ Interval @ "s, movement shown" @ Movement
+		@ "s behind, rotation" @ Rotation @ "s", 'UTRecorder');
 }
 
 // Spawns a UTRecorderSmooth in the demo level unless one is still there.
@@ -328,6 +338,15 @@ function SpawnSmoother()
 		return;
 
 	Smoother = Spec.Spawn(class'UTRecorderSmooth');
+	if (Smoother == None)
+		return;
+
+	if (SmoothInterval > 0.0)
+		Smoother.IRec = SmoothInterval;
+	if (SmoothMovement > 0.0)
+		Smoother.DPos = SmoothMovement;
+	if (SmoothRotation > 0.0)
+		Smoother.DRot = SmoothRotation;
 	Log("UTRecorder: spawned recorder smoother" @ Smoother, 'UTRecorder');
 }
 

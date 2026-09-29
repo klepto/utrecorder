@@ -8,10 +8,11 @@
 //
 // Every frame it keeps the followed player's snapshots with the demo time each
 // was taken at, and places the player where a weighted straight-line fit
-// through the snapshots around one moment puts him. That moment runs a delay
-// behind the demo. The delay starts at nothing and eases up to its full
-// length. A teleport or a respawn drops the delay to nothing and shows the
-// player where he landed; the delay then eases back.
+// through the snapshots around one moment puts him. That moment runs a fixed
+// delay behind the demo, set with the demo's frame interval before the first
+// frame. No moment before the start of the timeline or before the latest
+// teleport or respawn is shown: the player holds there until the delay has
+// passed.
 //
 // Nothing the demo delivers is changed: the pose written here stays on the
 // player only until the next demo frame overwrites it. While a smoother
@@ -92,14 +93,10 @@ var float   LastLT, SmDLT;
 var bool    bHaveLT;
 
 // ---- delays -----------------------------------------------------------------
-// The demo's frame interval, measured once per level, decides the delays.
-var float   IRecBuf[32];
-var int     IRecN;
+// The demo's frame interval and the delays of position and rotation, set once
+// before the first frame (see UTRecorderConsole.SpawnSmoother).
 var float   IRec, DPos, DRot;
-var bool    bDelaySet;
-// The delays in use. They start at nothing and move towards their target at
-// a twentieth of the demo's pace.
-var float   DCurP, DCurR;
+var float   ShowFrom;        // no moment before it is shown: the timeline's start, or the latest cut
 var float   FAdv;            // this frame's demo advance
 
 var bool    bNativeOff;      // udemo's recorder smoothing is off because of us
@@ -322,9 +319,8 @@ function ForgetWrites()
 	bWroteEye = false;
 }
 
-// Forgets everything that describes the demo's timeline, and drops the delays
-// in use to nothing. What was measured about the demo itself - its frame
-// interval and the delays it decides - is kept.
+// Forgets everything that describes the demo's timeline. The demo's frame
+// interval and the delays are kept.
 function ResetHistory()
 {
 	ForgetWrites();
@@ -342,8 +338,6 @@ function ResetHistory()
 	SegC = 0;
 	RSegN = 0;
 	bHaveCut = false;
-	DCurP = 0.0;
-	DCurR = 0.0;
 	bPrimed = false;
 	bHaveTau = false;
 	ClockAcc = 0.0;
@@ -420,6 +414,7 @@ function Observe(float Delta)
 		PrevMax = LB;
 		BucketAcc = 0.0;
 		Off = LB;
+		ShowFrom = St;
 	}
 	CurMax = FMax(CurMax, LB);
 	BucketAcc += Adv;
@@ -434,10 +429,7 @@ function Observe(float Delta)
 	Off += (OffEst - Off) * FMin(1.0, 2.0 * Adv);
 
 	if (bNew)
-	{
-		MeasureInterval(Spt - LastSpt, NFr);
 		TakeSamples(St, NFr);
-	}
 	else
 		ReadFrameValues();
 	LastFrame = Frame;
@@ -493,6 +485,7 @@ function ShiftTimes(float By)
 	LastRT -= By;
 	ZMovedT -= By;
 	CutT -= By;
+	ShowFrom -= By;
 	TauP -= By;
 	TauR -= By;
 	for (k = 0; k < PCount; k++)
@@ -556,60 +549,9 @@ function GuardRate(float Adv, float Spt, bool bNew)
 	RateLast = Ratio;
 }
 
-// Measures the demo's frame interval: the demo time between two reads over
-// the demo frames between them. The median of the first 32 decides the
-// delays, rounded to whole steps.
-function MeasureInterval(float DT, int NFr)
-{
-	local float E, Tmp;
-	local int i, j;
-
-	if (bDelaySet || NFr <= 0 || NFr >= 50 || DT <= 0.0)
-		return;
-	E = DT / NFr;
-	if (E > 0.1)
-		return;
-	IRecBuf[IRecN] = E;
-	IRecN++;
-	if (IRecN < 32)
-		return;
-	for (i = 1; i < 32; i++)
-	{
-		Tmp = IRecBuf[i];
-		j = i - 1;
-		while (j >= 0 && IRecBuf[j] > Tmp)
-		{
-			IRecBuf[j + 1] = IRecBuf[j];
-			j--;
-		}
-		IRecBuf[j + 1] = Tmp;
-	}
-	IRec = (IRecBuf[15] + IRecBuf[16]) * 0.5;
-	DPos = FClamp(0.01 * int((4.0 * IRec + 0.015) * 100.0 + 0.5), 0.08, 0.3);
-	DRot = FClamp(0.005 * int((2.0 * IRec + 0.008) * 200.0 + 0.5), 0.015, 0.08);
-	bDelaySet = true;
-	Log("UTRecorder: demo frame interval" @ IRec @ "s, movement shown" @ DPos @ "s behind, rotation" @ DRot @ "s", 'UTRecorder');
-}
-
-function float DelayPos()
-{
-	if (bDelaySet)
-		return DPos;
-	return 0.08;
-}
-
-function float DelayRot()
-{
-	if (bDelaySet)
-		return DRot;
-	return 0.025;
-}
-
 function float Interval()
 {
-	if (bDelaySet)
-		return IRec;
-	return 0.008;
+	return IRec;
 }
 
 // Reads this frame's values of the player, and which of them the demo
@@ -1441,7 +1383,7 @@ function LandCheck(float Tau, int J, int Nx, float Hb, float Hf)
 		return;
 	// where the approach is when the hold is in (bFLand is still false, so
 	// FitC reads the plain snapshots)
-	T1 = PT[g] + Ts - DCurP + 0.01;
+	T1 = PT[g] + Ts - DPos + 0.01;
 	if (T1 < PT[g])
 	{
 		if (!FitC(T1, Hb, Hf, PSegC[a], a, C1))
@@ -1452,7 +1394,7 @@ function LandCheck(float Tau, int J, int Nx, float Hb, float Hf)
 	LandG = g;
 	LandSegC = PSegC[g];
 	LandEnd = PT[s];
-	LandW = FClamp((Tau - (PT[g] + Ts - DCurP)) / 0.01, 0.0, 1.0);
+	LandW = FClamp((Tau - (PT[g] + Ts - DPos)) / 0.01, 0.0, 1.0);
 	bFLand = true;
 }
 
@@ -1560,10 +1502,9 @@ function bool EvalRot(float Tau, float Hb, float Hf, out float OVY, out float OV
 	return true;
 }
 
-// Drops the delays to nothing while the moment shown is before the latest
-// teleport or respawn, so the player is shown where he landed. The delays
-// then ease back at a twentieth of the demo's pace. A clock short of the cut
-// is moved on to it.
+// Shows no moment before the latest teleport or respawn, so the player holds
+// where he landed until the delay has passed. A clock short of the cut is
+// moved on to it.
 function SnapToCut()
 {
 	local float Now;
@@ -1573,14 +1514,8 @@ function SnapToCut()
 	bHaveCut = false;
 	Now = ClockAcc + Off;
 	if (Now < CutT)
-	{
 		Off += CutT - Now;
-		Now = CutT;
-	}
-	if (Now - DCurP >= CutT)
-		return;
-	DCurP = Now - CutT;
-	DCurR = FMin(DCurR, DCurP);
+	ShowFrom = CutT;
 }
 
 // Places the player at the moments shown: position, eye height and rotation,
@@ -1596,16 +1531,14 @@ function Place()
 	bFLand = false;
 	if (PCount == 0 || RCount == 0)
 		return;
-	DCurP += FClamp(DelayPos() - DCurP, -0.05 * FAdv, 0.05 * FAdv);
-	DCurR += FClamp(FMin(DelayRot(), DCurP) - DCurR, -0.05 * FAdv, 0.05 * FAdv);
 	SnapToCut();
 	Now = ClockAcc + Off;
-	DP = DCurP;
-	DR = DCurR;
+	DP = DPos;
+	DR = FMin(DRot, DPos);
 	IE = FMax(Interval(), 0.001);
 
 	// ---- the moments shown
-	TP = Now - DP;
+	TP = FMax(Now - DP, ShowFrom);
 	NewestP = PT[PHead];
 	if (TP > NewestP)
 	{
@@ -1630,7 +1563,7 @@ function Place()
 		TP = TauP;
 	// from the clock, not from TP: TP holds while he stands still, and a turn
 	// on the spot must not hold with it
-	TR = Now - DR;
+	TR = FMax(Now - DR, ShowFrom);
 	NewestR = RT[RHead];
 	if (TR > NewestR)
 		TR = NewestR;
@@ -1747,4 +1680,7 @@ defaultproperties
 	PHead=-1
 	RHead=-1
 	RateFix=1.000000
+	IRec=0.008000
+	DPos=0.050000
+	DRot=0.025000
 }
