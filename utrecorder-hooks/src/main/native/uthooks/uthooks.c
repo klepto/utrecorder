@@ -1,6 +1,6 @@
 /*
  * Hook library loaded into the Unreal Tournament process. It steps the engine clocks by a fixed amount per presented
- * frame, and sends every frame presented while the demo plays to the frame socket as raw BGRA pixels.
+ * frame, and sends every frame presented while the demo plays to the frame socket as raw 10-bit BGRA pixels.
  */
 
 #ifdef _WIN32
@@ -34,7 +34,7 @@
 
 #define GL_VIEWPORT 0x0BA2
 #define GL_BGRA 0x80E1
-#define GL_UNSIGNED_BYTE 0x1401
+#define GL_UNSIGNED_INT_2_10_10_10_REV 0x8368
 
 /* Connection attempts to the frame socket, and the delay between two of them. */
 #define CONNECT_ATTEMPTS 200
@@ -68,7 +68,7 @@ typedef void(GL_ENTRY *ReadPixelsFunction)(int, int, int, int, unsigned int, uns
 static GetIntegervFunction readViewport;
 static ReadPixelsFunction readPixels;
 
-/* The frame read last, and the frame read before it that waits to be sent, each pixelWidth by pixelHeight BGRA. */
+/* The frame read last, and the frame read before it that waits to be sent, each pixelWidth by pixelHeight 10-bit BGRA. */
 static unsigned char *pixels;
 static unsigned char *pending;
 static size_t pendingSize;
@@ -209,7 +209,7 @@ static void captureFrame(void) {
     if (viewport[2] != pixelWidth || viewport[3] != pixelHeight) resizeFrames(viewport[2], viewport[3]);
     if (captureDisabled) return;
     size = (size_t) pixelWidth * pixelHeight * 4;
-    readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+    readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_INT_2_10_10_10_REV, pixels);
     sendPending();
     if (captureDisabled) return;
     sent = pending;

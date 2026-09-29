@@ -81,13 +81,13 @@ class FrameEncoderTest :
                 "&recv_buffer_size=${960 * 540 * 4}"
         }
 
-        test("captureArguments describes the raw BGRA input by the frame size, fps and frame queue of the config") {
+        test("captureArguments describes the raw 10-bit BGRA input by the frame size, fps and frame queue of the config") {
             val read = arguments()
             read[0] shouldBe "-y"
             read[1] shouldBe "-f"
             read[2] shouldBe "rawvideo"
             read[3] shouldBe "-pix_fmt"
-            read[4] shouldBe "bgra"
+            read[4] shouldBe "x2rgb10le"
             read[5] shouldBe "-s"
             read[6] shouldBe "960x540"
             read[7] shouldBe "-framerate"
@@ -116,10 +116,10 @@ class FrameEncoderTest :
             read[28] shouldBe "300"
         }
 
-        test("captureArguments ends with the yuv420p pixel format, no audio and the target") {
+        test("captureArguments ends with the yuv420p10le pixel format, no audio and the target") {
             val read = arguments()
             read[29] shouldBe "-pix_fmt"
-            read[30] shouldBe "yuv420p"
+            read[30] shouldBe "yuv420p10le"
             read[31] shouldBe "-an"
             read[32] shouldBe target.absolutePathString()
         }
