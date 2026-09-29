@@ -11,41 +11,41 @@ import kotlinx.coroutines.CancellationException
 /**
  * Recorder of one demo at a time.
  *
- * The default implementation is [DefaultCaptureProvider].
+ * The default implementation is [DefaultRecorderProvider].
  */
-interface CaptureProvider {
+interface RecorderProvider {
     /**
      * Returns the result of recording [Demo.demoUrl] into an mp4 named after [Demo.capId]. The mp4 of a
-     * [CaptureResult.Done] lies inside the workspace of its recording.
+     * [RecorderResult.Done] lies inside the workspace of its recording.
      *
      * [onProgress] receives each progress report of the recording.
      */
     suspend fun record(
         demo: Demo,
         onProgress: ProgressListener<RecorderStage> = {},
-    ): CaptureResult
+    ): RecorderResult
 }
 
 /**
- * [CaptureProvider] backed by the core [Recorder].
+ * [RecorderProvider] backed by the core [Recorder].
  *
  * @property config The configuration demos are recorded with.
  */
-class DefaultCaptureProvider(
+class DefaultRecorderProvider(
     private val config: RecorderConfig = RecorderConfig(),
-) : CaptureProvider {
+) : RecorderProvider {
     override suspend fun record(
         demo: Demo,
         onProgress: ProgressListener<RecorderStage>,
-    ): CaptureResult =
+    ): RecorderResult =
         try {
             val recording = Recorder(config).record(demo.demoUrl, demo.capId, onProgress)
-            CaptureResult.Done(demo, recording)
+            RecorderResult.Done(recording)
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: UtPackageException) {
-            CaptureResult.Unresolvable(demo, exception)
+            RecorderResult.Unresolvable(exception)
         } catch (exception: Exception) {
-            CaptureResult.Failed(demo, exception)
+            RecorderResult.Failed(exception)
         }
 }

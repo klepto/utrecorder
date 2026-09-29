@@ -71,7 +71,7 @@ class RecordingJobs {
 }
 
 /**
- * Recording of one demo that a recorder is running.
+ * Capture of one [Recording] that a recorder is running, with its progress.
  *
  * @property demo The demo being recorded.
  * @property attempt The number of the current attempt, starting at `1`.

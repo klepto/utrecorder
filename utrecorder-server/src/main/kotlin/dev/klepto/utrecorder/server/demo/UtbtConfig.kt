@@ -14,7 +14,7 @@ import kotlin.time.Duration.Companion.minutes
  * @param reader The source of the `server.utbt.*` keys.
  * @property apiUrl The base URL of the UTBT API that serves the cap list.
  * @property demoUrl The base URL a demo downloads from, followed by its cap id.
- * @property cooldown How often the fetcher polls offset 0 for new demos, and how long it waits when it has no demo to emit.
+ * @property cooldown How long the sync waits between two reads of the cap list.
  */
 class UtbtConfig(
     reader: ConfigReader = SystemConfigReader(),

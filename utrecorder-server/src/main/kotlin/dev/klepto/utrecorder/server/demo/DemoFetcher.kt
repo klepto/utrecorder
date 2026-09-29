@@ -1,16 +1,17 @@
 package dev.klepto.utrecorder.server.demo
 
-import kotlinx.coroutines.flow.Flow
+import kotlin.time.Instant
 
 /**
- * Source of the demos to record.
+ * Source of the demos to record, read one page at a time.
  */
 interface DemoFetcher {
     /**
-     * Returns the demos to record, each emitted at most once per collection.
-     *
-     * The flow never completes. It emits the next demo only when its collector asks for one. Each collection emits every
-     * demo, whatever other collections have emitted.
+     * Returns one page of the demos added before [before] and after [after], newest first. Both bounds are exclusive,
+     * and a bound that is `null` does not limit the page. Throws if the page cannot be read.
      */
-    suspend fun fetch(): Flow<Demo>
+    suspend fun fetch(
+        before: Instant? = null,
+        after: Instant? = null,
+    ): List<Demo>
 }

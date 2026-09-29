@@ -2,7 +2,10 @@ package dev.klepto.utrecorder.server
 
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.common.suspendCatching
+import dev.klepto.utrecorder.server.database.DocumentStore
 import dev.klepto.utrecorder.server.demo.UtbtDemoFetcher
+import dev.klepto.utrecorder.server.recording.RecordingQueue
+import dev.klepto.utrecorder.server.recording.RecordingQueueService
 import dev.klepto.utrecorder.server.recording.RecordingService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -20,14 +23,30 @@ object Server {
     private val log = logger<Server>()
 
     /**
-     * Runs every service of the server from [config], each in its own coroutine, until it is cancelled. Once every
-     * service has ended, stops each service in the reverse order of starting.
+     * Runs every service of the server from [config], each in its own coroutine, until it is cancelled, on the document
+     * store at [ServerConfig.database]. Once every service has ended, stops each service in the reverse order of
+     * starting.
      *
      * A service that throws cancels every other service, and the exception is rethrown after the services are stopped.
      */
     suspend fun run(config: ServerConfig = ServerConfig()) {
         log.info { "Starting the server against ${config.utbt.apiUrl}" }
-        val services: List<Service> = listOf(RecordingService(UtbtDemoFetcher(config.utbt), config = config))
+        DocumentStore.open(config.database) { store ->
+            val queue = RecordingQueue(store)
+            val services: List<Service> =
+                listOf(
+                    RecordingQueueService(UtbtDemoFetcher(config.utbt), queue, config.utbt),
+                    RecordingService(queue, config = config),
+                )
+            runServices(services)
+        }
+    }
+
+    /**
+     * Runs each of [services] in its own coroutine until it is cancelled. Once every service has ended, stops each
+     * service in the reverse order of starting.
+     */
+    private suspend fun runServices(services: List<Service>) {
         try {
             coroutineScope {
                 services.forEach { launch { it.start() } }
