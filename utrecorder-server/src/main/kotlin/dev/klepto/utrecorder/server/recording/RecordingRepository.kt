@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
@@ -26,11 +27,12 @@ import kotlin.time.Instant
  * An older demo is a backlog demo. It is taken only while fewer than [RecordingConfig.backlogBuffer] recordings are
  * [RecordingStatus.Recording] or [Recorded].
  *
- * Every change of the status of a recording sets its [Recording.lastUpdate] to the time [clock] reports.
+ * Every change of the status of a recording sets its [Recording.lastUpdate] to the time [clock] reports. [recorded]
+ * sets [Recording.recordedAt] to that time as well.
  *
  * @param store The store that holds the `recordings` collection.
  * @property config The recent age and the backlog buffer.
- * @property clock The source of [Recording.lastUpdate] and of the age of a demo.
+ * @property clock The source of [Recording.lastUpdate], of [Recording.recordedAt] and of the age of a demo.
  */
 class RecordingRepository(
     store: DocumentStore,
@@ -67,6 +69,19 @@ class RecordingRepository(
     suspend fun oldest(): Instant? = transaction { recordings -> recordings.all().minOfOrNull { it.demo.timestamp } }
 
     /**
+     * Returns the demos of the [limit] newest [Pending] recordings, newest first. This is the order [take] gives them in.
+     */
+    suspend fun pending(limit: Int): List<Demo> =
+        transaction { recordings ->
+            recordings
+                .all()
+                .filter { it.status == Pending }
+                .sortedByDescending { it.demo.timestamp }
+                .take(limit)
+                .map { it.demo }
+        }
+
+    /**
      * Stores a [Pending] recording of each of [demos], in the order given. A demo whose cap id is stored already is
      * skipped.
      */
@@ -99,6 +114,17 @@ class RecordingRepository(
         error: String? = null,
     ) {
         update(capId) { it.copy(status = status, error = error ?: it.error) }
+    }
+
+    /**
+     * Sets the recording stored under [capId] to [Recorded], recorded now in [processingTime]. If there is none, does
+     * nothing.
+     */
+    suspend fun recorded(
+        capId: String,
+        processingTime: Duration,
+    ) {
+        update(capId) { it.copy(status = Recorded, recordedAt = clock.now(), processingTime = processingTime) }
     }
 
     /**

@@ -33,6 +33,7 @@ import kotlin.time.Duration.Companion.minutes
  * two looks for a recording to upload when there is none.
  * @property dailyUploads The most uploads the upload loop starts in one day, spread evenly across the day.
  * @property cacheTtl How long the mp4 of an archived recording stays in [recordings] after it was last viewed.
+ * @property port The port the HTTP server listens on.
  */
 class ServerConfig(
     reader: ConfigReader = SystemConfigReader(),
@@ -45,4 +46,5 @@ class ServerConfig(
     val uploadInterval: Duration = reader.duration("server.upload_interval", 1.minutes),
     val dailyUploads: Int = reader.get("server.daily_uploads", 200, String::toInt),
     val cacheTtl: Duration = reader.duration("server.cache_ttl", 7.days),
+    val port: Int = reader.get("server.port", 8080, String::toInt),
 )

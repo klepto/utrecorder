@@ -1,9 +1,12 @@
+# Docker reads this file instead of a .dockerignore at the root of the context, because it sits next to the Dockerfile
+# under the Dockerfile's name.
+#
 # The server image builds the distribution from source inside the container, on the toolchain's own platform, so a
 # build output materialized on the host must never be copied in: it could carry another platform's native binaries,
 # and Gradle's up-to-date checks would then treat it as already built.
 .git/
 .idea/
-.utrecorder/
+.claude/
 .agents/
 build/
 */build/
@@ -12,3 +15,7 @@ build/
 .kotlin/
 */.kotlin/
 */node_modules/
+
+# The development home, except the game packages no redirect serves, which the image carries.
+.utrecorder/*
+!.utrecorder/packages/

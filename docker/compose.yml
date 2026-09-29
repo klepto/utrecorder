@@ -1,23 +1,6 @@
 name: utrecorder
 
 services:
-  dev:
-    build: dev
-    image: utrecorder-dev
-    init: true
-    stdin_open: true
-    tty: true
-    volumes:
-      # The checkout, read-only. The entrypoint syncs it into /utrecorder on every start.
-      - ..:/source:ro
-      # The container's copy of the checkout, kept so Gradle builds incrementally across runs.
-      - checkout:/utrecorder
-      # The repository's .utrecorder is the home, so workspaces and downloads show up on the host as they are written.
-      - ../.utrecorder:/var/lib/utrecorder
-      # The Linux installs, kept apart from the Windows ones the host materializes in the same home.
-      - installs:/var/lib/utrecorder/installs
-      - gradle:/root/.gradle
-
   server:
     build:
       context: ..
@@ -28,12 +11,14 @@ services:
       - "8080:8080"
     volumes:
       - server-home:/var/lib/utrecorder
-    environment:
-      UTRECORDER_SERVER_ARCHIVE_ACCESS_KEY:
-      UTRECORDER_SERVER_ARCHIVE_SECRET_KEY:
+    # Any UTRECORDER_* key, such as the Internet Archive keys, set in docker/.env. The file is optional and gitignored.
+    env_file:
+      - path: .env
+        required: false
+    # The shutdown hook waits for a cancelled recording to kill the game and ffmpeg and clean up its workspace.
+    stop_grace_period: 1m
+    # At most four cores of CPU time. The JVM reads the limit, so the llvmpipe thread count follows it.
+    cpus: 4
 
 volumes:
-  checkout:
-  installs:
-  gradle:
   server-home:

@@ -1,5 +1,6 @@
-# Production image: builds the server distribution from source, then runs it with the runtime the dev container
-# already proves out (docker/dev/Dockerfile).
+# syntax=docker/dockerfile:1
+# Production image: builds the server distribution from source, then runs it with the 32-bit runtime Unreal
+# Tournament needs.
 
 FROM eclipse-temurin:25-jdk AS builder
 
@@ -47,7 +48,10 @@ ENV DISPLAY=:99 \
 WORKDIR /utrecorder
 COPY . .
 
-RUN Xvfb "$DISPLAY" -screen 0 "${SCREEN_SIZE}x24" -nolisten tcp -ac >/dev/null 2>&1 & \
+# The Gradle user home is a build cache mount, so a rebuild reuses the Gradle distribution and the dependencies it
+# downloaded before instead of downloading them again.
+RUN --mount=type=cache,target=/root/.gradle \
+    Xvfb "$DISPLAY" -screen 0 "${SCREEN_SIZE}x24" -nolisten tcp -ac >/dev/null 2>&1 & \
     for _ in $(seq 1 100); do \
         xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break; \
         sleep 0.1; \
@@ -126,8 +130,13 @@ ENV DISPLAY=:99 \
     UTRECORDER_HOME=/var/lib/utrecorder
 
 COPY --from=builder /utrecorder/utrecorder-server/build/install/utrecorder-server /opt/utrecorder-server
+# Game packages no redirect serves, maintained by hand in the repository. The home is a volume that starts empty, so
+# the packages directory is moved out of it into the image.
+COPY .utrecorder/packages /opt/utrecorder/packages
+ENV UTRECORDER_PACKAGES=/opt/utrecorder/packages
+
 COPY docker/server/entrypoint.sh /usr/local/bin/entrypoint
-RUN chmod +x /usr/local/bin/entrypoint
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint && chmod +x /usr/local/bin/entrypoint
 
 VOLUME /var/lib/utrecorder
 EXPOSE 8080

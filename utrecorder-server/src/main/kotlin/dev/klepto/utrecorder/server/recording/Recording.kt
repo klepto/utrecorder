@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.server.demo.Demo
 import kotlinx.serialization.Serializable
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
@@ -15,6 +16,9 @@ import kotlin.time.Instant
  * was kept.
  * @property views The number of times the recording was requested.
  * @property lastView The time the recording was last requested, or `null` if it never was.
+ * @property recordedAt The time the mp4 was stored, or `null` if it was not recorded by the server.
+ * @property processingTime The time the last attempt took to produce the mp4, or `null` if it was not recorded by
+ * the server.
  */
 @Serializable
 data class Recording(
@@ -25,6 +29,8 @@ data class Recording(
     val lastUpdate: Instant = Instant.DISTANT_PAST,
     val views: Int = 0,
     val lastView: Instant? = null,
+    val recordedAt: Instant? = null,
+    val processingTime: Duration? = null,
 )
 
 /**

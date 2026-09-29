@@ -6,9 +6,12 @@ import dev.klepto.utrecorder.server.cache.CacheService
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.DemoFetchService
 import dev.klepto.utrecorder.server.demo.UtbtDemoFetcher
+import dev.klepto.utrecorder.server.http.HttpService
+import dev.klepto.utrecorder.server.recording.RecordingJobs
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingService
 import dev.klepto.utrecorder.server.upload.ArchiveMediaUploader
+import dev.klepto.utrecorder.server.upload.MediaUploader
 import dev.klepto.utrecorder.server.upload.UploadService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -16,6 +19,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Entry point of the recording backend server.
@@ -36,33 +40,31 @@ object Server {
         log.info { "Starting the server against ${config.utbt.apiUrl}" }
         SqliteDocumentStore.open(config.database) { store ->
             val repository = RecordingRepository(store, config.recording)
+            val jobs = RecordingJobs()
+            val uploader = uploader(config)
+            val cache = uploader?.let { CacheService(repository, it, config) }
             val services: List<Service> =
-                listOf(
+                listOfNotNull(
                     DemoFetchService(UtbtDemoFetcher(config.utbt), repository, config.utbt),
-                    RecordingService(repository, config = config),
-                ) + archiveServices(repository, config)
+                    RecordingService(repository, config = config, jobs = jobs),
+                    uploader?.let { UploadService(repository, it, config) },
+                    cache,
+                    HttpService(repository, jobs, cache, config),
+                )
             runServices(services)
         }
     }
 
     /**
-     * Returns the services that upload the recordings of [repository] to the Internet Archive and evict the archived
-     * ones from [ServerConfig.recordings]. If the Archive keys of [config] are not both configured, logs a warning and
-     * returns an empty list instead.
+     * Returns the Internet Archive uploader of [config]. If the Archive keys of [config] are not both configured, logs a
+     * warning and returns `null` instead.
      */
-    private fun archiveServices(
-        repository: RecordingRepository,
-        config: ServerConfig,
-    ): List<Service> {
+    private fun uploader(config: ServerConfig): MediaUploader? {
         if (config.archive.accessKey == null || config.archive.secretKey == null) {
             log.warn { "Not uploading or evicting recordings, the Internet Archive keys are not configured" }
-            return emptyList()
+            return null
         }
-        val uploader = ArchiveMediaUploader(config.archive)
-        return listOf(
-            UploadService(repository, uploader, config),
-            CacheService(repository, uploader, config),
-        )
+        return ArchiveMediaUploader(config.archive)
     }
 
     /**
@@ -93,19 +95,24 @@ object Server {
     /**
      * Runs the server from the configuration of the current process.
      *
-     * When the JVM shuts down, the server is cancelled and the shutdown waits for it to finish.
+     * When the JVM shuts down, the server is cancelled, the shutdown waits for it to finish, and the stop is logged.
      */
     @JvmStatic
     fun main(args: Array<String>) {
         val job = Job()
+        val mainThread = Thread.currentThread()
         Runtime.getRuntime().addShutdownHook(
             Thread {
                 job.cancel()
-                runBlocking { job.join() }
+                mainThread.join()
             },
         )
-        runBlocking(job) {
-            run()
+        try {
+            runBlocking(job) {
+                run()
+            }
+        } catch (e: CancellationException) {
+            log.info { "Stopped the server: ${e.message}" }
         }
     }
 }

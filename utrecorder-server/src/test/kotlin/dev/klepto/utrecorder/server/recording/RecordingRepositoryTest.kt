@@ -61,6 +61,23 @@ class RecordingRepositoryTest :
             entry shouldBe Recording(demo("cap", 0), Recorded, lastUpdate = now.get())
         }
 
+        test("sets a recorded recording with the time it was recorded and the time it took") {
+            val entry =
+                repository {
+                    it += listOf(demo("cap", 0))
+                    it.recorded("cap", 90.seconds)
+                    it["cap"]
+                }
+            entry shouldBe
+                Recording(
+                    demo("cap", 0),
+                    Recorded,
+                    lastUpdate = now.get(),
+                    recordedAt = now.get(),
+                    processingTime = 90.seconds,
+                )
+        }
+
         test("returns the times of the newest and the oldest demo") {
             val times =
                 repository {

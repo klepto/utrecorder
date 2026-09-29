@@ -19,7 +19,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import kotlin.io.path.exists
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimedValue
 import kotlin.time.measureTimedValue
 
 /**
@@ -65,23 +67,26 @@ class RecordingService(
                 repository.finish(demo.capId, Recorded)
                 continue
             }
-            processRecording(demo, recordTracked(demo))
+            val (result, processingTime) = recordTracked(demo)
+            processRecording(demo, result, processingTime)
             delay(config.recording.cooldown)
         }
     }
 
     /**
-     * Stores the mp4 of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [repository].
+     * Stores the mp4 of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [repository]. A
+     * stored mp4 is recorded in [processingTime].
      */
     private suspend fun processRecording(
         demo: Demo,
         result: RecorderResult,
+        processingTime: Duration,
     ) {
         val capId = demo.capId
         when (result) {
             is RecorderResult.Done -> {
                 suspendCatching { store(demo, result.mp4) }
-                    .onSuccess { repository.finish(capId, result.status) }
+                    .onSuccess { repository.recorded(capId, processingTime) }
                     .onFailure {
                         log.error(it) { "Could not store recording $capId" }
                         repository.finish(capId, Failed, it.toString())
@@ -104,7 +109,7 @@ class RecordingService(
      * Returns the result of [recordRetrying], tracked in [jobs]. Logs [demo] before the recording starts, and again
      * with the time the recording took once it ends.
      */
-    private suspend fun RecorderProvider.recordTracked(demo: Demo): RecorderResult {
+    private suspend fun RecorderProvider.recordTracked(demo: Demo): TimedValue<RecorderResult> {
         log.info { "Recording: $demo" }
         val (result, elapsed) = measureTimedValue { jobs.track(demo) { recordRetrying(demo, it) } }
         log.info { "Finished recording: $demo in ${elapsed.inWholeSeconds.seconds}" }
@@ -112,7 +117,8 @@ class RecordingService(
     }
 
     /**
-     * Returns the result of the last attempt at recording [demo] on this recorder. Records again after each
+     * Returns the result of the last attempt at recording [demo] on this recorder, with the time that attempt took.
+     * Records again after each
      * [RecorderResult.Failed], up to [RecordingConfig.maxAttempts] attempts, once the cooldown that follows the failed
      * attempt has passed. Each attempt and its progress are reported to [tracker].
      *
@@ -121,12 +127,13 @@ class RecordingService(
     private suspend fun RecorderProvider.recordRetrying(
         demo: Demo,
         tracker: RecordingJobs.Tracker,
-    ): RecorderResult {
+    ): TimedValue<RecorderResult> {
         var attempt = 1
         while (isRunning()) {
             tracker.startAttempt(attempt)
-            val result = record(demo, tracker::report)
-            if (result !is RecorderResult.Failed || attempt >= config.recording.maxAttempts) return result
+            val timedResult = measureTimedValue { record(demo, tracker::report) }
+            val result = timedResult.value
+            if (result !is RecorderResult.Failed || attempt >= config.recording.maxAttempts) return timedResult
             log.warn(result.exception) { "Recording ${demo.capId} failed, attempt $attempt of ${config.recording.maxAttempts}" }
             delay(config.recording.cooldown)
             attempt++

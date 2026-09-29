@@ -1,9 +1,9 @@
 package dev.klepto.utrecorder.cli
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.Recorder
-import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.core.RecorderStage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.seconds
 
@@ -60,7 +61,8 @@ object UtRecorder {
     /**
      * Returns the line that logs [progress]: the stage followed by how much of it is done, in whole percent.
      */
-    fun progressLine(progress: Progress<RecorderStage>): String = "%s %d%%".format(Locale.ROOT, progress.state, (progress.progress * 100).toInt())
+    fun progressLine(progress: Progress<RecorderStage>): String =
+        "%s %d%%".format(Locale.ROOT, progress.state, (progress.progress * 100).toInt())
 
     /**
      * Records the demo that [url] names and prints the path of the mp4 on standard out.
@@ -121,7 +123,8 @@ object UtRecorder {
      * Records the demo that the first of [arguments] names and prints the path of the mp4 on standard out.
      *
      * If [arguments] is empty, prints the usage on standard error and exits with status 1 instead. When the JVM shuts
-     * down during a recording, the recording is cancelled and the shutdown waits for it to finish.
+     * down during a recording, the recording is cancelled, the shutdown waits for it to finish, and the cancellation is
+     * logged.
      */
     @JvmStatic
     fun main(arguments: Array<String>) {
@@ -130,14 +133,19 @@ object UtRecorder {
             exitProcess(EXIT_FAILURE)
         }
         val job = Job()
+        val mainThread = Thread.currentThread()
         Runtime.getRuntime().addShutdownHook(
             Thread {
                 job.cancel()
-                runBlocking { job.join() }
+                mainThread.join()
             },
         )
-        runBlocking(job) {
-            main(arguments.first())
+        try {
+            runBlocking(job) {
+                main(arguments.first())
+            }
+        } catch (e: CancellationException) {
+            log.info { "Cancelled the recording: ${e.message}" }
         }
     }
 }

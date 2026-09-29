@@ -69,6 +69,11 @@ class CacheService(
     }
 
     /**
+     * Returns the URL the mp4 of the recording [capId] downloads from [uploader].
+     */
+    fun downloadUrl(capId: String): String = uploader.downloadUrl(capId, mp4(capId).name)
+
+    /**
      * Deletes from [ServerConfig.recordings] the mp4 of every [Archived] recording last viewed more than
      * [ServerConfig.cacheTtl] ago, and every mp4 that has no recording in [repository]. A recording never viewed is
      * measured from the time it was set to [Archived]. The recordings stay in [repository].
@@ -116,7 +121,7 @@ class CacheService(
     private suspend fun download(recording: Recording) {
         val capId = recording.demo.capId
         val mp4 = mp4(capId)
-        val url = uploader.downloadUrl(capId, mp4.name)
+        val url = downloadUrl(capId)
         try {
             suspendCatching { Downloader(url, recording.md5, directories = config.directories).download(mp4) }
                 .onSuccess { log.info { "Downloaded again: ${recording.demo} ($url)" } }

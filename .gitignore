@@ -50,3 +50,7 @@ bin/
 ### utrecorder-web ###
 # Node and npm are downloaded by the node-gradle plugin into the root .gradle/, which is ignored above.
 utrecorder-web/node_modules/
+
+### Docker ###
+# Secrets and overrides docker compose reads for the services in docker/compose.yml.
+docker/.env

@@ -21,6 +21,7 @@ import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.comparables.shouldBeGreaterThanOrEqualTo
+import io.kotest.matchers.comparables.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
@@ -107,6 +108,35 @@ class RecordingServiceTest :
                     block(repository)
                     job.cancelAndJoin()
                 }
+            }
+        }
+
+        test("sets a stored recording to recorded with the time it was recorded and the time its last attempt took") {
+            val recordings = createTempDirectory(root, "recordings")
+            val attempts = AtomicInteger()
+            running(
+                listOf(demo("cap", 0)),
+                { repository ->
+                    RecordingService(
+                        repository,
+                        listOf(
+                            recorder { demo, _ ->
+                                when (attempts.incrementAndGet()) {
+                                    1 -> RecorderResult.Failed(IllegalStateException("Capture failed")).also { delay(1.seconds) }
+                                    else -> done(demo).also { delay(100.milliseconds) }
+                                }
+                            },
+                        ),
+                        config(recordings),
+                    )
+                },
+            ) { repository ->
+                eventually(5.seconds) { repository["cap"]?.status shouldBe Recorded }
+                val recording = repository["cap"]!!
+
+                recording.recordedAt shouldBe Instant.parse("2026-09-27T08:00:00Z")
+                recording.processingTime!! shouldBeGreaterThanOrEqualTo 100.milliseconds
+                recording.processingTime!! shouldBeLessThan 1.seconds
             }
         }
 
