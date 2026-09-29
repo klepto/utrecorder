@@ -337,6 +337,7 @@ class UtProcess(
             arguments += "-userini=${files.userIni.absolutePathString()}"
             arguments += execArguments(files)
             arguments += "-log=${files.log.name}"
+            arguments += "-forcelogflush"
             arguments += installation.platform.homeArguments
             environment += this@UtProcess.environment
             prependLibraryPath(systemDirectory)

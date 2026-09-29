@@ -11,14 +11,12 @@ import kotlinx.serialization.serializer
 interface DocumentStore {
     /**
      * Returns the collection [name] of this store. Each document is stored under the key that [key] returns for it.
-     * If [cached] is `true`, the collection keeps every document in memory after its first transaction.
      *
      * @throws IllegalArgumentException If [name] is not a valid collection name of this store.
      */
     fun <T : Any> collection(
         name: String,
         serializer: KSerializer<T>,
-        cached: Boolean = false,
         key: (T) -> String,
     ): DocumentCollection<T>
 }
@@ -28,6 +26,25 @@ interface DocumentStore {
  */
 inline fun <reified T : Any> DocumentStore.collection(
     name: String,
-    cached: Boolean = false,
     noinline key: (T) -> String,
-): DocumentCollection<T> = collection(name, serializer<T>(), cached, key)
+): DocumentCollection<T> = collection(name, serializer<T>(), key)
+
+/**
+ * Returns the collection [name] of this store, kept in memory after its first transaction.
+ *
+ * @throws IllegalArgumentException If [name] is not a valid collection name of this store.
+ */
+fun <T : Any> DocumentStore.cachedCollection(
+    name: String,
+    serializer: KSerializer<T>,
+    key: (T) -> String,
+): CachedCollection<T> = CachedCollection(collection(name, serializer, key), key)
+
+/**
+ * Returns the collection [name] of this store, serialized with the serializer of [T] and kept in memory after its
+ * first transaction.
+ */
+inline fun <reified T : Any> DocumentStore.cachedCollection(
+    name: String,
+    noinline key: (T) -> String,
+): CachedCollection<T> = cachedCollection(name, serializer<T>(), key)

@@ -157,6 +157,11 @@ suspend fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
     }
 
 /**
+ * Returns `true` if a file or directory exists at this path.
+ */
+suspend fun Path.fileExists(): Boolean = withContext(Dispatchers.IO) { exists() }
+
+/**
  * Returns the digest of the file at this path under [algorithm], such as `MD5` or `SHA-256`, as lowercase hexadecimal.
  */
 suspend fun Path.digest(algorithm: String): String =

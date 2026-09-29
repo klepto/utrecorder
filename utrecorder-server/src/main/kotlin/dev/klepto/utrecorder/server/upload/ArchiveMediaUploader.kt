@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.server.upload
 
 import dev.klepto.utrecorder.common.http.HTTP_SOCKET_TIMEOUT
 import dev.klepto.utrecorder.common.http.encodeUrlPathSegment
+import dev.klepto.utrecorder.server.ServerConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.content.LocalFileContent
 import io.ktor.client.engine.HttpClientEngine
@@ -22,16 +23,17 @@ import kotlin.io.path.name
 /**
  * [MediaUploader] over the S3-like upload API and the metadata API of the Internet Archive.
  *
- * The Archive identifier of the item `<id>` is `<prefix>-<id>`, with the prefix [ArchiveConfig.prefix]. Each item is
- * created in [ArchiveConfig.collection] with the media type `movies`, the title, description and subjects of its
- * [MediaMetadata], and without a derive. An upload has no time limit, only the socket timeout.
+ * The Archive identifier of the item `<id>` is `<prefix>-<id>`, with the prefix [ServerConfig.archivePrefix]. Each item
+ * is created in [ServerConfig.archiveCollection] with the media type `movies`, the title, description and subjects of
+ * its [MediaMetadata], and without a derive. An upload has no time limit, only the socket timeout.
  *
  * @property config The keys, collection and identifier prefix of the Archive account.
  * @param engine The Ktor client engine the requests run over.
- * @throws IllegalArgumentException If [ArchiveConfig.accessKey] or [ArchiveConfig.secretKey] is not configured.
+ * @throws IllegalArgumentException If [ServerConfig.archiveAccessKey] or [ServerConfig.archiveSecretKey] is not
+ * configured.
  */
 class ArchiveMediaUploader(
-    private val config: ArchiveConfig = ArchiveConfig(),
+    private val config: ServerConfig = ServerConfig(),
     engine: HttpClientEngine = CIO.create(),
 ) : MediaUploader {
     private val authorization: String = authorization(config)
@@ -45,7 +47,7 @@ class ArchiveMediaUploader(
         client.put("https://s3.us.archive.org/${identifier(id)}/${file.name}") {
             header(HttpHeaders.Authorization, authorization)
             header("x-archive-auto-make-bucket", "1")
-            header("x-archive-meta01-collection", config.collection)
+            header("x-archive-meta01-collection", config.archiveCollection)
             header("x-archive-meta-mediatype", "movies")
             header("x-archive-meta-title", encodeValue(metadata.title))
             header("x-archive-meta-description", encodeValue(toHtml(metadata.description)))
@@ -76,7 +78,7 @@ class ArchiveMediaUploader(
     /**
      * Returns the Archive identifier of the item [id].
      */
-    private fun identifier(id: String): String = "${config.prefix}-$id"
+    private fun identifier(id: String): String = "${config.archivePrefix}-$id"
 
     /**
      * Metadata of one Archive item.
@@ -91,12 +93,10 @@ class ArchiveMediaUploader(
     /**
      * One file of an Archive item.
      *
-     * @property name The name of the file inside the item.
      * @property md5 The MD5 checksum of the file, or `null` if the Archive lists none.
      */
     @Serializable
     private data class ItemFile(
-        val name: String,
         val md5: String? = null,
     )
 
@@ -121,9 +121,9 @@ class ArchiveMediaUploader(
         /**
          * Returns the `LOW <access>:<secret>` authorization of [config].
          */
-        fun authorization(config: ArchiveConfig): String {
-            val accessKey = requireNotNull(config.accessKey) { "The Archive access key is not configured" }
-            val secretKey = requireNotNull(config.secretKey) { "The Archive secret key is not configured" }
+        fun authorization(config: ServerConfig): String {
+            val accessKey = requireNotNull(config.archiveAccessKey) { "The Archive access key is not configured" }
+            val secretKey = requireNotNull(config.archiveSecretKey) { "The Archive secret key is not configured" }
             return "LOW $accessKey:$secretKey"
         }
 

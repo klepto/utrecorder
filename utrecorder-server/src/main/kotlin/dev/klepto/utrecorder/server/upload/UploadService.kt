@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.server.upload
 
 import dev.klepto.utrecorder.common.io.digest
-import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.common.suspendCatching
 import dev.klepto.utrecorder.server.ServerConfig
@@ -12,13 +12,9 @@ import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.nio.file.Path
-import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -139,7 +135,7 @@ class UploadService(
             .all()
             .filter { it.status == Recorded }
             .sortedByDescending { it.demo.timestamp }
-            .firstOrNull { exists(mp4(it)) }
+            .firstOrNull { config.mp4(it.demo.capId).fileExists() }
 
     /**
      * Uploads the mp4 of [recording] and sets it to [Uploaded] with the checksum of the mp4. If [uploader] already holds
@@ -152,7 +148,7 @@ class UploadService(
             .onSuccess { (md5, uploaded) ->
                 if (uploaded) {
                     repository.update(capId) { it.copy(status = Uploaded, md5 = md5) }
-                    log.info { "Finished uploading: ${recording.demo} (${uploader.downloadUrl(capId, mp4(recording).name)})" }
+                    log.info { "Finished uploading: ${recording.demo} (${uploader.downloadUrl(capId, config.mp4(capId).name)})" }
                 } else {
                     repository.update(capId) { it.copy(status = Archived, md5 = md5) }
                     log.info { "Archived without uploading, the mp4 is already uploaded: ${recording.demo}" }
@@ -168,7 +164,7 @@ class UploadService(
      */
     private suspend fun uploadMp4(recording: Recording): Pair<String, Boolean> {
         val capId = recording.demo.capId
-        val mp4 = mp4(recording)
+        val mp4 = config.mp4(capId)
         val md5 = mp4.digest("MD5")
         if (uploader.isUploaded(capId, md5)) return md5 to false
         log.info { "Uploading: ${recording.demo}" }
@@ -191,13 +187,6 @@ class UploadService(
                 """.trimIndent(),
             tags = listOf("Video Games", "Unreal Tournament 99", "Speedrunning", "Bunny Track"),
         )
-
-    /**
-     * Returns the file that the mp4 of [recording] is stored at.
-     */
-    private fun mp4(recording: Recording): Path = config.recordings["${recording.demo.capId}.mp4"]
-
-    private suspend fun exists(file: Path): Boolean = withContext(Dispatchers.IO) { file.exists() }
 
     private companion object {
         val CONFIRMATION_TIMEOUT = 24.hours

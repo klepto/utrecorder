@@ -10,6 +10,7 @@ import kotlin.time.Instant
  * @property capId The identifier of the cap.
  * @property map The name of the map the cap was made on.
  * @property player The alias of the player who capped.
+ * @property userId The UTBT identifier of the player who capped, or `null` if the cap list leaves it out.
  * @property capTime The time the cap took.
  * @property timestamp The time the cap was added.
  * @property demoUrl The URL the `.dem` file downloads from.
@@ -19,6 +20,7 @@ data class Demo(
     val capId: String,
     val map: String,
     val player: String,
+    val userId: String? = null,
     val capTime: Duration,
     val timestamp: Instant,
     val demoUrl: String,

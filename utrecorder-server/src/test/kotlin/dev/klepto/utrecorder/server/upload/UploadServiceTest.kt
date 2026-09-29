@@ -4,6 +4,7 @@ import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
+import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
@@ -101,7 +102,7 @@ class UploadServiceTest :
                     dailyUploads = dailyUploads,
                 )
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, config.recording, clock)
+                val repository = RecordingRepository(store, DemoRepository(store), config, clock)
                 repository += statuses.keys.mapIndexed { minute, capId -> demo(capId, minute) }
                 statuses.forEach { (capId, status) -> repository.update(capId) { it.copy(status = status, md5 = md5s[capId]) } }
                 coroutineScope {

@@ -152,6 +152,12 @@ class FfmpegVideoCaptureTest :
             executable.arguments shouldContain "-windowed"
         }
 
+        test("process flushes the log of the run after every line") {
+            val (_, executable) = launch()
+
+            executable.arguments shouldContain "-forcelogflush"
+        }
+
         fun hideHud(btMod: String): List<String> {
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, listOf(UtPackage.named(btMod, "")))
             val userIni = UtIni("")

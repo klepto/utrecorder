@@ -2,15 +2,15 @@ package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.common.suspendCatching
+import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
-import dev.klepto.utrecorder.server.recording.RecordingRepository
 import kotlinx.coroutines.delay
 import kotlin.time.Instant
 
 /**
- * [Service] that queues a recording of every demo of [fetcher] in [repository].
+ * [Service] that stores every demo of [fetcher] in [repository].
  *
- * Once per [UtbtConfig.cooldown], it reads two streams:
+ * Once per [ServerConfig.utbtCooldown], it reads two streams:
  * - The head: every demo added after the newest demo of [repository], stored once all of its pages are read. If
  *   [repository] is empty, only the newest page.
  * - The backlog: the page of demos added before the oldest demo of [repository]. A page that holds no new demo ends
@@ -22,10 +22,10 @@ import kotlin.time.Instant
  * @property repository The repository the demos are stored in.
  * @property config The cooldown between two syncs.
  */
-class DemoFetchService(
+class DemoService(
     private val fetcher: DemoFetcher,
-    private val repository: RecordingRepository,
-    private val config: UtbtConfig = UtbtConfig(),
+    private val repository: DemoRepository,
+    private val config: ServerConfig = ServerConfig(),
 ) : Service {
     override suspend fun start() {
         var backlogEnded = false
@@ -38,7 +38,7 @@ class DemoFetchService(
                         .onFailure { log.warn(it) { "Could not sync the older demos" } }
                         .getOrDefault(false)
             }
-            delay(config.cooldown)
+            delay(config.utbtCooldown)
         }
     }
 
@@ -78,6 +78,6 @@ class DemoFetchService(
     }
 
     private companion object {
-        val log = logger<DemoFetchService>()
+        val log = logger<DemoService>()
     }
 }

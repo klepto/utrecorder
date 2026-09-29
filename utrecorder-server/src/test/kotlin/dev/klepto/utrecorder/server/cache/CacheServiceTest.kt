@@ -6,9 +6,12 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
+import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Evicted
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import dev.klepto.utrecorder.server.upload.MediaMetadata
@@ -96,6 +99,8 @@ class CacheServiceTest :
         suspend fun cache(
             statuses: Map<String, RecordingStatus>,
             mp4s: List<String>,
+            maxBytes: Long = 107_374_182_400,
+            targetBytes: Long = 53_687_091_200,
             block: suspend (CacheService, RecordingRepository, Path) -> Unit,
         ) {
             val directory = createTempDirectory(root, "cache")
@@ -106,9 +111,11 @@ class CacheServiceTest :
                     ConfigReader.EMPTY,
                     directories = DirectoriesConfig(ConfigReader.EMPTY, home = directory.resolve("home")),
                     recordings = recordings,
+                    cacheMaxBytes = maxBytes,
+                    cacheTargetBytes = targetBytes,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, config.recording, clock)
+                val repository = RecordingRepository(store, DemoRepository(store), config, clock)
                 repository += statuses.keys.map { demo(it) }
                 // MD5 of "archived".
                 statuses.forEach { (capId, status) ->
@@ -173,6 +180,41 @@ class CacheServiceTest :
                 service.evict()
 
                 recordings.resolve("missing.mp4").shouldNotExist()
+            }
+        }
+
+        test("deletes archived, then recorded mp4 files, least recently viewed first, down to the target size") {
+            val statuses = mapOf("arch1" to Archived, "arch2" to Archived, "recd1" to Recorded, "recd2" to Recorded, "upld1" to Uploaded)
+            cache(statuses, statuses.keys.toList(), maxBytes = 24, targetBytes = 12) { service, repository, recordings ->
+                now.set(now.get() + 1.days)
+                service.view("arch2")
+                service.view("recd2")
+                service.evict()
+
+                recordings.resolve("arch1.mp4").shouldNotExist()
+                recordings.resolve("arch2.mp4").shouldNotExist()
+                recordings.resolve("recd1.mp4").shouldNotExist()
+                recordings.resolve("recd2.mp4").shouldExist()
+                recordings.resolve("upld1.mp4").shouldExist()
+                repository["arch1"]?.status shouldBe Archived
+                repository["recd1"]?.status shouldBe Evicted
+                repository["recd2"]?.status shouldBe Recorded
+            }
+        }
+
+        test("keeps every mp4 while the mp4 files take at most the maximum size") {
+            val statuses = mapOf("arch1" to Archived, "recd1" to Recorded)
+            cache(statuses, statuses.keys.toList(), maxBytes = 10, targetBytes = 0) { service, _, recordings ->
+                service.evict()
+
+                recordings.resolve("arch1.mp4").shouldExist()
+                recordings.resolve("recd1.mp4").shouldExist()
+            }
+        }
+
+        test("sets an evicted recording to pending when viewed") {
+            cache(mapOf("evicted" to Evicted), emptyList()) { service, _, _ ->
+                service.view("evicted")?.status shouldBe Pending
             }
         }
 

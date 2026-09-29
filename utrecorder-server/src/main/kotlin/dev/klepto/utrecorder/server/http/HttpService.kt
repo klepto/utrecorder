@@ -1,6 +1,6 @@
 package dev.klepto.utrecorder.server.http
 
-import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.server.ServerConfig
@@ -28,14 +28,11 @@ import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.RoutingContext
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import java.nio.file.Path
-import kotlin.io.path.exists
 import kotlin.time.Instant
 
 /**
@@ -45,7 +42,7 @@ import kotlin.time.Instant
  * - `GET /`: an empty page.
  * - `GET /demo/{capId}`: the mp4 of a [Recorded], [Uploaded] or [Archived] recording, with range support. If the
  *   recording is [Archived] and its mp4 is not in [ServerConfig.recordings], redirects to the download URL of [cache]
- *   instead. Every other request answers `404`.
+ *   instead, if [cache] names one. Every other request answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
  * - `GET /api/queue`: the next 10 demos to be recorded, in the order they are taken.
  * - `GET /api/recordings`: the 10 most recently recorded [Recorded], [Uploaded] or [Archived] recordings, newest
@@ -56,14 +53,13 @@ import kotlin.time.Instant
  *
  * @property repository The recordings to serve.
  * @property jobs The running recordings.
- * @property cache The cache that counts the views and names the download URL of an archived mp4, or `null` if nothing
- * is archived.
+ * @property cache The cache that counts the views and names the download URL of an archived mp4.
  * @property config The recordings directory and the port.
  */
 class HttpService(
     private val repository: RecordingRepository,
     private val jobs: RecordingJobs,
-    private val cache: CacheService? = null,
+    private val cache: CacheService,
     private val config: ServerConfig = ServerConfig(),
 ) : Service {
     override suspend fun start() {
@@ -96,28 +92,20 @@ class HttpService(
      * Answers with the mp4 of the recording [capId], a redirect to its download URL, or `404`.
      */
     private suspend fun RoutingContext.serveDemo(capId: String) {
-        val recording = view(capId)
+        val recording = cache.view(capId)
         if (recording == null || recording.status !in COMPLETED) {
             call.respond(HttpStatusCode.NotFound)
             return
         }
-        val mp4 = mp4(recording)
+        val capId = recording.demo.capId
+        val mp4 = config.mp4(capId)
+        val downloadUrl = cache.downloadUrl(capId)
         when {
-            exists(mp4) -> call.respondFile(mp4.toFile())
-            recording.status == Archived && cache != null -> call.respondRedirect(cache.downloadUrl(recording.demo.capId))
+            mp4.fileExists() -> call.respondFile(mp4.toFile())
+            recording.status == Archived && downloadUrl != null -> call.respondRedirect(downloadUrl)
             else -> call.respond(HttpStatusCode.NotFound)
         }
     }
-
-    /**
-     * Returns the recording stored under [capId], after counting one view of it through [cache]. If there is none,
-     * returns `null` instead.
-     */
-    private suspend fun view(capId: String): Recording? =
-        when (cache) {
-            null -> repository[capId]
-            else -> cache.view(capId)
-        }
 
     /**
      * Returns the [LIMIT] most recently recorded [Recorded], [Uploaded] or [Archived] recordings, newest first.
@@ -128,13 +116,6 @@ class HttpService(
             .filter { it.status in COMPLETED }
             .sortedWith(NEWEST_RECORDED)
             .take(LIMIT)
-
-    /**
-     * Returns the file that the mp4 of [recording] is stored at.
-     */
-    private fun mp4(recording: Recording): Path = config.recordings["${recording.demo.capId}.mp4"]
-
-    private suspend fun exists(file: Path): Boolean = withContext(Dispatchers.IO) { file.exists() }
 
     /**
      * One running recording, as `/api/jobs` lists it.

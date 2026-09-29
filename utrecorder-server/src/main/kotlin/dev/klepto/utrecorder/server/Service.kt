@@ -16,9 +16,4 @@ interface Service {
      * Starts the service.
      */
     suspend fun start()
-
-    /**
-     * Stops the service. Does nothing by default.
-     */
-    suspend fun stop() {}
 }

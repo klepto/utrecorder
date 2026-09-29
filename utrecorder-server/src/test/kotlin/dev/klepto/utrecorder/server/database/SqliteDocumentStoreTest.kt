@@ -22,8 +22,14 @@ class SqliteDocumentStoreTest :
         }
 
         test("keeps documents across a reopen") {
-            SqliteDocumentStore.open(file) { it.collection<Entry>("entries", key = Entry::id).put(Entry("a")) }
-            SqliteDocumentStore.open(file) { it.collection<Entry>("entries", key = Entry::id)["a"] } shouldBe Entry("a")
+            SqliteDocumentStore.open(file) { store ->
+                store.collection<Entry>("entries", key = Entry::id).transaction { it.put(Entry("a")) }
+            }
+            val entry =
+                SqliteDocumentStore.open(file) { store ->
+                    store.collection<Entry>("entries", key = Entry::id).transaction { it["a"] }
+                }
+            entry shouldBe Entry("a")
         }
 
         test("rejects a collection name outside a-z, 0-9 and _") {

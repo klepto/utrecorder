@@ -1,5 +1,9 @@
 package dev.klepto.utrecorder.server.database
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -9,7 +13,7 @@ import kotlinx.coroutines.sync.withLock
  * The documents of [collection] are read on the first transaction, and every read after that is answered from memory.
  * If a transaction throws, the documents are read again on the next one.
  *
- * Get a collection through [DocumentStore.collection].
+ * Get a collection through [DocumentStore.cachedCollection].
  *
  * @property collection The collection that stores the documents.
  * @property key Returns the key of a document.
@@ -20,15 +24,34 @@ class CachedCollection<T : Any>(
 ) : DocumentCollection<T> {
     private val lock = Mutex()
     private var documents: MutableMap<String, T>? = null
+    private val changes = MutableStateFlow(0L)
+
+    /**
+     * Number of transactions that put or removed a document and did not throw. Starts at `0`.
+     */
+    val revision: StateFlow<Long> = changes.asStateFlow()
 
     override suspend fun <R> transaction(block: suspend (DocumentTransaction<T>) -> R): R =
         lock.withLock {
             try {
-                collection.transaction { stored -> block(Transaction(stored, documents ?: load(stored))) }
+                val (result, changed) = collection.transaction { stored -> run(stored, block) }
+                if (changed) changes.update { it + 1 }
+                result
             } catch (e: Throwable) {
                 documents = null
                 throw e
             }
+        }
+
+    /**
+     * Returns the result of [block], run on the documents of [stored], and `true` if [block] put or removed a document.
+     */
+    private suspend fun <R> run(
+        stored: DocumentTransaction<T>,
+        block: suspend (DocumentTransaction<T>) -> R,
+    ): Pair<R, Boolean> =
+        Transaction(stored, documents ?: load(stored)).let { transaction ->
+            block(transaction) to transaction.changed
         }
 
     /**
@@ -44,6 +67,12 @@ class CachedCollection<T : Any>(
         private val stored: DocumentTransaction<T>,
         private val documents: MutableMap<String, T>,
     ) : DocumentTransaction<T> {
+        /**
+         * `true` once a document is put or removed.
+         */
+        var changed = false
+            private set
+
         override suspend fun get(key: String): T? = documents[key]
 
         override suspend fun contains(key: String): Boolean = key in documents
@@ -51,11 +80,13 @@ class CachedCollection<T : Any>(
         override suspend fun put(document: T) {
             stored.put(document)
             documents[key(document)] = document
+            changed = true
         }
 
         override suspend fun remove(key: String) {
             stored.remove(key)
             documents.remove(key)
+            changed = true
         }
 
         override suspend fun all(): List<T> = documents.values.toList()

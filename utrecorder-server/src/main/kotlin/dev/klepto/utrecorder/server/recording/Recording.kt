@@ -12,8 +12,7 @@ import kotlin.time.Instant
  * @property status How far the recording has come.
  * @property error The failure of the last capture of [demo], or `null` if none has failed.
  * @property md5 The MD5 checksum of the uploaded mp4, or `null` if it was not uploaded.
- * @property lastUpdate The time [status] last changed. [Instant.DISTANT_PAST] for a recording stored before the time
- * was kept.
+ * @property lastUpdate The time [status] last changed, or [Instant.DISTANT_PAST] if the recording was never stored.
  * @property views The number of times the recording was requested.
  * @property lastView The time the recording was last requested, or `null` if it never was.
  * @property recordedAt The time the mp4 was stored, or `null` if it was not recorded by the server.
@@ -52,6 +51,12 @@ enum class RecordingStatus {
 
     /** Uploaded, and confirmed by remote storage to hold an mp4 with the same checksum. */
     Archived,
+
+    /**
+     * Recorded, but its mp4 was deleted before it was uploaded, to keep the recordings directory within its size limit.
+     * Pending again when it is viewed.
+     */
+    Evicted,
 
     /** Given up on after its last capture failed. Pending again when a [RecordingRepository] is opened. */
     Failed,

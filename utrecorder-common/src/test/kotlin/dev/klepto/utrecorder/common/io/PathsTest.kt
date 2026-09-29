@@ -219,6 +219,16 @@ class PathsTest :
             }
         }
 
+        context("fileExists") {
+            test("returns true for an existing file") {
+                file("exists", sample).fileExists() shouldBe true
+            }
+
+            test("returns false for a missing file") {
+                (root / "exists-absent").fileExists() shouldBe false
+            }
+        }
+
         context("digest") {
             test("returns the reference MD5 and SHA-256 of an empty file") {
                 val empty = file("empty")

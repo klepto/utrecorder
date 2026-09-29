@@ -8,20 +8,13 @@ import java.nio.file.Path
  */
 sealed interface RecorderResult {
     /**
-     * The status of the recording once this capture is its last one.
-     */
-    val status: RecordingStatus
-
-    /**
      * The demo was captured.
      *
      * @property mp4 The captured mp4, inside the workspace of the capture.
      */
     data class Done(
         val mp4: Path,
-    ) : RecorderResult {
-        override val status: RecordingStatus get() = RecordingStatus.Recorded
-    }
+    ) : RecorderResult
 
     /**
      * The capture failed, and the demo may be captured again.
@@ -30,9 +23,7 @@ sealed interface RecorderResult {
      */
     data class Failed(
         val exception: Exception,
-    ) : RecorderResult {
-        override val status: RecordingStatus get() = RecordingStatus.Failed
-    }
+    ) : RecorderResult
 
     /**
      * The demo names a package that no source holds, so no later capture can succeed.
@@ -41,7 +32,5 @@ sealed interface RecorderResult {
      */
     data class Unresolvable(
         val exception: UtPackageException,
-    ) : RecorderResult {
-        override val status: RecordingStatus get() = RecordingStatus.Unresolvable
-    }
+    ) : RecorderResult
 }

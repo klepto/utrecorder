@@ -15,28 +15,9 @@ interface DocumentCollection<T : Any> {
     suspend fun <R> transaction(block: suspend (DocumentTransaction<T>) -> R): R
 
     /**
-     * Returns the document stored under [key]. If there is none, returns `null` instead.
-     */
-    suspend operator fun get(key: String): T? = transaction { it[key] }
-
-    /**
      * Returns `true` if a document is stored under [key].
      */
     suspend operator fun contains(key: String): Boolean = transaction { key in it }
-
-    /**
-     * Stores [document] under its key, replacing the document stored there before.
-     */
-    suspend fun put(document: T) {
-        transaction { it.put(document) }
-    }
-
-    /**
-     * Removes the document stored under [key], if there is one.
-     */
-    suspend fun remove(key: String) {
-        transaction { it.remove(key) }
-    }
 
     /**
      * Returns every document, in the order their keys were first stored.

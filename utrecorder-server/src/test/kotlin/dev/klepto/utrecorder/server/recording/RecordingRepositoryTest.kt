@@ -1,8 +1,10 @@
 package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
+import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
@@ -48,7 +50,10 @@ class RecordingRepositoryTest :
         suspend fun <R> repository(
             file: Path = file(),
             block: suspend (RecordingRepository) -> R,
-        ): R = SqliteDocumentStore.open(file) { block(RecordingRepository(it, RecordingConfig(ConfigReader.EMPTY), clock)) }
+        ): R =
+            SqliteDocumentStore.open(file) {
+                block(RecordingRepository(it, DemoRepository(it), ServerConfig(ConfigReader.EMPTY), clock))
+            }
 
         test("stores a pending recording of an added demo and skips a demo already stored") {
             val entry =
@@ -59,6 +64,20 @@ class RecordingRepositoryTest :
                     it["cap"]
                 }
             entry shouldBe Recording(demo("cap", 0), Recorded, lastUpdate = now.get())
+        }
+
+        test("stores the demo of an added recording in the demo repository and reads it from there once reopened") {
+            val file = file()
+            SqliteDocumentStore.open(file) { store ->
+                RecordingRepository(store, DemoRepository(store), ServerConfig(ConfigReader.EMPTY), clock) += listOf(demo("cap", 0))
+            }
+
+            val stored =
+                SqliteDocumentStore.open(file) { store ->
+                    val demos = DemoRepository(store)
+                    demos.all() to RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)["cap"]?.demo
+                }
+            stored shouldBe (listOf(demo("cap", 0)) to demo("cap", 0))
         }
 
         test("sets a recorded recording with the time it was recorded and the time it took") {
@@ -78,13 +97,20 @@ class RecordingRepositoryTest :
                 )
         }
 
-        test("returns the times of the newest and the oldest demo") {
-            val times =
-                repository {
-                    it += listOf(demo("b", 1), demo("c", 2), demo("a", 0))
-                    it.newest() to it.oldest()
+        test("removes the unrecorded recordings that are not kept, and keeps every other one") {
+            val capIds =
+                repository { repository ->
+                    val capIds = listOf("pending", "failed", "unresolvable", "recording", "recorded", "viewed", "kept")
+                    repository += capIds.mapIndexed { minute, capId -> demo(capId, minute) }
+                    repository.update("recording") { it.copy(status = RecordingStatus.Recording) }
+                    repository.finish("failed", Failed)
+                    repository.finish("unresolvable", Unresolvable)
+                    repository.finish("recorded", Recorded)
+                    repository.update("viewed") { it.copy(recordedAt = now.get()) }
+                    repository.retainUnrecorded { it == "kept" }
+                    capIds.filter { repository[it] != null }
                 }
-            times shouldBe (Instant.parse("2026-09-26T12:02:00Z") to Instant.parse("2026-09-26T12:00:00Z"))
+            capIds shouldBe listOf("recording", "recorded", "viewed", "kept")
         }
 
         test("takes the demo of the newest pending recording and sets it to recording") {
@@ -141,6 +167,17 @@ class RecordingRepositoryTest :
             taken shouldBe listOf("recent", Pending)
         }
 
+        test("takes a pending demo recorded before while the backlog buffer is full") {
+            val taken =
+                repository { repository ->
+                    repository += listOf(demo("backlog", -10_000), demo("recorded", -20_000), demo("evicted", -30_000))
+                    repository.finish("recorded", Recorded)
+                    repository.update("evicted") { it.copy(recordedAt = Instant.parse("2026-09-20T12:00:00Z")) }
+                    listOf(repository.take().capId, repository["backlog"]?.status)
+                }
+            taken shouldBe listOf("evicted", Pending)
+        }
+
         test("keeps the error of a finished recording") {
             val entry =
                 repository {
@@ -151,26 +188,19 @@ class RecordingRepositoryTest :
             entry shouldBe Recording(demo("cap", 0), Unresolvable, "Missing BTPog", lastUpdate = now.get())
         }
 
-        test("sets recording, failed and unresolvable recordings to pending when opened again, and keeps the rest") {
-            val file = file()
-            repository(file) {
-                it += listOf(demo("recording", 0))
-                it.take()
-                it += listOf(demo("failed", 1), demo("recorded", 2), demo("unresolvable", 3))
-                it.finish("failed", Failed, "Capture failed")
-                it.finish("recorded", Recorded)
-                it.finish("unresolvable", Unresolvable, "Missing BTPog")
-            }
-
-            val statuses =
-                repository(file) { repository -> listOf("recording", "failed", "recorded", "unresolvable").map { repository[it] } }
-
-            statuses shouldBe
+        test("replaces every recording with the result of a transform") {
+            val all =
+                repository {
+                    it += listOf(demo("failed", 0), demo("recorded", 1))
+                    it.finish("failed", Failed, "Capture failed")
+                    it.finish("recorded", Recorded)
+                    it.updateAll { recording -> if (recording.status == Failed) recording.copy(status = Pending) else recording }
+                    it.all()
+                }
+            all shouldBe
                 listOf(
-                    Recording(demo("recording", 0), Pending, lastUpdate = now.get()),
-                    Recording(demo("failed", 1), Pending, "Capture failed", lastUpdate = now.get()),
-                    Recording(demo("recorded", 2), Recorded, lastUpdate = now.get()),
-                    Recording(demo("unresolvable", 3), Pending, "Missing BTPog", lastUpdate = now.get()),
+                    Recording(demo("failed", 0), Pending, "Capture failed", lastUpdate = now.get()),
+                    Recording(demo("recorded", 1), Recorded, lastUpdate = now.get()),
                 )
         }
 

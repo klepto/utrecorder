@@ -1,9 +1,8 @@
 package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
-import dev.klepto.utrecorder.server.recording.RecordingConfig
-import dev.klepto.utrecorder.server.recording.RecordingRepository
 import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
@@ -21,9 +20,9 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
-class DemoFetchServiceTest :
+class DemoServiceTest :
     FunSpec({
-        val config = UtbtConfig(ConfigReader.EMPTY, cooldown = 100.milliseconds)
+        val config = ServerConfig(ConfigReader.EMPTY, utbtCooldown = 100.milliseconds)
         val start = Instant.parse("2026-09-26T12:00:00Z")
 
         fun demo(minute: Int): Demo =
@@ -65,19 +64,19 @@ class DemoFetchServiceTest :
 
         suspend fun syncing(
             fetcher: DemoFetcher,
-            block: suspend (RecordingRepository) -> Unit,
+            block: suspend (DemoRepository) -> Unit,
         ) {
-            SqliteDocumentStore.open(createTempDirectory("utrecorder-demo-fetch-service-test").resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, RecordingConfig(ConfigReader.EMPTY))
+            SqliteDocumentStore.open(createTempDirectory("utrecorder-demo-service-test").resolve("server.db")) { store ->
+                val repository = DemoRepository(store)
                 coroutineScope {
-                    val job = launch { DemoFetchService(fetcher, repository, config).start() }
+                    val job = launch { DemoService(fetcher, repository, config).start() }
                     block(repository)
                     job.cancelAndJoin()
                 }
             }
         }
 
-        suspend fun RecordingRepository.capIds(minutes: IntRange): List<String> = minutes.filter { "cap-$it" in this }.map { "cap-$it" }
+        suspend fun DemoRepository.capIds(minutes: IntRange): List<String> = minutes.filter { "cap-$it" in this }.map { "cap-$it" }
 
         test("stores the newest page, then walks the backlog one page per cooldown until a page holds nothing new") {
             val requests = CopyOnWriteArrayList<String>()

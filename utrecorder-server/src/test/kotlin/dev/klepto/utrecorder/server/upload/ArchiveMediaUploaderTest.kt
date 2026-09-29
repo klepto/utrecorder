@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server.upload
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.server.ServerConfig
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
@@ -19,7 +20,7 @@ import kotlin.io.path.writeText
 
 class ArchiveMediaUploaderTest :
     FunSpec({
-        val config = ArchiveConfig(ConfigReader.EMPTY, accessKey = "access", secretKey = "secret")
+        val config = ServerConfig(ConfigReader.EMPTY, archiveAccessKey = "access", archiveSecretKey = "secret")
         val id = "0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d"
         val metadata = MediaMetadata("A & B", "Line <1>\nLine 2", listOf("Speedrunning", "Bunny Track"))
 
@@ -109,7 +110,7 @@ class ArchiveMediaUploaderTest :
 
         test("rejects a configuration without keys") {
             shouldThrow<IllegalArgumentException> {
-                ArchiveMediaUploader(ArchiveConfig(ConfigReader.EMPTY), engine())
+                ArchiveMediaUploader(ServerConfig(ConfigReader.EMPTY), engine())
             }
         }
     })

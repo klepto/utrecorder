@@ -8,6 +8,7 @@ import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.cache.CacheService
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
+import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingJobs
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus
@@ -102,10 +103,10 @@ class HttpServiceTest :
                     recordings = recordings,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, config.recording, clock)
+                val repository = RecordingRepository(store, DemoRepository(store), config, clock)
                 repository += statuses.keys.map { demo(it) }
                 statuses.forEach { (capId, status) -> repository.finish(capId, status) }
-                val cache = if (archive) CacheService(repository, uploader, config, clock) else null
+                val cache = CacheService(repository, uploader.takeIf { archive }, config, clock)
                 val service = HttpService(repository, jobs, cache, config)
                 testApplication {
                     application { service.module(this) }

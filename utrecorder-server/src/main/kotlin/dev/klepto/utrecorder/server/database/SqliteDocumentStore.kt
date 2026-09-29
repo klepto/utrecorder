@@ -24,15 +24,10 @@ class SqliteDocumentStore private constructor(
     override fun <T : Any> collection(
         name: String,
         serializer: KSerializer<T>,
-        cached: Boolean,
         key: (T) -> String,
     ): DocumentCollection<T> {
         require(name.matches(NAME)) { "Invalid collection name: $name" }
-        val collection = SqliteCollection(connection, lock, name, serializer, key)
-        return when (cached) {
-            true -> CachedCollection(collection, key)
-            false -> collection
-        }
+        return SqliteCollection(connection, lock, name, serializer, key)
     }
 
     companion object {

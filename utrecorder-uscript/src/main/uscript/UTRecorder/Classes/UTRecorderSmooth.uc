@@ -9,10 +9,9 @@
 // Every frame it keeps the followed player's snapshots with the demo time each
 // was taken at, and places the player where a weighted straight-line fit
 // through the snapshots around one moment puts him. That moment runs a delay
-// behind the demo. A teleport or a respawn drops the delay to nothing and
-// shows the player where he landed; the delay then eases back. Towards the
-// end of the demo the delay eases to nothing, so the last frame shows the
-// player where the demo has him.
+// behind the demo. The delay starts at nothing and eases up to its full
+// length. A teleport or a respawn drops the delay to nothing and shows the
+// player where he landed; the delay then eases back.
 //
 // Nothing the demo delivers is changed: the pose written here stays on the
 // player only until the next demo frame overwrites it. While a smoother
@@ -98,10 +97,9 @@ var float   IRecBuf[32];
 var int     IRecN;
 var float   IRec, DPos, DRot;
 var bool    bDelaySet;
-// The delays in use. They move towards their target at a tenth of the demo's
-// pace.
+// The delays in use. They start at nothing and move towards their target at
+// a twentieth of the demo's pace.
 var float   DCurP, DCurR;
-var bool    bDCur;
 var float   FAdv;            // this frame's demo advance
 
 var bool    bNativeOff;      // udemo's recorder smoothing is off because of us
@@ -324,8 +322,9 @@ function ForgetWrites()
 	bWroteEye = false;
 }
 
-// Forgets everything that describes the demo's timeline. What was measured
-// about the demo itself - its frame interval and the delays - is kept.
+// Forgets everything that describes the demo's timeline, and drops the delays
+// in use to nothing. What was measured about the demo itself - its frame
+// interval and the delays it decides - is kept.
 function ResetHistory()
 {
 	ForgetWrites();
@@ -343,6 +342,8 @@ function ResetHistory()
 	SegC = 0;
 	RSegN = 0;
 	bHaveCut = false;
+	DCurP = 0.0;
+	DCurR = 0.0;
 	bPrimed = false;
 	bHaveTau = false;
 	ClockAcc = 0.0;
@@ -584,7 +585,7 @@ function MeasureInterval(float DT, int NFr)
 		IRecBuf[j + 1] = Tmp;
 	}
 	IRec = (IRecBuf[15] + IRecBuf[16]) * 0.5;
-	DPos = FClamp(0.01 * int((4.0 * IRec + 0.015) * 100.0 + 0.5), 0.04, 0.3);
+	DPos = FClamp(0.01 * int((4.0 * IRec + 0.015) * 100.0 + 0.5), 0.08, 0.3);
 	DRot = FClamp(0.005 * int((2.0 * IRec + 0.008) * 200.0 + 0.5), 0.015, 0.08);
 	bDelaySet = true;
 	Log("UTRecorder: demo frame interval" @ IRec @ "s, movement shown" @ DPos @ "s behind, rotation" @ DRot @ "s", 'UTRecorder');
@@ -594,7 +595,7 @@ function float DelayPos()
 {
 	if (bDelaySet)
 		return DPos;
-	return 0.05;
+	return 0.08;
 }
 
 function float DelayRot()
@@ -609,19 +610,6 @@ function float Interval()
 	if (bDelaySet)
 		return IRec;
 	return 0.008;
-}
-
-// The demo seconds left until the demo's last frame, as far as the measured
-// frame interval tells. Large while the interval or the frame count is not
-// known.
-function float Remaining()
-{
-	local int Total;
-
-	Total = Spec.Driver.GetTotalFrames();
-	if (!bDelaySet || Total <= 0)
-		return 1000.0;
-	return FMax(float(Total - 1 - LastFrame), 0.0) * IRec;
 }
 
 // Reads this frame's values of the player, and which of them the demo
@@ -669,7 +657,7 @@ function ReadFrameValues()
 // frames on a straight line from there.
 function TakeSamples(float St, int NFr)
 {
-	local bool bAir, bVFresh, bBFresh, bLocNew, bEyeNew, bHadLoc, bSplit;
+	local bool bAir, bVFresh, bBFresh, bLocNew, bEyeNew, bHadLoc, bSplit, bCut;
 	local float Dist, DT, Hold, DZ, DE, PrevT, OldEye, F, OldT, VE;
 	local float OVY, OVP, OBY, OBP;
 	local int DVY, DVP, DBY, DBP, NVP, NVY, NBP, NBY, k, N;
@@ -739,6 +727,7 @@ function TakeSamples(float St, int NFr)
 				SegC++;
 				RSegN++;
 				bSplit = true;
+				bCut = true;
 				bHaveCut = true;
 				CutT = St;
 			}
@@ -827,7 +816,7 @@ function TakeSamples(float St, int NFr)
 		NBP = FBody.Pitch & 65535;
 		NBY = FBody.Yaw & 65535;
 	}
-	if (NVP != RawVP || NVY != RawVY || NBP != RawBP || NBY != RawBY)
+	if (NVP != RawVP || NVY != RawVY || NBP != RawBP || NBY != RawBY || bCut)
 	{
 		if (Abs(UVY) > 1048576.0 || Abs(UBY) > 1048576.0)
 			Rebase();
@@ -848,11 +837,13 @@ function TakeSamples(float St, int NFr)
 		RawVY = NVY;
 		RawBP = NBP;
 		RawBY = NBY;
-		// faster than any hand turns - 5000 degrees a second - is a cut: a
-		// respawn or a teleport facing a new way
-		if (FMax(Abs(DVY), Abs(DVP)) > FMax(8192.0, 910222.0 * DT))
+		// A teleport or a respawn has already started a new piece above, and
+		// nothing is joined across it. Faster than any hand turns - 5000
+		// degrees a second - is a cut too: a respawn or a teleport facing a new
+		// way.
+		if (!bCut && FMax(Abs(DVY), Abs(DVP)) > FMax(8192.0, 910222.0 * DT))
 			RSegN++;
-		else if (PrevT >= LastRT && St - PrevT > 0.0005)
+		else if (!bCut && PrevT >= LastRT && St - PrevT > 0.0005)
 		{
 			if (PrevT > LastRT + 0.0005)
 				PushR(PrevT, OVY, OVP, OBY, OBP);
@@ -1571,23 +1562,32 @@ function bool EvalRot(float Tau, float Hb, float Hf, out float OVY, out float OV
 
 // Drops the delays to nothing while the moment shown is before the latest
 // teleport or respawn, so the player is shown where he landed. The delays
-// then ease back at a tenth of the demo's pace.
-function SnapToCut(float Now)
+// then ease back at a twentieth of the demo's pace. A clock short of the cut
+// is moved on to it.
+function SnapToCut()
 {
-	if (!bHaveCut || Now - DCurP >= CutT)
+	local float Now;
+
+	if (!bHaveCut)
 		return;
-	DCurP = FMax(Now - CutT, 0.0);
+	bHaveCut = false;
+	Now = ClockAcc + Off;
+	if (Now < CutT)
+	{
+		Off += CutT - Now;
+		Now = CutT;
+	}
+	if (Now - DCurP >= CutT)
+		return;
+	DCurP = Now - CutT;
 	DCurR = FMin(DCurR, DCurP);
-	// the clock may not have reached the cut yet: checked again next frame
-	if (Now >= CutT)
-		bHaveCut = false;
 }
 
 // Places the player at the moments shown: position, eye height and rotation,
 // with the view held level.
 function Place()
 {
-	local float DP, DR, IE, Hf, Hb, Hfr, Hbr, NewestP, NewestR, TP, TR, OE, Now, Target;
+	local float DP, DR, IE, Hf, Hb, Hfr, Hbr, NewestP, NewestR, TP, TR, OE, Now;
 	local float OVY, OVP, OBY, OBP;
 	local vector L;
 	local rotator R;
@@ -1596,19 +1596,10 @@ function Place()
 	bFLand = false;
 	if (PCount == 0 || RCount == 0)
 		return;
-	// towards the end of the demo the delay eases to nothing at a tenth of the
-	// demo's pace, so it is gone at the last frame
-	Target = FMin(DelayPos(), 0.1 * Remaining());
-	if (!bDCur)
-	{
-		DCurP = Target;
-		DCurR = FMin(DelayRot(), DCurP);
-		bDCur = true;
-	}
-	DCurP += FClamp(Target - DCurP, -0.1 * FAdv, 0.1 * FAdv);
-	DCurR += FClamp(FMin(DelayRot(), DCurP) - DCurR, -0.1 * FAdv, 0.1 * FAdv);
+	DCurP += FClamp(DelayPos() - DCurP, -0.05 * FAdv, 0.05 * FAdv);
+	DCurR += FClamp(FMin(DelayRot(), DCurP) - DCurR, -0.05 * FAdv, 0.05 * FAdv);
+	SnapToCut();
 	Now = ClockAcc + Off;
-	SnapToCut(Now);
 	DP = DCurP;
 	DR = DCurR;
 	IE = FMax(Interval(), 0.001);

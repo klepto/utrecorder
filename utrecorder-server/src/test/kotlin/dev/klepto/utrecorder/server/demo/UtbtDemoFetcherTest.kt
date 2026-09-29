@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.server.ServerConfig
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
@@ -18,7 +19,7 @@ import kotlin.time.Instant
 
 class UtbtDemoFetcherTest :
     FunSpec({
-        val config = UtbtConfig(ConfigReader.EMPTY)
+        val config = ServerConfig(ConfigReader.EMPTY)
 
         fun id(minute: Int): String = "00000000-0000-4000-8000-0000000000%02d".format(minute)
 
@@ -63,6 +64,7 @@ class UtbtDemoFetcherTest :
                     "id":"0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",
                     "map":"CTF-BT-Maverick",
                     "alias":"klepto",
+                    "user":"424992398657978370",
                     "cap_time_seconds":12.34,
                     "added":"2026-09-26 12:19:59.891708",
                     "verified":true
@@ -75,6 +77,7 @@ class UtbtDemoFetcherTest :
                     capId = "0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",
                     map = "CTF-BT-Maverick",
                     player = "klepto",
+                    userId = "424992398657978370",
                     capTime = 12340.milliseconds,
                     timestamp = Instant.parse("2026-09-26T12:19:59.891708Z"),
                     demoUrl = "http://api.utbt.net/demos/0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",

@@ -92,8 +92,8 @@ class SqliteCollection<T : Any>(
             }
     }
 
-    companion object {
-        private val JSON =
+    private companion object {
+        val JSON =
             Json {
                 ignoreUnknownKeys = true
                 encodeDefaults = true
