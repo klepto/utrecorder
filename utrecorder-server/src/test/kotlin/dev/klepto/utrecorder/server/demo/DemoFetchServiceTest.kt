@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.ConfigReader
-import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.recording.RecordingConfig
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import io.kotest.assertions.nondeterministic.eventually
@@ -67,7 +67,7 @@ class DemoFetchServiceTest :
             fetcher: DemoFetcher,
             block: suspend (RecordingRepository) -> Unit,
         ) {
-            DocumentStore.open(createTempDirectory("utrecorder-demo-fetch-service-test").resolve("server.db")) { store ->
+            SqliteDocumentStore.open(createTempDirectory("utrecorder-demo-fetch-service-test").resolve("server.db")) { store ->
                 val repository = RecordingRepository(store, RecordingConfig(ConfigReader.EMPTY))
                 coroutineScope {
                     val job = launch { DemoFetchService(fetcher, repository, config).start() }

@@ -6,7 +6,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
 import dev.klepto.utrecorder.server.ServerConfig
-import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
@@ -99,7 +99,7 @@ class RecordingServiceTest :
             service: (RecordingRepository) -> RecordingService,
             block: suspend (RecordingRepository) -> Unit,
         ) {
-            DocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
+            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val repository = RecordingRepository(store, RecordingConfig(ConfigReader.EMPTY), clock)
                 repository += demos
                 coroutineScope {
@@ -309,7 +309,7 @@ class RecordingServiceTest :
 
         test("rejects an empty list of recorders") {
             shouldThrow<IllegalArgumentException> {
-                DocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
+                SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                     RecordingService(RecordingRepository(store, RecordingConfig(ConfigReader.EMPTY), clock), emptyList(), config(root))
                 }
             }

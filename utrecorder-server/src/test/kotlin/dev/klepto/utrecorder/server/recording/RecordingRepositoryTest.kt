@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.common.ConfigReader
-import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
@@ -48,7 +48,7 @@ class RecordingRepositoryTest :
         suspend fun <R> repository(
             file: Path = file(),
             block: suspend (RecordingRepository) -> R,
-        ): R = DocumentStore.open(file) { block(RecordingRepository(it, RecordingConfig(ConfigReader.EMPTY), clock)) }
+        ): R = SqliteDocumentStore.open(file) { block(RecordingRepository(it, RecordingConfig(ConfigReader.EMPTY), clock)) }
 
         test("stores a pending recording of an added demo and skips a demo already stored") {
             val entry =
