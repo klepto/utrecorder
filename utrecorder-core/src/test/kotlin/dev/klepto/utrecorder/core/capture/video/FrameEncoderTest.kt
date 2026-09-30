@@ -30,6 +30,7 @@ class FrameEncoderTest :
             bitrate: String = "4800k",
             svtav1Params: String = "tune=0",
             arguments: String = "",
+            motionBlur: Boolean = true,
         ): VideoCaptureConfig =
             VideoCaptureConfig(
                 ConfigReader.EMPTY,
@@ -45,6 +46,7 @@ class FrameEncoderTest :
                 height = 540,
                 queue = 32,
                 arguments = arguments,
+                motionBlur = motionBlur,
             )
 
         val defaultConfig = videoConfig()
@@ -74,7 +76,7 @@ class FrameEncoderTest :
 
         test("captureArguments reads the frames from a loopback listener with the listen timeout and a one-frame receive buffer") {
             val read = arguments()
-            read.size shouldBe 33
+            read.size shouldBe 41
             read[11] shouldBe "-i"
             read[12] shouldBe
                 "tcp://127.0.0.1:12000?listen=1&listen_timeout=5000" +
@@ -96,10 +98,12 @@ class FrameEncoderTest :
             read[10] shouldBe "32"
         }
 
-        test("captureArguments flips the frames and encodes them with the codec, preset, rate factor, bitrate ceiling, params and GOP") {
+        test("captureArguments flips the frames, blends them for a light motion blur and converts them to BT.709 limited-range yuv420p10le") {
             val read = arguments()
             read[13] shouldBe "-vf"
-            read[14] shouldBe "vflip"
+            read[14] shouldBe
+                "vflip,tmix=frames=2:weights='1 1'," +
+                "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
             read[15] shouldBe "-map"
             read[16] shouldBe "0:v:0"
             read[17] shouldBe "-c:v"
@@ -116,12 +120,27 @@ class FrameEncoderTest :
             read[28] shouldBe "300"
         }
 
-        test("captureArguments ends with the yuv420p10le pixel format, no audio and the target") {
+        test("captureArguments tags the output BT.709 limited range and ends with the yuv420p10le pixel format, no audio and the target") {
             val read = arguments()
-            read[29] shouldBe "-pix_fmt"
-            read[30] shouldBe "yuv420p10le"
-            read[31] shouldBe "-an"
-            read[32] shouldBe target.absolutePathString()
+            read[29] shouldBe "-colorspace"
+            read[30] shouldBe "bt709"
+            read[31] shouldBe "-color_primaries"
+            read[32] shouldBe "bt709"
+            read[33] shouldBe "-color_trc"
+            read[34] shouldBe "bt709"
+            read[35] shouldBe "-color_range"
+            read[36] shouldBe "tv"
+            read[37] shouldBe "-pix_fmt"
+            read[38] shouldBe "yuv420p10le"
+            read[39] shouldBe "-an"
+            read[40] shouldBe target.absolutePathString()
+        }
+
+        test("captureArguments leaves out the frame blend when motion blur is off") {
+            val read = arguments(videoConfig(motionBlur = false))
+            read[14] shouldBe
+                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
+            read shouldNotContainAnyOf listOf("tmix=frames=2:weights='1 1'")
         }
 
         test("captureArguments passes the bitrate as the average when the rate factor is blank") {

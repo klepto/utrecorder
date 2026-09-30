@@ -15,6 +15,7 @@ import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Paths
 import java.security.NoSuchAlgorithmException
@@ -111,6 +112,29 @@ class PathsTest :
                 shouldThrow<FileAlreadyExistsException> { file("copy-kept-source", "new").copy(target, overwrite = false) }
 
                 target.readText() shouldBe "old"
+            }
+        }
+
+        context("link") {
+            test("links the target to the file of the source, creating its parent directories and returning it") {
+                val source = file("link-source", sample)
+                val target = root / "link-missing-parent" / "target"
+
+                val linked = source.link(target)
+
+                linked shouldBe target
+                Files.isSameFile(source, target) shouldBe true
+                source.writeText("changed")
+                target.readText() shouldBe "changed"
+            }
+
+            test("throws with the message of failureMessage when the source holds nothing") {
+                val exception =
+                    shouldThrow<IllegalStateException> {
+                        (root / "link-absent").link(root / "link-absent-target") { "custom failure" }
+                    }
+
+                exception.message shouldBe "custom failure"
             }
         }
 

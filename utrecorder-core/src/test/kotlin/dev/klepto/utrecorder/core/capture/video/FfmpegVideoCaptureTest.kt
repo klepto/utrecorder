@@ -24,6 +24,7 @@ import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 class FfmpegVideoCaptureTest :
     FunSpec({
@@ -186,5 +187,12 @@ class FfmpegVideoCaptureTest :
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30, smoothRecorder = false)).execScript(description) shouldBe
                 listOf("DemoFrames 30.000000", "HideMessages")
+        }
+
+        test("execScript waits for the timer reset at the demo time the run starts at") {
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, runStart = 10.120962.seconds)
+
+            capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 60, smoothRecorder = false)).execScript(description) shouldBe
+                listOf("DemoFrames 60.000000", "TimerReset 10.120962", "HideMessages")
         }
     })

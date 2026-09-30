@@ -8,12 +8,14 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * Settings of one run that plays a demo through the recorder console.
  *
- * Use [of] to create one from a demo file name, a demo duration, the packages the demo loads and its frame interval.
+ * Use [of] to create one from a demo file name, a demo duration, the packages the demo loads, its frame interval and
+ * the demo time its run starts at.
  *
  * @property demoFileName The file name of the demo in the installation's `System` directory, without extension.
  * @property demoDuration How long the demo runs.
  * @property packages The packages the demo loads.
  * @property demoFrameInterval The median demo time between two demo frames, or `null` if the demo does not show one.
+ * @property runStart The demo time the run the demo records starts at, or `null` if the demo does not show one.
  * @property execLine The exec script line playing the demo.
  * @property console The console class the run sets `[Engine.Engine] Console` to.
  * @property exitDelay The `ExitDelay` the run writes to `UTRecorder.ini`.
@@ -26,6 +28,7 @@ data class DemoPlaybackConfig(
     val demoDuration: Duration,
     val packages: List<UtPackage>,
     val demoFrameInterval: Duration?,
+    val runStart: Duration?,
     val execLine: String,
     val console: String,
     val exitDelay: Duration,
@@ -70,19 +73,21 @@ data class DemoPlaybackConfig(
 
         /**
          * Returns the settings of a run that plays the demo file [demoFileName], which is [demoDuration] long, loads
-         * [packages] and holds demo frames [demoFrameInterval] apart.
+         * [packages], holds demo frames [demoFrameInterval] apart and records a run that starts at [runStart].
          */
         fun of(
             demoFileName: String,
             demoDuration: Duration,
             packages: List<UtPackage> = emptyList(),
             demoFrameInterval: Duration? = null,
+            runStart: Duration? = null,
         ): DemoPlaybackConfig =
             DemoPlaybackConfig(
                 demoFileName = demoFileName,
                 demoDuration = demoDuration,
                 packages = packages,
                 demoFrameInterval = demoFrameInterval,
+                runStart = runStart,
                 execLine = "demoplay $demoFileName",
                 console = RECORDER_CONSOLE,
                 exitDelay = EXIT_DELAY,

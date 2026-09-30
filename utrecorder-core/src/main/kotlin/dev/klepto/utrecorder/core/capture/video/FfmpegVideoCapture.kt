@@ -17,6 +17,8 @@ import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtProcess
 import dev.klepto.utrecorder.ut99.UtProcessResult
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.nio.file.Path
 import java.util.Locale
 import kotlin.io.path.absolutePathString
@@ -28,12 +30,12 @@ import kotlin.time.DurationUnit
  * a time, sending every rendered frame to a [FrameEncoder] on the loopback.
  *
  * A capture stages the demo through a [DemoPlayback], extracts the hooks into a workspace of its own, and plays the
- * demo windowed and without sound. The run is killed once [VideoCaptureConfig.timeout] has passed, counted over the
- * whole run. The frames are encoded into a video file in a workspace of the capture's own. The progress of a capture
- * is the number of frames encoded out of the number the demo's duration makes at [VideoCaptureConfig.fps]. A run that logs no marks
+ * demo windowed and without sound. The run is killed once ffmpeg has encoded no new frame for
+ * [VideoCaptureConfig.idleTimeout], however long the whole run takes. The frames are encoded into a video file in a
+ * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number the demo's duration makes at [VideoCaptureConfig.fps]. A run that logs no marks
  * fails with an [IllegalStateException] naming the missing mark and the exit code.
  *
- * @property config The video capture configuration, carrying the frame size, the fps, the timeout and the renderer
+ * @property config The video capture configuration, carrying the frame size, the fps, the idle timeout and the renderer
  * tuning.
  * @property installation The installation the capture runs in.
  * @property directories The directories the capture's workspace is kept under.
@@ -57,34 +59,46 @@ class FfmpegVideoCapture(
         workspace(VIDEO_CAPTURE, config = directories) { output ->
             val target = output[VIDEO_NAME]
             playback.play(demo, STAGED_DEMO_PREFIX, VIDEO_CAPTURE) { description, system ->
-                val onFrames = frameProgress(description, onProgress)
+                val frames = MutableStateFlow(0L)
+                val onFrames = frameProgress(description, frames, onProgress)
                 val encoder = FrameEncoder(config, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
-                val marks = DemoPlaybackMarks.parse(play(description, extractHooks(system), encoder))
+                val marks = DemoPlaybackMarks.parse(play(description, extractHooks(system), encoder, frames))
                 track(target, marks, smoothing(description))
             }
         }
 
     /**
-     * Returns the listener that reports the frames encoded out of the frames [description]'s demo makes to
-     * [onProgress].
+     * Returns the listener that publishes the frames encoded to [encoded], and reports them out of the frames
+     * [description]'s demo makes to [onProgress].
      */
     private fun frameProgress(
         description: DemoPlaybackConfig,
+        encoded: MutableStateFlow<Long>,
         onProgress: ProgressListener<Unit>,
     ): (MediaProgress) -> Unit {
         val frames = description.demoDuration.toDouble(DurationUnit.SECONDS) * config.fps
-        return { onProgress(Progress(it.frames / frames)) }
+        return {
+            encoded.value = it.frames
+            onProgress(Progress(it.frames / frames))
+        }
     }
 
     /**
-     * Returns the result of the run of [description] with [hooks], launched inside [encoder]'s block.
+     * Returns the result of the run of [description] with [hooks], launched inside [encoder]'s block. The run is
+     * killed once [frames], the frames encoded so far, has not grown for [VideoCaptureConfig.idleTimeout].
+     *
+     * @throws java.util.concurrent.TimeoutException if no new frame is encoded for [VideoCaptureConfig.idleTimeout].
      */
     private suspend fun play(
         description: DemoPlaybackConfig,
         hooks: List<Path>,
         encoder: FrameEncoder,
+        frames: StateFlow<Long>,
     ): UtProcessResult {
-        val (result, _) = encoder.encode { process(description, port, hooks).launch(config.timeout) }
+        val (result, _) =
+            encoder.encode {
+                withProgressTimeout(frames, config.idleTimeout) { process(description, port, hooks).launch() }
+            }
         return result
     }
 
@@ -188,12 +202,17 @@ class FfmpegVideoCapture(
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo: the
-     * console's trim command `DemoFrames <fps>`, `HideMessages`, which keeps chat and progress messages off the
-     * recorded HUD, and the command of the recorder's [smoothing] when [VideoCaptureConfig.smoothRecorder] is on.
+     * console's trim command `DemoFrames <fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
+     * timer reset nearest the run start, `HideMessages`, which keeps chat and progress messages off the recorded HUD,
+     * and the command of the recorder's [smoothing] when [VideoCaptureConfig.smoothRecorder] is on. If the demo shows
+     * no run start, `TimerReset` is left out.
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
             this += "DemoFrames %.6f".format(Locale.ROOT, config.fps.toDouble())
+            description.runStart?.let {
+                this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
+            }
             this += "HideMessages"
             smoothing(description)?.let { this += it.command() }
         }

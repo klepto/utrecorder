@@ -23,8 +23,9 @@ class RecorderConfigTest :
                     "utrecorder.record.height" to "1080",
                     "utrecorder.record.frame_queue" to "16",
                     "utrecorder.record.frame_port" to "12345",
-                    "utrecorder.record.frame_timeout" to "PT20M",
+                    "utrecorder.record.frame_idle_timeout" to "PT20M",
                     "utrecorder.record.arguments" to "-tune zerolatency",
+                    "utrecorder.record.motion_blur" to "false",
                     "utrecorder.record.audio_bitrate" to "256k",
                     "utrecorder.record.audio_filter" to "highpass=f=80",
                     "utrecorder.record.audio_offset" to "0.25",
@@ -53,8 +54,9 @@ class RecorderConfigTest :
                 height shouldBe 1080
                 queue shouldBe 16
                 port shouldBe 12345
-                timeout shouldBe 20.minutes
+                idleTimeout shouldBe 20.minutes
                 arguments shouldBe "-tune zerolatency"
+                motionBlur shouldBe false
             }
             with(config.video.linuxMesa) {
                 threads shouldBe 4
@@ -80,16 +82,17 @@ class RecorderConfigTest :
                 fps shouldBe 60
                 codec shouldBe "libsvtav1"
                 preset shouldBe "4"
-                crf shouldBe "28"
-                bitrate shouldBe "4800k"
-                svtav1Params shouldBe "tune=0"
+                crf shouldBe "32"
+                bitrate shouldBe "12000k"
+                svtav1Params shouldBe "tune=0:color-primaries=1:transfer-characteristics=1:matrix-coefficients=1:color-range=0"
                 gop shouldBe 300
                 width shouldBe 1280
                 height shouldBe 720
                 queue shouldBe 32
                 port shouldBe 0
-                timeout shouldBe 1800.seconds
+                idleTimeout shouldBe 300.seconds
                 arguments shouldBe ""
+                motionBlur shouldBe true
             }
             with(config.video.linuxMesa) {
                 threads shouldBe 0

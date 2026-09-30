@@ -7,6 +7,7 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.charset.Charset
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
@@ -72,6 +73,23 @@ suspend fun Path.copy(
     withContext(Dispatchers.IO) {
         check(exists(), failureMessage)
         copyTo(target.createParentDirectories(), overwrite)
+    }
+
+/**
+ * Creates [target] as a hard link to the file at this path, creating the parent directories of [target], and returns
+ * [target].
+ *
+ * @throws IllegalStateException with the message that [failureMessage] returns, if this path holds nothing.
+ * @throws java.nio.file.FileAlreadyExistsException if [target] exists.
+ * @throws IOException if the filesystem cannot link [target] to this path, such as across filesystems.
+ */
+suspend fun Path.link(
+    target: Path,
+    failureMessage: () -> String = { "No file to link at $this" },
+): Path =
+    withContext(Dispatchers.IO) {
+        check(exists(), failureMessage)
+        Files.createLink(target.createParentDirectories(), this@link)
     }
 
 /**

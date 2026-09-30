@@ -15,6 +15,10 @@
 //   RewindStart       seek back to the demo start once ticks settle,
 //   DemoFrames <fps>  log a spawn mark and reset the demo speed to 1 once the
 //                     followed player spawns,
+//   TimerReset <demo time>
+//                     make DemoFrames log the spawn mark instead once the demo
+//                     reaches the demo time the Bunny Track timer of the run
+//                     resets at,
 //   SmoothRecorder <interval> <movement> <rotation>
 //                     smooth the followed player's movement and view with a
 //                     UTRecorderSmooth, for a demo whose frames are
@@ -68,6 +72,7 @@ var bool bSignalledSpawn; // the spawn mark has been logged
 var bool bSeenPlayer;     // a followed player has existed at some point
 var bool bSeenDead;       // the first followed player seen was dead
 var float SincePlayback;  // seconds of playback the spawn check has seen
+var float RunStart;       // demo time TimerReset set, 0 when unknown
 var float LastStreamTime; // demo time of the last tick that had a driver
 var int RenderedFrames;   // ticks counted while bAutoExit is on
 var bool bMarkedStart;    // the start mark has been logged
@@ -309,17 +314,40 @@ function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
 	return True;
 }
 
-// Keeps a UTRecorderSmooth spawned in the demo level from the next tick on,
-// for a demo whose frames are Interval seconds apart, showing the followed
-// player's movement Movement and his view Rotation seconds behind the demo.
-exec function SmoothRecorder(float Interval, float Movement, float Rotation)
+// Keeps a UTRecorderSmooth spawned in the demo level from the next tick on.
+// Args holds three space-separated numbers: the seconds between the demo's
+// frames, and how many seconds behind the demo the followed player's
+// movement and his view are shown.
+exec function SmoothRecorder(string Args)
 {
 	bSmoothRecorder = True;
-	SmoothInterval = Interval;
-	SmoothMovement = Movement;
-	SmoothRotation = Rotation;
-	Log("UTRecorder: smoothing the followed player, demo frame interval" @ Interval @ "s, movement shown" @ Movement
-		@ "s behind, rotation" @ Rotation @ "s", 'UTRecorder');
+	SmoothInterval = float(NextArgument(Args));
+	SmoothMovement = float(NextArgument(Args));
+	SmoothRotation = float(NextArgument(Args));
+	Log("UTRecorder: smoothing the followed player, demo frame interval" @ SmoothInterval @ "s, movement shown"
+		@ SmoothMovement @ "s behind, rotation" @ SmoothRotation @ "s", 'UTRecorder');
+}
+
+// Returns the first space-separated word of Args and removes it from Args.
+function string NextArgument(out string Args)
+{
+	local int Space;
+	local string Word;
+
+	while (Left(Args, 1) == " ")
+		Args = Mid(Args, 1);
+
+	Space = InStr(Args, " ");
+	if (Space < 0)
+	{
+		Word = Args;
+		Args = "";
+		return Word;
+	}
+
+	Word = Left(Args, Space);
+	Args = Mid(Args, Space + 1);
+	return Word;
 }
 
 // Spawns a UTRecorderSmooth in the demo level unless one is still there.
@@ -357,9 +385,18 @@ exec function DemoFrames(float Rate)
 	Log("UTRecorder: locking playback to" @ Rate @ "rendered frames per demo second", 'UTRecorder');
 }
 
-// Signals the spawn once the followed player is alive: at once if the first
-// player seen is alive, else when a dead one reaches SpawnHealth. Signals it
-// anyway when no player is followed or SpawnTimeout runs out.
+// Sets RunStart to Start, which makes the spawn check wait for the demo to
+// reach the timer reset at that demo time.
+exec function TimerReset(float Start)
+{
+	RunStart = Start;
+	Log("UTRecorder: waiting for the timer reset at demo time" @ Start, 'UTRecorder');
+}
+
+// Signals the spawn once the demo reaches RunStart when TimerReset set it.
+// Otherwise signals it once the followed player is alive: at once if the
+// first player seen is alive, else when a dead one reaches SpawnHealth.
+// Signals it anyway when no player is followed or SpawnTimeout runs out.
 function CheckSpawn(float Delta)
 {
 	local DemoPlaybackSpec Spec;
@@ -374,6 +411,13 @@ function CheckSpawn(float Delta)
 
 	SincePlayback += Delta;
 	Linked = Spec.PlayerLinked;
+
+	if (RunStart > 0.0)
+	{
+		if (Spec.Driver.GetCurrentTime() >= RunStart)
+			SignalSpawn("timer reset at demo time" @ Spec.Driver.GetCurrentTime());
+		return;
+	}
 
 	if (Linked == None)
 	{

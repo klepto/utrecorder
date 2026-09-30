@@ -26,10 +26,16 @@ class UtRecorderTest :
 
         afterSpec { home.toFile().deleteRecursively() }
 
-        test("outputName drops the host and the first path segment, then keeps only letters, digits and dots, or falls back to demo") {
+        test(
+            "outputName drops the host and the first path segment, then keeps only letters, digits, dots, " +
+                "hyphens and underscores, or falls back to demo",
+        ) {
             UtRecorder.outputName("http://api.utbt.net/demos/CAP fades 12.dem?id=1") shouldBe "capfades12.dem"
             UtRecorder.outputName("http://api.utbt.net/a/b/x.dem") shouldBe "bx.dem"
             UtRecorder.outputName("http://api.utbt.net") shouldBe "demo"
+            UtRecorder.outputName(
+                "http://api.utbt.net/demos/90729d6a-ac84-45f6-bdc0-beacad976e55",
+            ) shouldBe "90729d6a-ac84-45f6-bdc0-beacad976e55"
         }
 
         test("progressLine prints the stage and the whole percent done") {

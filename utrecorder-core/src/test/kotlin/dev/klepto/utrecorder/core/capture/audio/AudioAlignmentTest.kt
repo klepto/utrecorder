@@ -14,19 +14,19 @@ class AudioAlignmentTest :
                 demoEnd = 300.75,
             )
 
-        test("place ends the audio on the end of the video when both captures end within the slack of each other") {
+        test("place ends the audio on the end of the video when both captures end at the same demo time") {
             val placement =
                 AudioAlignment.place(
                     track = track,
                     videoLength = 8.0,
-                    videoCaptureEnd = 300.755,
+                    videoCaptureEnd = 300.75,
                     audioOffset = 0.0,
                 )
 
             placement shouldBe AudioAlignment.Placement(offset = 4.0, length = 8.0)
         }
 
-        test("place keeps the track's own placement when the captures end farther apart than the slack") {
+        test("place moves the end of the audio by the demo time between the ends of the two captures") {
             val placement =
                 AudioAlignment.place(
                     track = track,
@@ -35,7 +35,7 @@ class AudioAlignmentTest :
                     audioOffset = 0.0,
                 )
 
-            placement shouldBe AudioAlignment.Placement(offset = 2.0, length = 10.0)
+            placement shouldBe AudioAlignment.Placement(offset = 4.25, length = 8.0)
         }
 
         test("place keeps the track's own placement when the video capture end is not known") {
@@ -79,7 +79,7 @@ class AudioAlignmentTest :
                 AudioAlignment.place(
                     track = track,
                     videoLength = 8.0,
-                    videoCaptureEnd = 300.755,
+                    videoCaptureEnd = 300.75,
                     audioOffset = 0.5,
                 )
 

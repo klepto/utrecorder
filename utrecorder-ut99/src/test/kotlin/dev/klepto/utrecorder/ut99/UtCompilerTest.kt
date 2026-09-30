@@ -25,7 +25,8 @@ import kotlin.io.path.writeText
  *
  * The fake UCC is a shell script on Linux and a C# program built with the .NET Framework compiler on Windows. It writes
  * the package named by `-packages=`, writes the file named by the header of a `.uz` archive, and fails when its
- * directory holds `ucc.fail`.
+ * directory holds `ucc.fail`. While its directory holds `ucc.abort`, a decompression takes one from the count the file
+ * holds and exits with code 134 instead, as a UCC aborted by an assertion does.
  */
 class UtCompilerTest :
     FunSpec({
@@ -49,6 +50,14 @@ class UtCompilerTest :
                 exit 3
             fi
             if [ "${'$'}1" = "decompress" ]; then
+                if [ -f "${'$'}DIRECTORY/ucc.abort" ]; then
+                    ABORTS=${'$'}(cat "${'$'}DIRECTORY/ucc.abort")
+                    if [ "${'$'}ABORTS" -gt 0 ]; then
+                        echo ${'$'}((ABORTS - 1)) > "${'$'}DIRECTORY/ucc.abort"
+                        echo "FAKE UCC: simulated abort"
+                        exit 134
+                    fi
+                fi
                 LENGTH=${'$'}(od -An -tu1 -j4 -N1 "${'$'}2" | tr -d ' ')
                 NAME=${'$'}(dd if="${'$'}2" bs=1 skip=5 count=${'$'}((LENGTH - 1)) 2>/dev/null)
                 touch "${'$'}DIRECTORY/${'$'}NAME"
@@ -81,6 +90,18 @@ class UtCompilerTest :
 
                     if (arguments.Length > 1 && arguments[0] == "decompress")
                     {
+                        string abortPath = Path.Combine(directory, "ucc.abort");
+                        if (File.Exists(abortPath))
+                        {
+                            int aborts = int.Parse(File.ReadAllText(abortPath).Trim());
+                            if (aborts > 0)
+                            {
+                                File.WriteAllText(abortPath, (aborts - 1).ToString());
+                                Console.WriteLine("FAKE UCC: simulated abort");
+                                return 134;
+                            }
+                        }
+
                         byte[] archive = File.ReadAllBytes(arguments[1]);
                         string name = System.Text.Encoding.ASCII.GetString(archive, 5, archive[4] - 1);
                         File.WriteAllText(Path.Combine(directory, name), "");
@@ -134,6 +155,7 @@ class UtCompilerTest :
             name: String,
             compiler: Boolean = true,
             fails: Boolean = false,
+            aborts: Int = 0,
         ): UtInstallation {
             val systemDirectory = root / name / "System"
             systemDirectory.createDirectories()
@@ -145,6 +167,9 @@ class UtCompilerTest :
             }
             if (fails) {
                 (systemDirectory / "ucc.fail").writeText("")
+            }
+            if (aborts > 0) {
+                (systemDirectory / "ucc.abort").writeText("$aborts")
             }
             return UtInstallation(
                 root / name,
@@ -240,6 +265,29 @@ class UtCompilerTest :
                 result shouldBe outputPath
                 outputPath.exists() shouldBe true
                 (root / "extract" / "System" / "Map.unr").exists() shouldBe false
+            }
+
+            test("runs the decompression again when UCC aborts, up to three runs") {
+                val compiler = installation("extract-abort", aborts = 2).compiler
+                val archive = root / "archives" / "Abort.unr.uz"
+                archive.parent.createDirectories()
+                archive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 10) + "Abort.unr".toByteArray() + byteArrayOf(0))
+                val outputPath = root / "out" / "Abort.unr"
+
+                compiler.extract(archive, outputPath) shouldBe outputPath
+
+                outputPath.exists() shouldBe true
+            }
+
+            test("throws when UCC aborts on every one of three runs") {
+                val compiler = installation("extract-aborts", aborts = 3).compiler
+                val archive = root / "archives" / "Aborts.unr.uz"
+                archive.parent.createDirectories()
+                archive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 11) + "Aborts.unr".toByteArray() + byteArrayOf(0))
+
+                val exception = shouldThrow<IllegalStateException> { compiler.extract(archive, root / "out" / "Aborts.unr") }
+
+                exception.message shouldContain "134"
             }
         }
     })

@@ -46,7 +46,14 @@ class DemoPlayback(
         block: suspend (DemoPlaybackConfig) -> T,
     ): T {
         val parsed = UtDemo.read(demo)
-        val description = DemoPlaybackConfig.of(prefix + IDS.next(), parsed.duration, parsed.packages, parsed.frameInterval)
+        val description =
+            DemoPlaybackConfig.of(
+                prefix + IDS.next(),
+                parsed.duration,
+                parsed.packages,
+                parsed.frameInterval,
+                parsed.cap?.runStart,
+            )
         val uscript = DemoPlaybackUscript(installation)
         val stagedDemo = installation.systemDirectory[description.demoFileName + ".dem"]
         try {

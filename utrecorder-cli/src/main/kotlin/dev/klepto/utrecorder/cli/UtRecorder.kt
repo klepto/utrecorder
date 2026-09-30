@@ -45,7 +45,8 @@ object UtRecorder {
      * Returns the name of the mp4 recorded from the demo that [url] names.
      *
      * The name is the file name of [url] without its query string, decoded, lowercased and stripped of every
-     * character other than a letter, a digit or a dot. If nothing is left, returns `demo` instead.
+     * character other than a letter, a digit, a dot, a hyphen or an underscore. If nothing is left, returns `demo`
+     * instead.
      */
     fun outputName(url: String): String =
         url
@@ -55,7 +56,7 @@ object UtRecorder {
             .substringAfter('/')
             .let { URLDecoder.decode(it, StandardCharsets.UTF_8) }
             .lowercase()
-            .filter { it.isLetter() || it.isDigit() || it == '.' }
+            .filter { it.isLetter() || it.isDigit() || it == '.' || it == '-' || it == '_' }
             .ifEmpty { FALLBACK_NAME }
 
     /**

@@ -73,7 +73,7 @@ class FrameEncoder(
             this += listOf("-framerate", config.fps.toString())
             this += listOf("-thread_queue_size", config.queue.toString())
             this += listOf("-i", streamUrl())
-            this += listOf("-vf", "vflip")
+            this += listOf("-vf", videoFilter())
             this += listOf("-map", "0:v:0")
             this += listOf("-c:v", config.codec)
             this += option("-preset", config.preset)
@@ -82,10 +82,22 @@ class FrameEncoder(
             this += option("-svtav1-params", config.svtav1Params)
             this += listOf("-g", config.gop.toString())
             this += recordArguments()
+            this += listOf("-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv")
             this += listOf("-pix_fmt", "yuv420p10le")
             this += "-an"
             this += target.absolutePathString()
         }
+
+    /**
+     * Returns the `-vf` filter chain: a vertical flip, a light frame blend when [VideoCaptureConfig.motionBlur] is on,
+     * and a BT.709 limited-range conversion to the encoder's 10-bit 4:2:0 pixel format with accurate chroma
+     * downsampling.
+     */
+    private fun videoFilter(): String {
+        val blend = if (config.motionBlur) "tmix=frames=2:weights='1 1'," else ""
+        return "vflip,$blend" +
+            "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
+    }
 
     /**
      * Returns the ffmpeg input URL that listens on [port], with a receive buffer the size of one 10-bit BGRA frame.

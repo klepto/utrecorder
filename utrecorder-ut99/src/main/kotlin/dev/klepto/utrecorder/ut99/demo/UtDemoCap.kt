@@ -18,4 +18,10 @@ data class UtDemoCap(
     val id: String?,
     val runTime: Duration?,
     val demoTime: Duration,
-)
+) {
+    /**
+     * The demo time the run starts at, [runTime] before [demoTime]. If [runTime] is `null`, it is `null` too.
+     */
+    val runStart: Duration?
+        get() = runTime?.let { demoTime - it }
+}

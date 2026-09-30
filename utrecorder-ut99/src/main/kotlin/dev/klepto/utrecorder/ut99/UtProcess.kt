@@ -6,6 +6,7 @@ import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.execute
 import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.link
 import dev.klepto.utrecorder.common.io.readLinesOrEmpty
 import dev.klepto.utrecorder.common.io.readTextOrEmpty
 import dev.klepto.utrecorder.common.io.workspace
@@ -292,14 +293,23 @@ class UtProcess(
     }
 
     /**
-     * Removes the lock file an earlier run may have left in the installation, and writes the executable copy of the
+     * Removes the lock file an earlier run may have left in the installation, and stages the executable copy of the
      * run.
+     *
+     * On Linux the copy is a hard link to the installation's executable. On Windows it is a copy of the file, made
+     * executable.
      */
     private suspend fun stageExecutable(files: UtProcessFiles) {
         val executable = installation.executablePath
+        val failureMessage = { "UT executable not found at $executable" }
         withContext(Dispatchers.IO) { systemDirectory[RUNNING_INI].deleteIfExists() }
-        executable.copy(files.executable) { "UT executable not found at $executable" }
-        withContext(Dispatchers.IO) { files.executable.toFile().setExecutable(true) }
+        when (installation.platform) {
+            UtPlatform.LINUX -> executable.link(files.executable, failureMessage)
+            UtPlatform.WINDOWS -> {
+                executable.copy(files.executable, failureMessage = failureMessage)
+                withContext(Dispatchers.IO) { files.executable.toFile().setExecutable(true) }
+            }
+        }
     }
 
     /**

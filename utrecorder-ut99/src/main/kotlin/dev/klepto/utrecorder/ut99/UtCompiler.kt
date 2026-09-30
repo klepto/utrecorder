@@ -71,7 +71,9 @@ class UtCompiler(
      * If [outputPath] is not provided, uses the directory that holds the archive and the archive name without its
      * `.uz` suffix instead.
      *
-     * @throws IllegalStateException if the compiler fails.
+     * A run the compiler aborts, exiting with [ABORT_EXIT_CODE], is run again, up to [DECOMPRESS_ATTEMPTS] runs.
+     *
+     * @throws IllegalStateException if the compiler fails, or aborts on every run.
      */
     suspend fun extract(
         uzPath: Path,
@@ -80,13 +82,28 @@ class UtCompiler(
         val fileName = uzPath.fileName.toString().removeSuffix(".uz")
         val targetPath = outputPath ?: uzPath.toAbsolutePath().parent[fileName]
 
-        run("decompress", uzPath.absolutePathString()).orThrow()
+        decompress(uzPath)
         val resultPath = directory[archivedName(uzPath)]
         withContext(Dispatchers.IO) { check(resultPath.exists()) { "UCC failed to extract $uzPath" } }
         if (resultPath != targetPath) {
             resultPath.move(targetPath)
         }
         return targetPath
+    }
+
+    /**
+     * Runs the compiler decompressing [uzPath], running it again while it aborts, up to [DECOMPRESS_ATTEMPTS] runs.
+     *
+     * @throws IllegalStateException if the compiler fails, or aborts on every run.
+     */
+    private suspend fun decompress(uzPath: Path) {
+        var attempt = 1
+        var result = run("decompress", uzPath.absolutePathString())
+        while (result.exitCode == ABORT_EXIT_CODE && attempt < DECOMPRESS_ATTEMPTS) {
+            attempt++
+            result = run("decompress", uzPath.absolutePathString())
+        }
+        result.orThrow()
     }
 
     /**
@@ -213,6 +230,16 @@ class UtCompiler(
          * The configuration key holding a package the compiler builds.
          */
         const val EDIT_PACKAGES = "EditPackages"
+
+        /**
+         * The exit code of a compiler aborted by `SIGABRT`, as a failed assertion aborts it.
+         */
+        const val ABORT_EXIT_CODE = 134
+
+        /**
+         * The number of runs a decompression gets while the compiler aborts.
+         */
+        const val DECOMPRESS_ATTEMPTS = 3
 
         private const val UZ_HEADER_BYTES = 1024
         private const val SIGN_BIT = 0x80
