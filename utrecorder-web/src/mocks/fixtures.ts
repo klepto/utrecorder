@@ -1,7 +1,7 @@
 import type { Demo, Job, Recording } from "../api/types";
 
 /** Returns a sample demo of the cap `capId`. */
-function demo(capId: string, map: string, player: string, capTime: string, timestamp: string): Demo {
+const demo = (capId: string, map: string, player: string, capTime: string, timestamp: string): Demo => {
   return {
     capId,
     map,
@@ -11,7 +11,7 @@ function demo(capId: string, map: string, player: string, capTime: string, times
     timestamp,
     demoUrl: `https://example.com/demos/${capId}.dem`,
   };
-}
+};
 
 /** Sample running recordings: one that has not reported a stage yet, and one on its second attempt. */
 export const jobs: Job[] = [
@@ -45,7 +45,7 @@ const players = ["Shadow", "Nyx", "Vex", "Kite", "Orin"];
 const statuses = ["Recorded", "Uploaded", "Archived"] as const;
 
 /** Returns the `index`-th sample recording, newest first, recorded `index` hours before the newest. */
-function recording(index: number): Recording {
+const recording = (index: number): Recording => {
   const capId = String(1098 - index);
   const recordedAt = new Date(Date.UTC(2026, 8, 28, 17, 30) - index * 3_600_000).toISOString();
   const status = statuses[index % statuses.length];
@@ -66,7 +66,7 @@ function recording(index: number): Recording {
     recordedAt,
     processingTime: `PT${90 + index}.5S`,
   };
-}
+};
 
 /**
  * Sample recordings, newest first as the server orders them: 23 recorded by the server, and one last that was not, so

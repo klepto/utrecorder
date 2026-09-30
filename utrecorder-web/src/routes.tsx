@@ -6,7 +6,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { RecordingsPage } from "./pages/RecordingsPage";
 
 /** The route table of the site, rendered inside whichever router the caller mounts. */
-export function AppRoutes() {
+export const AppRoutes = () => {
   return (
     <Routes>
       <Route element={<Shell />}>
@@ -17,4 +17,4 @@ export function AppRoutes() {
       </Route>
     </Routes>
   );
-}
+};

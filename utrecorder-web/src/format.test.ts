@@ -1,18 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { formatCapTime, formatDate, formatExactTime, formatRelativeTime, formatStage, parseDuration } from "./format";
+import { formatCapTime, formatDate, formatExactTime, formatRelativeTime, formatRemaining, formatStage } from "./format";
 
 describe("format", () => {
-  test("parseDuration reads hours, minutes and seconds", () => {
-    expect(parseDuration("PT1M2.345S")).toBeCloseTo(62.345);
-    expect(parseDuration("PT48.12S")).toBeCloseTo(48.12);
-    expect(parseDuration("PT1H2M3S")).toBe(3723);
-    expect(parseDuration("PT30S")).toBe(30);
-  });
-
-  test("parseDuration rejects a string that is not a duration", () => {
-    expect(() => parseDuration("1:02")).toThrow();
-  });
-
   test("formatCapTime truncates to two decimals", () => {
     expect(formatCapTime("PT1M2.345S")).toBe("1:02.34");
     expect(formatCapTime("PT59.999S")).toBe("0:59.99");
@@ -20,6 +9,10 @@ describe("format", () => {
     expect(formatCapTime("PT3M0.01S")).toBe("3:00.01");
     expect(formatCapTime("PT1M30S")).toBe("1:30.00");
     expect(formatCapTime("PT41.7S")).toBe("0:41.70");
+  });
+
+  test("formatCapTime rejects a string that is not a duration", () => {
+    expect(() => formatCapTime("1:02")).toThrow();
   });
 
   test("formatRelativeTime words the distance from now", () => {
@@ -40,6 +33,15 @@ describe("format", () => {
     expect(formatDate("2026-09-30T13:39:12Z", "UTC")).toBe("30 Sept 2026");
     expect(formatDate("2026-01-05T00:07:00Z", "UTC")).toBe("5 Jan 2026");
     expect(formatDate("2026-01-04T23:07:00Z", "Europe/Vilnius")).toBe("5 Jan 2026");
+  });
+
+  test("formatRemaining counts rounded minutes and never less than 1 minute", () => {
+    expect(formatRemaining(150_000, 0)).toBe("3 minutes");
+    expect(formatRemaining(90_000, 0)).toBe("2 minutes");
+    expect(formatRemaining(60_000, 0)).toBe("1 minute");
+    expect(formatRemaining(10_000, 0)).toBe("1 minute");
+    expect(formatRemaining(0, 0)).toBe("1 minute");
+    expect(formatRemaining(0, 5_000)).toBe("1 minute");
   });
 
   test("formatStage labels each stage, and Starting for none", () => {

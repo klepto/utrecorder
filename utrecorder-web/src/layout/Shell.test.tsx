@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router";
 import { describe, expect, test } from "vitest";
 import { AppRoutes } from "../routes";
 
-function renderAt(path: string) {
+const renderAt = (path: string) => {
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <MantineProvider forceColorScheme="dark">
@@ -15,7 +15,7 @@ function renderAt(path: string) {
       </MantineProvider>
     </QueryClientProvider>,
   );
-}
+};
 
 describe("Shell", () => {
   test("renders the home page at /", () => {
@@ -45,10 +45,22 @@ describe("Shell", () => {
     expect(screen.getByRole("link", { name: "Back to the home page" })).toHaveAttribute("href", "/");
   });
 
-  test("shows the version and commit in the footer", () => {
+  test("credits the author in the footer, linked to their utbt.net profile", () => {
     renderAt("/");
 
-    expect(screen.getByText("utrecorder dev (unknown)")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "kleps" })).toHaveAttribute(
+      "href",
+      "https://utbt.net/players/424992398657978370",
+    );
+    expect(screen.getByText("utrecorder version dev")).toBeInTheDocument();
+  });
+
+  test("sets the favicon to the camera in the anchor color of the theme", () => {
+    renderAt("/");
+
+    const href = document.querySelector('link[rel="icon"]')?.getAttribute("href") ?? "";
+    expect(href).toMatch(/^data:image\/svg\+xml,/);
+    expect(decodeURIComponent(href)).toContain('fill="#4dabf7"');
   });
 
   test("opens external links in a new tab", () => {

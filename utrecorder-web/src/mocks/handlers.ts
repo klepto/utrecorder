@@ -5,10 +5,10 @@ const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 
 /** Returns the non-negative integer `value`, `fallback` if it is absent, or `null` if it is not one. */
-function nonNegativeInteger(value: string | null, fallback: number): number | null {
+const nonNegativeInteger = (value: string | null, fallback: number): number | null => {
   if (value === null) return fallback;
   return /^\d+$/.test(value) ? Number(value) : null;
-}
+};
 
 /** Handlers serving the fixtures on the server's JSON API. */
 export const handlers = [

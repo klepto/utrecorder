@@ -8,18 +8,18 @@ import { recordings } from "../mocks/fixtures";
 import { server } from "../mocks/server";
 import { RecordingList } from "./RecordingList";
 
-function Connected() {
+const Connected = () => {
   return <RecordingList query={useRecordings({ limit: 10, offset: 0 })} />;
-}
+};
 
-function wrap(children: React.ReactNode) {
+const wrap = (children: React.ReactNode) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return (
     <QueryClientProvider client={client}>
       <MantineProvider forceColorScheme="dark">{children}</MantineProvider>
     </QueryClientProvider>
   );
-}
+};
 
 describe("RecordingList", () => {
   test("shows a collapsed item per recording with no video", async () => {
@@ -129,7 +129,9 @@ describe("RecordingList", () => {
     expect(thumbnail).toHaveAttribute("src", "https://api.utbt.net/screenshots/derived/96/CTF-BT-Maverick.webp");
 
     fireEvent.error(thumbnail as HTMLImageElement);
-    await waitFor(() => expect(thumbnail).toHaveAttribute("src", "/map-placeholder.svg"));
+    await waitFor(() =>
+      expect(thumbnail).toHaveAttribute("src", "https://api.utbt.net/screenshots/derived/96/default.webp"),
+    );
   });
 
   test("renders none of error, md5, views or demoUrl", async () => {
@@ -140,10 +142,10 @@ describe("RecordingList", () => {
   });
 });
 
-async function waitForVideo(src?: string): Promise<HTMLVideoElement> {
+const waitForVideo = async (src?: string): Promise<HTMLVideoElement> => {
   return waitFor(() => {
     const video = document.querySelector("video");
     if (!video || (src && video.getAttribute("src") !== src)) throw new Error("no video");
     return video;
   });
-}
+};

@@ -1,17 +1,37 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test, vi } from "vitest";
 import { useQueue } from "../api/queries";
+import type { Job } from "../api/types";
+import { jobs, queue } from "../mocks/fixtures";
 import { server } from "../mocks/server";
 import { QueueList } from "./QueueList";
 
-function Connected() {
-  return <QueueList query={useQueue()} />;
-}
+const Connected = () => {
+  return (
+    <QueueList query={useQueue()} jobs={{ data: undefined, isPending: false, isError: false, dataUpdatedAt: 0 }} />
+  );
+};
 
-function renderList() {
+/** Renders the queue with the jobs `running`, fetched `age` milliseconds ago. */
+const listWith = (running: Job[] | undefined, age = 0) => {
+  return (
+    <MantineProvider forceColorScheme="dark">
+      <QueueList
+        query={{ data: queue, isPending: false, isError: false }}
+        jobs={{ data: running, isPending: false, isError: false, dataUpdatedAt: Date.now() - age }}
+      />
+    </MantineProvider>
+  );
+};
+
+const capturing = (progress: number): Job[] => {
+  return [{ ...jobs[0], stage: "Capturing", progress }];
+};
+
+const renderList = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
@@ -20,7 +40,7 @@ function renderList() {
       </MantineProvider>
     </QueryClientProvider>,
   );
-}
+};
 
 describe("QueueList", () => {
   test("lists the demos in queue order and labels only the first as up next", async () => {
@@ -29,14 +49,53 @@ describe("QueueList", () => {
     const rows = await screen.findAllByRole("row");
     expect(rows).toHaveLength(5);
     expect(screen.queryByRole("columnheader")).toBeNull();
-    expect(rows[0]).toHaveTextContent("up next");
+    expect(rows[0]).toHaveTextContent("up next in ~1 minute");
     expect(rows[0]).toHaveTextContent("CTF-BT-Andromeda");
     expect(rows[0]).toHaveTextContent("Vex");
     expect(rows[0]).toHaveTextContent("2:10.50");
     expect(rows[0]).toHaveTextContent(/2[89] Sept 2026/);
     expect(rows[4]).toHaveTextContent("Nyx");
-    expect(screen.getAllByText("up next")).toHaveLength(1);
+    expect(screen.getAllByText(/up next/)).toHaveLength(1);
     expect(document.querySelector("img")).toBeNull();
+  });
+
+  test("shows 1 minute when nothing is capturing, and still once the estimate has passed", () => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date", "setInterval", "clearInterval"] });
+    render(listWith([{ ...jobs[0], stage: "FetchingDemo", progress: 0.5 }]));
+
+    expect(screen.getByText("up next in ~1 minute")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(14_000));
+    expect(screen.getByText("up next in ~1 minute")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  test("estimates from the capture speed plus 10 seconds whenever the capture progress changes", () => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date", "setInterval", "clearInterval"] });
+    const { rerender } = render(listWith(capturing(0.25)));
+
+    expect(screen.getByText("up next in …")).toBeInTheDocument();
+    rerender(listWith(capturing(0.25)));
+    expect(screen.getByText("up next in …")).toBeInTheDocument();
+    vi.setSystemTime(100_000);
+    rerender(listWith(capturing(0.5)));
+    expect(screen.getByText("up next in ~4 minutes")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByText("up next in ~3 minutes")).toBeInTheDocument();
+    rerender(listWith(capturing(0.7)));
+    expect(screen.getByText("up next in ~2 minutes")).toBeInTheDocument();
+    rerender(listWith(undefined));
+    expect(screen.getByText("up next in ~1 minute")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  test("times the capture speed from when a cached capture was fetched, not from when the list appeared", () => {
+    vi.useFakeTimers({ now: 100_000, toFake: ["Date", "setInterval", "clearInterval"] });
+    const { rerender } = render(listWith(capturing(0.25), 100_000));
+
+    vi.setSystemTime(102_000);
+    rerender(listWith(capturing(0.5)));
+    expect(screen.getByText("up next in ~4 minutes")).toBeInTheDocument();
+    vi.useRealTimers();
   });
 
   test("opens the cap on utbt.net when a row is clicked", async () => {

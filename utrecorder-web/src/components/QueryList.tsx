@@ -21,7 +21,7 @@ interface QueryListProps<T> {
  * before any data arrived, the empty state for an empty list, and the items otherwise. A failed refetch keeps the last
  * data and adds a small "reconnecting" notice.
  */
-export function QueryList<T>({ query, empty, children }: QueryListProps<T>) {
+export const QueryList = <T,>({ query, empty, children }: QueryListProps<T>) => {
   const { data, isPending, isError } = query;
   if (data === undefined) {
     if (isError) {
@@ -51,4 +51,4 @@ export function QueryList<T>({ query, empty, children }: QueryListProps<T>) {
       {data === undefined || data.length === 0 ? <Text c="dimmed">{empty}</Text> : children(data)}
     </Stack>
   );
-}
+};

@@ -7,15 +7,15 @@ import { defineConfig } from "vitest/config";
 const outDir = fileURLToPath(new URL("build/web", import.meta.url));
 
 /** Removes the MSW worker that Vite copies from `public/`, so the build never ships it. */
-function removeMockServiceWorker(): Plugin {
+const removeMockServiceWorker = (): Plugin => {
   return {
     name: "remove-mock-service-worker",
     apply: "build",
-    async closeBundle() {
+    closeBundle: async () => {
       await rm(`${outDir}/mockServiceWorker.js`, { force: true });
     },
   };
-}
+};
 
 /** The server `npm run dev:server` proxies `/api` and `/demo` to. */
 const serverUrl = "http://localhost:8080";

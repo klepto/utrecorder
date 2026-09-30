@@ -8,11 +8,11 @@ import { AppRoutes } from "./routes";
 import { cssVariablesResolver, theme } from "./theme";
 
 /** Starts the MSW worker in the default development mode, so `npm run dev` serves the API from the fixtures. */
-async function startMocks(): Promise<void> {
+const startMocks = async (): Promise<void> => {
   if (import.meta.env.MODE !== "development") return;
   const { worker } = await import("./mocks/browser");
   await worker.start({ onUnhandledRequest: "bypass" });
-}
+};
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root element");

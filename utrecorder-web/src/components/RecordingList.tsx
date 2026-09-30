@@ -5,7 +5,7 @@ import { QueryList, type QueryState } from "./QueryList";
 import { RecordingItem } from "./RecordingItem";
 
 /** Recordings as a stack of `RecordingItem`, of which at most one is expanded. */
-export function RecordingList({ query }: { query: QueryState<Recording> }) {
+export const RecordingList = ({ query }: { query: QueryState<Recording> }) => {
   const [opened, setOpened] = useState<string | null>(null);
   const toggle = (capId: string) => setOpened((current) => (current === capId ? null : capId));
   return (
@@ -24,4 +24,4 @@ export function RecordingList({ query }: { query: QueryState<Recording> }) {
       )}
     </QueryList>
   );
-}
+};

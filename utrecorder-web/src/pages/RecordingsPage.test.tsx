@@ -7,7 +7,7 @@ import { recordings } from "../mocks/fixtures";
 import { server } from "../mocks/server";
 import { RecordingsPage } from "./RecordingsPage";
 
-function renderPage() {
+const renderPage = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
@@ -16,11 +16,11 @@ function renderPage() {
       </MantineProvider>
     </QueryClientProvider>,
   );
-}
+};
 
-function items() {
+const items = () => {
   return document.querySelectorAll("[aria-expanded]");
-}
+};
 
 describe("RecordingsPage", () => {
   test("renders the first 20 recordings with a load more button", async () => {

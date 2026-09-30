@@ -1,7 +1,10 @@
 table.table {
+  --row-gap: calc(var(--mantine-spacing-xs) / 2);
+
   border-collapse: separate;
-  border-spacing: 0;
-  margin-top: calc(var(--mantine-font-size-xs) * var(--mantine-line-height-xs) + 6px);
+  border-spacing: 0 var(--row-gap);
+  margin-top: calc(var(--mantine-font-size-xs) * var(--mantine-line-height-xs) + 6px - var(--row-gap));
+  margin-bottom: calc(-1 * var(--row-gap));
 }
 
 .row {
@@ -42,6 +45,6 @@ table.table {
 
 @media (hover: hover) {
   .row:hover td {
-    background-color: var(--table-hover-color);
+    background-color: var(--utrecorder-color-chrome);
   }
 }

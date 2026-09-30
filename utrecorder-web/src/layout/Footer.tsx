@@ -1,22 +1,32 @@
 import { Anchor, Container, Group, Text } from "@mantine/core";
-import { AUTHOR_NAME, GITHUB_URL } from "../site";
+import { IconHeartFilled } from "@tabler/icons-react";
+import { AUTHOR_NAME, AUTHOR_USER_ID, NEW_TAB, playerUrl } from "../site";
 import classes from "./Footer.module.css";
 
-/** The bottom bar: build version and commit, the author and a GitHub link. */
-export function Footer() {
+/** The bottom bar: the version of utrecorder on the left, and a credit linking the author to their utbt.net profile on the right. */
+export const Footer = () => {
   return (
     <footer className={classes.footer}>
       <Container size="lg">
         <Group justify="space-between" py="md">
-          <Text size="sm" c="dimmed">{`utrecorder ${__APP_VERSION__} (${__APP_COMMIT__})`}</Text>
           <Text size="sm" c="dimmed">
-            {AUTHOR_NAME}
+            utrecorder version {__APP_VERSION__}
           </Text>
-          <Anchor size="sm" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
-            GitHub
-          </Anchor>
+          <Text size="sm" c="dimmed">
+            made with{" "}
+            <IconHeartFilled
+              size={14}
+              color="var(--mantine-color-anchor)"
+              aria-label="love"
+              className={classes.heart}
+            />{" "}
+            by{" "}
+            <Anchor size="sm" href={playerUrl(AUTHOR_USER_ID)} {...NEW_TAB}>
+              {AUTHOR_NAME}
+            </Anchor>
+          </Text>
         </Group>
       </Container>
     </footer>
   );
-}
+};

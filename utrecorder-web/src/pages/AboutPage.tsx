@@ -1,13 +1,11 @@
-import { Container, Stack, Text, Title } from "@mantine/core";
+import { Text } from "@mantine/core";
+import { Page } from "../layout/Page";
 
 /** Static text about the project. */
-export function AboutPage() {
+export const AboutPage = () => {
   return (
-    <Container size="lg" py="xl">
-      <Stack>
-        <Title order={2}>About</Title>
-        <Text>utrecorder records Unreal Tournament demos to mp4. This text is a placeholder.</Text>
-      </Stack>
-    </Container>
+    <Page title="About">
+      <Text>utrecorder records Unreal Tournament demos to mp4. This text is a placeholder.</Text>
+    </Page>
   );
-}
+};

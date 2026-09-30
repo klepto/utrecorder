@@ -4,7 +4,7 @@ const fontFamily = "Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-seri
 
 /** The Mantine theme of the site: palette, fonts and radius. */
 export const theme = createTheme({
-  primaryColor: "orange",
+  primaryColor: "pink",
   fontFamily,
   headings: { fontFamily },
   defaultRadius: "lg",

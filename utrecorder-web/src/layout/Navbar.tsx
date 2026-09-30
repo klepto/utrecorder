@@ -1,8 +1,9 @@
-import { ActionIcon, Anchor, Burger, Collapse, Container, Group, Stack } from "@mantine/core";
+import { ActionIcon, Anchor, Burger, Collapse, Container, Divider, Group, Stack } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
-import { IconBrandDiscord, IconBrandGithub } from "@tabler/icons-react";
+import { IconBrandDiscordFilled, IconBrandGithubFilled } from "@tabler/icons-react";
 import { Link, NavLink } from "react-router";
-import { DISCORD_URL, GITHUB_URL } from "../site";
+import { DISCORD_URL, GITHUB_URL, NEW_TAB } from "../site";
+import { HEADER_HEIGHT } from "./header";
 import classes from "./Navbar.module.css";
 
 const links = [
@@ -11,55 +12,53 @@ const links = [
   { to: "/about", label: "About" },
 ];
 
-function NavLinks() {
+const NavLinks = () => {
   return links.map((link) => (
     <NavLink key={link.to} to={link.to} end={link.to === "/"} className={classes.link}>
       {link.label}
     </NavLink>
   ));
-}
+};
 
-function ExternalLinks() {
-  return (
-    <>
-      <ActionIcon
-        component="a"
-        href={DISCORD_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        variant="subtle"
-        size="lg"
-        aria-label="Discord"
-      >
-        <IconBrandDiscord />
-      </ActionIcon>
-      <ActionIcon
-        component="a"
-        href={GITHUB_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        variant="subtle"
-        size="lg"
-        aria-label="GitHub"
-      >
-        <IconBrandGithub />
-      </ActionIcon>
-    </>
-  );
-}
+const externalLinks = [
+  { href: DISCORD_URL, label: "Discord", Icon: IconBrandDiscordFilled },
+  { href: GITHUB_URL, label: "GitHub", Icon: IconBrandGithubFilled },
+];
 
-/** The top bar: logo, page links and external icon links, collapsing behind a burger below `sm`. */
-export function Navbar() {
+const ExternalLinks = () => {
+  return externalLinks.map((link) => (
+    <ActionIcon
+      key={link.href}
+      component="a"
+      href={link.href}
+      {...NEW_TAB}
+      variant="subtle"
+      size="lg"
+      aria-label={link.label}
+    >
+      <link.Icon />
+    </ActionIcon>
+  ));
+};
+
+/**
+ * The top bar: logo, then page links set off from it by a divider, and external icon links on the right. Below `sm`,
+ * the links collapse behind a burger.
+ */
+export const Navbar = () => {
   const [opened, { toggle, close }] = useDisclosure(false);
 
   return (
-    <Container size="lg" h={60}>
+    <Container size="lg" h={HEADER_HEIGHT}>
       <Group h="100%" justify="space-between" wrap="nowrap">
-        <Anchor component={Link} to="/" onClick={close} display="flex">
-          <span className={classes.logo} role="img" aria-label="utrecorder" />
-        </Anchor>
-        <Group gap="md" visibleFrom="sm">
-          <NavLinks />
+        <Group gap="lg" wrap="nowrap">
+          <Anchor component={Link} to="/" onClick={close} display="flex">
+            <span className={classes.logo} role="img" aria-label="utrecorder" />
+          </Anchor>
+          <Divider orientation="vertical" h={24} my="auto" visibleFrom="sm" />
+          <Group gap="lg" visibleFrom="sm">
+            <NavLinks />
+          </Group>
         </Group>
         <Group gap="xs" visibleFrom="sm">
           <ExternalLinks />
@@ -76,4 +75,4 @@ export function Navbar() {
       </Collapse>
     </Container>
   );
-}
+};

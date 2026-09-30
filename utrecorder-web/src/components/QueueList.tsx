@@ -1,28 +1,49 @@
-import { Table, Text, Tooltip } from "@mantine/core";
+import { Table, Text } from "@mantine/core";
+import { useEffect, useState } from "react";
 import type { Demo } from "../api/types";
-import { formatCapTime, formatDate, formatExactTime } from "../format";
-import { capUrl, openInNewTab } from "../site";
+import { formatCapTime, formatRemaining } from "../format";
+import { capLinkProps } from "./capLinkProps";
+import type { JobsState } from "./JobsState";
 import { PlayerLink } from "./PlayerLink";
 import { QueryList, type QueryState } from "./QueryList";
 import classes from "./QueueList.module.css";
+import { Timestamp } from "./Timestamp";
 import { Truncated } from "./Truncated";
+import { useNextStart } from "./useNextStart";
 
-/** One queued demo, whose click opens the cap on utbt.net. If `next`, it is outlined and labelled as up next. */
-function QueueRow({ demo, next }: { demo: Demo; next: boolean }) {
+/** Returns the text of the up next label: "up next in ~" and the time left until `deadline`, or "up next in …" without one. */
+const nextText = (deadline: number | null) => {
+  return deadline === null ? "up next in …" : `up next in ~${formatRemaining(deadline)}`;
+};
+
+/**
+ * The label of the next demo: "up next in" and the time left until `deadline`, marked with `~` as an estimate and
+ * updated every second. Without a `deadline`, the time reads "…".
+ */
+const NextLabel = ({ deadline }: { deadline: number | null }) => {
+  const [, tick] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => tick((ticks) => ticks + 1), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <Table.Tr
-      tabIndex={0}
-      aria-label={`${demo.map} on utbt.net`}
-      className={next ? `${classes.row} ${classes.next}` : classes.row}
-      onClick={() => openInNewTab(capUrl(demo.capId))}
-      onKeyDown={(event) => event.key === "Enter" && openInNewTab(capUrl(demo.capId))}
-    >
+    <Text size="xs" c="var(--mantine-color-anchor)" className={classes.label}>
+      {nextText(deadline)}
+    </Text>
+  );
+};
+
+/**
+ * One queued demo, whose click opens the cap on utbt.net. If `next`, it is outlined and labelled as up next, with the
+ * time left until `deadline`.
+ */
+const QueueRow = ({ demo, next, deadline }: { demo: Demo; next: boolean; deadline: number | null }) => {
+  return (
+    <Table.Tr className={next ? `${classes.row} ${classes.next}` : classes.row} {...capLinkProps(demo)}>
       <Table.Td>
-        {next && (
-          <Text size="xs" c="var(--mantine-color-anchor)" className={classes.label}>
-            up next
-          </Text>
-        )}
+        {next && <NextLabel deadline={deadline} />}
         <Truncated text={demo.map} size="sm" />
       </Table.Td>
       <Table.Td>
@@ -34,25 +55,31 @@ function QueueRow({ demo, next }: { demo: Demo; next: boolean }) {
         <Text size="sm">{formatCapTime(demo.capTime)}</Text>
       </Table.Td>
       <Table.Td>
-        <Tooltip label={formatExactTime(demo.timestamp)}>
-          <Text size="sm">{formatDate(demo.timestamp)}</Text>
-        </Tooltip>
+        <Timestamp value={demo.timestamp} />
       </Table.Td>
     </Table.Tr>
   );
+};
+
+interface QueueListProps {
+  query: QueryState<Demo>;
+  /** The running jobs, whose capture the up next estimate follows. */
+  jobs: JobsState;
 }
 
 /**
  * The queued demos as a table of map, player, cap time and date added, in the order the recorder takes them. A border
- * and a label mark the first row as up next, and a click on a row opens the cap on utbt.net.
+ * and a label mark the first row as up next, with the time left until it starts, estimated from the capture among
+ * `jobs`. A click on a row opens the cap on utbt.net.
  */
-export function QueueList({ query }: { query: QueryState<Demo> }) {
+export const QueueList = ({ query, jobs }: QueueListProps) => {
+  const deadline = useNextStart(query.data?.[0]?.capId, jobs.data, jobs.dataUpdatedAt);
   return (
     <QueryList query={query} empty="The queue is empty.">
       {(demos) => (
         <Table
           layout="fixed"
-          verticalSpacing="xs"
+          verticalSpacing="var(--row-gap)"
           horizontalSpacing="xs"
           withRowBorders={false}
           className={classes.table}
@@ -65,11 +92,11 @@ export function QueueList({ query }: { query: QueryState<Demo> }) {
           </colgroup>
           <Table.Tbody>
             {demos.map((demo, index) => (
-              <QueueRow key={demo.capId} demo={demo} next={index === 0} />
+              <QueueRow key={demo.capId} demo={demo} next={index === 0} deadline={deadline} />
             ))}
           </Table.Tbody>
         </Table>
       )}
     </QueryList>
   );
-}
+};

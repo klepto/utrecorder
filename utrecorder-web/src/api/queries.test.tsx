@@ -7,12 +7,12 @@ import { jobs } from "../mocks/fixtures";
 import { server } from "../mocks/server";
 import { useJobs, useQueue, useRecordings } from "./queries";
 
-function wrapper() {
+const wrapper = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-}
+};
 
 describe("queries", () => {
   test("useJobs returns the running jobs", async () => {
