@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.core.demo
 
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMark.Label.END
+import dev.klepto.utrecorder.core.demo.DemoPlaybackMark.Label.SPAWN
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMark.Label.START
 import dev.klepto.utrecorder.ut99.UtProcessResult
 import java.time.Instant
@@ -30,7 +31,7 @@ data class DemoPlaybackMark(
     /**
      * Kinds of mark the game logs, written in lower case in the run log.
      */
-    enum class Label { START, END }
+    enum class Label { START, SPAWN, END }
 }
 
 /**
@@ -40,10 +41,12 @@ data class DemoPlaybackMark(
  *
  * @property start The first start mark of the run.
  * @property end The last end mark of the run.
+ * @property spawn The first spawn mark of the run. If the run logged no spawn mark, it is `null`.
  */
 data class DemoPlaybackMarks(
     val start: DemoPlaybackMark,
     val end: DemoPlaybackMark,
+    val spawn: DemoPlaybackMark? = null,
 ) {
     companion object {
         private val MARK_PATTERN =
@@ -55,7 +58,8 @@ data class DemoPlaybackMarks(
         private fun MatchResult.field(name: String): String = groups[name]?.value.orEmpty()
 
         /**
-         * Returns the range bounded by the first start mark and the last end mark the game logged in [lines].
+         * Returns the range bounded by the first start mark and the last end mark the game logged in [lines], with the
+         * first spawn mark the game logged, if any.
          *
          * A mark reads `UTRecorder: mark <label> <year> <month> <day> <hour> <minute> <second> <millisecond> <frame>
          * <demoTime>` anywhere on a line, with the label in lower case. A line is skipped if it holds no such mark, if
@@ -67,7 +71,8 @@ data class DemoPlaybackMarks(
             val marks = lines.mapNotNull(::parseMark)
             val start = marks.firstOrNull { it.label == START } ?: error("Run log holds no start mark")
             val end = marks.lastOrNull { it.label == END } ?: error("Run log holds no end mark")
-            return DemoPlaybackMarks(start, end)
+            val spawn = marks.firstOrNull { it.label == SPAWN }
+            return DemoPlaybackMarks(start, end, spawn)
         }
 
         /**

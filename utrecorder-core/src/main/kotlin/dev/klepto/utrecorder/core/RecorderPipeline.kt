@@ -107,7 +107,7 @@ class RecorderPipeline(
             val muxing = Muxing.start(onProgress)
             val target = output["$name.mp4"]
             val audioOffset = audio.offset - videoTrack.smoothingDelay / 2
-            val placement = AudioAlignment.place(audioTrack, videoTrack.length, videoTrack.demoEnd, audioOffset)
+            val placement = AudioAlignment.place(audioTrack, videoTrack.length, videoTrack.demoStart, audioOffset)
             val mp4 = muxer.merge(videoTrack.file, audioTrack.file, placement.offset, placement.length, target, muxing)
             runTime?.let { checkLength(mp4, it) }
             mp4

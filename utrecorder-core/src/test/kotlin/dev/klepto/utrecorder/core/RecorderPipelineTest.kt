@@ -1,8 +1,8 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
@@ -70,7 +70,7 @@ class RecorderPipelineTest :
                 onProgress(Progress(0.5))
                 events += videoCapturePlayed
                 audioThreadReleased?.countDown()
-                return VideoTrack(file = videoFile, length = 8.0, demoEnd = 300.75, smoothingDelay = 0.25)
+                return VideoTrack(file = videoFile, length = 8.0, demoStart = 292.75, smoothingDelay = 0.25)
             }
         }
 
@@ -232,7 +232,7 @@ class RecorderPipelineTest :
             failure.message shouldBe "The mp4 runs 25.900 seconds, but the run takes 23.842 seconds"
         }
 
-        test("record hands the mux the track anchored on the end of the 8 second video, nudged by the offset and half the smoothing delay") {
+        test("record hands the mux the track anchored on the start of the video, nudged by the offset and half the smoothing delay") {
             var merged: Triple<Path, Double, Double>? = null
             val capturingMuxer =
                 object : Muxer {

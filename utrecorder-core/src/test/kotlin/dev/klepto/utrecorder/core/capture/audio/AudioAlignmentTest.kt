@@ -14,36 +14,36 @@ class AudioAlignmentTest :
                 demoEnd = 300.75,
             )
 
-        test("place ends the audio on the end of the video when both captures end at the same demo time") {
+        test("place starts the audio where the wav plays the demo time the video starts at") {
             val placement =
                 AudioAlignment.place(
                     track = track,
                     videoLength = 8.0,
-                    videoCaptureEnd = 300.75,
-                    audioOffset = 0.0,
-                )
-
-            placement shouldBe AudioAlignment.Placement(offset = 4.0, length = 8.0)
-        }
-
-        test("place moves the end of the audio by the demo time between the ends of the two captures") {
-            val placement =
-                AudioAlignment.place(
-                    track = track,
-                    videoLength = 8.0,
-                    videoCaptureEnd = 301.0,
+                    videoStart = 293.0,
                     audioOffset = 0.0,
                 )
 
             placement shouldBe AudioAlignment.Placement(offset = 4.25, length = 8.0)
         }
 
-        test("place keeps the track's own placement when the video capture end is not known") {
+        test("place keeps the start of the audio on the video start when the video runs past the demo end of the track") {
+            val placement =
+                AudioAlignment.place(
+                    track = track,
+                    videoLength = 8.05,
+                    videoStart = 292.75,
+                    audioOffset = 0.0,
+                )
+
+            placement shouldBe AudioAlignment.Placement(offset = 4.0, length = 8.05)
+        }
+
+        test("place keeps the track's own placement when the video start is not known") {
             val placement =
                 AudioAlignment.place(
                     track = track,
                     videoLength = 8.0,
-                    videoCaptureEnd = null,
+                    videoStart = null,
                     audioOffset = 0.0,
                 )
 
@@ -55,7 +55,7 @@ class AudioAlignmentTest :
                 AudioAlignment.place(
                     track = track.copy(demoEnd = 0.0),
                     videoLength = 8.0,
-                    videoCaptureEnd = 300.75,
+                    videoStart = 292.75,
                     audioOffset = 0.0,
                 )
 
@@ -66,8 +66,8 @@ class AudioAlignmentTest :
             val placement =
                 AudioAlignment.place(
                     track = track.copy(offset = 0.5),
-                    videoLength = 13.0,
-                    videoCaptureEnd = 300.75,
+                    videoLength = 11.0,
+                    videoStart = 290.0,
                     audioOffset = 0.0,
                 )
 
@@ -79,7 +79,7 @@ class AudioAlignmentTest :
                 AudioAlignment.place(
                     track = track,
                     videoLength = 8.0,
-                    videoCaptureEnd = 300.75,
+                    videoStart = 292.75,
                     audioOffset = 0.5,
                 )
 

@@ -95,12 +95,44 @@ class DemoPlaybackMarksTest :
             marks.end.demoTime shouldBe 300.75.seconds
         }
 
+        test("parse returns the first spawn mark when the log holds several") {
+            val lines =
+                listOf(
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "ScriptLog: UTRecorder: mark spawn 2026 9 13 10 30 6 500 4650 13.75",
+                    "ScriptLog: UTRecorder: mark spawn 2026 9 13 10 31 0 0 5000 60.0",
+                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
+                )
+
+            val marks = DemoPlaybackMarks.parse(lines)
+
+            marks.spawn shouldBe
+                DemoPlaybackMark(
+                    label = DemoPlaybackMark.Label.SPAWN,
+                    wallTime = wallClock("2026-09-13T10:30:06.500"),
+                    frame = 4650,
+                    demoTime = 13.75.seconds,
+                )
+        }
+
+        test("parse returns no spawn mark when the log holds none") {
+            val lines =
+                listOf(
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
+                )
+
+            val marks = DemoPlaybackMarks.parse(lines)
+
+            marks.spawn shouldBe null
+        }
+
         test("parse skips a mark with any other label") {
             val lines =
                 listOf(
-                    "ScriptLog: UTRecorder: mark spawn 2026 9 13 10 29 0 0 100 0.5",
+                    "ScriptLog: UTRecorder: mark rewind 2026 9 13 10 29 0 0 100 0.5",
                     "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
-                    "ScriptLog: UTRecorder: mark spawn 2026 9 13 10 36 0 0 99000 301.0",
+                    "ScriptLog: UTRecorder: mark rewind 2026 9 13 10 36 0 0 99000 301.0",
                     "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
                 )
 

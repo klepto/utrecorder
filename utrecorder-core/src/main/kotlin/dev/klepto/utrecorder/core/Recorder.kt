@@ -1,7 +1,7 @@
 package dev.klepto.utrecorder.core
 
-import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.io.Workspace

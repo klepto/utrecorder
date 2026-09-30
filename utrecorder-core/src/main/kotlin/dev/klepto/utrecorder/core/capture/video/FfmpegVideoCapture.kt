@@ -103,7 +103,7 @@ class FfmpegVideoCapture(
     }
 
     /**
-     * Returns the video track in [videoFile], ending at the end mark of [marks]. The track shows the recorder's
+     * Returns the video track in [videoFile], starting at the spawn mark of [marks]. The track shows the recorder's
      * movement behind the demo by the movement delay of [smoothing].
      */
     private suspend fun track(
@@ -114,7 +114,7 @@ class FfmpegVideoCapture(
         VideoTrack(
             file = videoFile,
             length = ffmpeg.duration(videoFile),
-            demoEnd = marks.end.demoTime.toDouble(DurationUnit.SECONDS),
+            demoStart = marks.spawn?.demoTime?.toDouble(DurationUnit.SECONDS),
             smoothingDelay = smoothing?.movement?.toDouble(DurationUnit.SECONDS) ?: 0.0,
         )
 
