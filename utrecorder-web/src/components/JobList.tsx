@@ -13,11 +13,16 @@ import { useExtrapolated } from "./useExtrapolated";
 /** The height of the stage progress bar: one line of its `sm` label with `xs` spacing split above and below. */
 const PROGRESS_SIZE = "calc(var(--mantine-font-size-sm) * var(--mantine-line-height-sm) + var(--mantine-spacing-xs))";
 
-/** A stage progress bar with `label` centered over it. */
+/** A stage progress bar with flowing stripes and `label` centered over it. */
 const StageBar = ({ label, ...props }: { label: string } & ProgressProps) => {
   return (
     <Box pos="relative">
-      <Progress size={PROGRESS_SIZE} color="var(--mantine-color-anchor)" {...props} />
+      <Progress
+        classNames={{ root: classes.progress, section: classes.section }}
+        size={PROGRESS_SIZE}
+        color="var(--mantine-color-anchor)"
+        {...props}
+      />
       <Center pos="absolute" inset={0}>
         <Text size="sm" fw={600} className={classes.label}>
           {label}
@@ -37,7 +42,6 @@ const ReportedProgress = ({ stage, progress, reportedAt }: { stage: string; prog
   return (
     <StageBar
       label={`${stage} - ${Math.floor(shown * 100)}%`}
-      classNames={{ root: classes.progress, section: classes.section }}
       value={shown * 100}
       transitionDuration={0}
       aria-label="Stage progress"
@@ -54,20 +58,12 @@ const StageProgress = ({ job, reportedAt }: { job: Job; reportedAt: number }) =>
   if (job.progress !== null) {
     return <ReportedProgress key={job.stage} stage={stage} progress={job.progress} reportedAt={reportedAt} />;
   }
-  return (
-    <StageBar
-      label={stage}
-      classNames={{ root: classes.progress }}
-      value={100}
-      animated
-      aria-label="Progress unknown"
-    />
-  );
+  return <StageBar label={stage} value={100} aria-label="Progress unknown" />;
 };
 
 /**
- * The running recordings: map, time the cap was added, cap time and player, the stage with its progress, and the attempt
- * after the first.
+ * The running recordings: map, cap time and player, the time the cap was added with the attempt after the first below
+ * it, and the stage with its progress.
  */
 export const JobList = ({ query }: { query: JobsState }) => {
   return (
@@ -85,13 +81,15 @@ export const JobList = ({ query }: { query: JobsState }) => {
             <Stack gap="sm">
               <Group wrap="nowrap">
                 <DemoSummary demo={job.demo} />
-                <Timestamp value={job.demo.timestamp} style={{ flexShrink: 0, alignSelf: "flex-start" }} />
+                <Stack gap={0} align="flex-end" style={{ flexShrink: 0, alignSelf: "flex-start" }}>
+                  <Timestamp value={job.demo.timestamp} />
+                  {job.attempt > 1 && (
+                    <Text size="sm" c="dimmed">
+                      Attempt {job.attempt}
+                    </Text>
+                  )}
+                </Stack>
               </Group>
-              {job.attempt > 1 && (
-                <Text size="sm" ta="right">
-                  Attempt {job.attempt}
-                </Text>
-              )}
               <StageProgress job={job} reportedAt={query.dataUpdatedAt} />
             </Stack>
           </Card>
