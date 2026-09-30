@@ -4,13 +4,15 @@ services:
   server:
     build:
       context: ..
-      dockerfile: docker/server/Dockerfile
+      dockerfile: docker/Dockerfile
+      target: server
     image: utrecorder-server
     init: true
     ports:
       - "8080:8080"
     volumes:
       - server-home:/var/lib/utrecorder
+      - cache:/var/cache/utrecorder
     # Any UTRECORDER_* key, such as the Internet Archive keys, set in docker/.env. The file is optional and gitignored.
     env_file:
       - path: .env
@@ -20,5 +22,27 @@ services:
     # At most four cores of CPU time. The JVM reads the limit, so the llvmpipe thread count follows it.
     cpus: 4
 
+  # Records one demo URL for testing, beside the server: docker compose run --rm cli <url>. It shares only the cache
+  # with the server, and the cli profile keeps docker compose up from starting it.
+  cli:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: cli
+    image: utrecorder-cli
+    profiles:
+      - cli
+    init: true
+    volumes:
+      - cli-home:/var/lib/utrecorder
+      - cache:/var/cache/utrecorder
+    env_file:
+      - path: .env
+        required: false
+    stop_grace_period: 1m
+    cpus: 4
+
 volumes:
   server-home:
+  cli-home:
+  cache:

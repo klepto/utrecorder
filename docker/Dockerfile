@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# Production image: builds the server distribution from source, then runs it with the 32-bit runtime Unreal
-# Tournament needs.
+# Production images: builds the server and the CLI distributions from source, then runs one of them with the 32-bit
+# runtime Unreal Tournament needs. The server is the last stage, so a build without --target builds the server.
 
 FROM eclipse-temurin:25-jdk AS builder
 
@@ -49,18 +49,20 @@ WORKDIR /utrecorder
 COPY . .
 
 # The Gradle user home is a build cache mount, so a rebuild reuses the Gradle distribution and the dependencies it
-# downloaded before instead of downloading them again.
+# downloaded before instead of downloading them again. The development home's cache/ is a build cache mount too, so
+# the UT99 install UCC compiles against is extracted from the iso and patch downloaded before.
 RUN --mount=type=cache,target=/root/.gradle \
+    --mount=type=cache,target=/utrecorder/.utrecorder/cache \
     Xvfb "$DISPLAY" -screen 0 "${SCREEN_SIZE}x24" -nolisten tcp -ac >/dev/null 2>&1 & \
     for _ in $(seq 1 100); do \
         xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 && break; \
         sleep 0.1; \
     done \
     && xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 \
-    && { ./gradlew --no-daemon :utrecorder-server:installDist \
+    && { ./gradlew --no-daemon :utrecorder-server:installDist :utrecorder-cli:installDist \
         || { cat utrecorder-hooks/build/native-logs/*/compile.log 2>/dev/null; exit 1; }; }
 
-FROM eclipse-temurin:25-jre
+FROM eclipse-temurin:25-jre AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -127,19 +129,32 @@ ENV DISPLAY=:99 \
     SCREEN_SIZE=1920x1080 \
     LIBGL_ALWAYS_SOFTWARE=1 \
     GALLIUM_DRIVER=llvmpipe \
-    UTRECORDER_HOME=/var/lib/utrecorder
+    UTRECORDER_HOME=/var/lib/utrecorder \
+    UTRECORDER_CACHE=/var/cache/utrecorder
 
-COPY --from=builder /utrecorder/utrecorder-server/build/install/utrecorder-server /opt/utrecorder-server
 # Game packages no redirect serves, maintained by hand in the repository. The home is a volume that starts empty, so
 # the packages directory is moved out of it into the image.
 COPY .utrecorder/packages /opt/utrecorder/packages
 ENV UTRECORDER_PACKAGES=/opt/utrecorder/packages
 
-COPY docker/server/entrypoint.sh /usr/local/bin/entrypoint
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint && chmod +x /usr/local/bin/entrypoint
 
-VOLUME /var/lib/utrecorder
-EXPOSE 8080
+# The cache is a volume of its own, outside the home, so that containers sharing nothing else can share downloads.
+VOLUME /var/lib/utrecorder /var/cache/utrecorder
 
 ENTRYPOINT ["entrypoint"]
+
+FROM runtime AS cli
+
+COPY --from=builder /utrecorder/utrecorder-cli/build/install/utrecorder-cli /opt/utrecorder-cli
+
+ENTRYPOINT ["entrypoint", "/opt/utrecorder-cli/bin/utrecorder-cli"]
+
+FROM runtime AS server
+
+COPY --from=builder /utrecorder/utrecorder-server/build/install/utrecorder-server /opt/utrecorder-server
+
+EXPOSE 8080
+
 CMD ["/opt/utrecorder-server/bin/utrecorder-server"]

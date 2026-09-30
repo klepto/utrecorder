@@ -54,3 +54,5 @@ utrecorder-web/node_modules/
 ### Docker ###
 # Secrets and overrides docker compose reads for the services in docker/compose.yml.
 docker/.env
+# Recordings and logs docker/deploy-cli.sh copies out of the CLI container.
+docker/out/
