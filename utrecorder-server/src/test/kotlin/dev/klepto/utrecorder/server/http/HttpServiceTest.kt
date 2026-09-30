@@ -22,11 +22,14 @@ import dev.klepto.utrecorder.server.upload.MediaUploader
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.json.Json
@@ -66,6 +69,16 @@ class HttpServiceTest :
                 timestamp = timestamp,
                 demoUrl = "http://api.utbt.net/demos/$capId",
             )
+
+        fun capIds(body: String): List<String> =
+            Json
+                .parseToJsonElement(body)
+                .jsonArray
+                .map {
+                    it.jsonObject["demo"]!!
+                        .jsonObject["capId"]!!
+                        .jsonPrimitive.content
+                }
 
         val uploader =
             object : MediaUploader {
@@ -115,12 +128,54 @@ class HttpServiceTest :
             }
         }
 
-        test("answers the index with an empty page") {
+        test("answers index.html without caching for every path the site routes") {
             http(emptyMap()) {
-                val response = client.get("/")
+                listOf("/", "/recordings", "/about", "/recordings/unknown").forEach { path ->
+                    val response = client.get(path)
+
+                    response.status shouldBe HttpStatusCode.OK
+                    response.contentType()?.withoutParameters() shouldBe ContentType.Text.Html
+                    response.headers[HttpHeaders.CacheControl] shouldBe "no-cache"
+                    response.bodyAsText() shouldContain "<div id=\"root\">"
+                }
+            }
+        }
+
+        test("answers an asset with an immutable cache header") {
+            http(emptyMap()) {
+                val asset = Regex("/assets/[^\"]+\\.js").find(client.get("/").bodyAsText())!!.value
+                val response = client.get(asset)
 
                 response.status shouldBe HttpStatusCode.OK
-                response.bodyAsText() shouldBe ""
+                response.headers[HttpHeaders.CacheControl] shouldBe "public, max-age=31536000, immutable"
+            }
+        }
+
+        test("does not serve the index of the embedded artifacts") {
+            http(emptyMap()) {
+                client.get("/index").status shouldBe HttpStatusCode.NotFound
+            }
+        }
+
+        test("answers a JSON 404 for an unknown path under /api/") {
+            http(emptyMap()) {
+                val response = client.get("/api/unknown")
+
+                response.status shouldBe HttpStatusCode.NotFound
+                response.contentType()?.withoutParameters() shouldBe ContentType.Application.Json
+                Json
+                    .parseToJsonElement(response.bodyAsText())
+                    .jsonObject["error"]!!
+                    .jsonPrimitive.content shouldBe "Not found"
+            }
+        }
+
+        test("compresses the site and JSON, but not an mp4") {
+            http(mapOf("local" to Recorded), listOf("local")) {
+                client.get("/") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe "gzip"
+                client.get("/api/recordings") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe
+                    "gzip"
+                client.get("/demo/local") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe null
             }
         }
 
@@ -220,6 +275,39 @@ class HttpServiceTest :
                         .jsonPrimitive.content
                 } shouldBe
                     (12 downTo 3).map { "recording-$it" }
+            }
+        }
+
+        test("pages the recordings with limit and offset, and caps the limit at 50") {
+            http(emptyMap()) { repository ->
+                repository += (1..60).map { demo("recording-$it") }
+                (1..60).forEach {
+                    now.set(Instant.parse("2026-09-27T00:00:00Z") + it.hours)
+                    repository.recorded("recording-$it", 1.hours)
+                }
+
+                capIds(client.get("/api/recordings?limit=3&offset=2").bodyAsText()) shouldBe
+                    listOf("recording-58", "recording-57", "recording-56")
+                capIds(client.get("/api/recordings?offset=55").bodyAsText()) shouldBe (5 downTo 1).map { "recording-$it" }
+                capIds(client.get("/api/recordings?limit=100").bodyAsText()).size shouldBe 50
+                capIds(client.get("/api/recordings?limit=0").bodyAsText()) shouldBe emptyList()
+            }
+        }
+
+        test("answers 400 for a limit or offset that is not a non-negative integer") {
+            http(emptyMap()) {
+                listOf("limit=-1", "limit=abc", "offset=-1", "offset=1.5", "limit=").forEach { query ->
+                    client.get("/api/recordings?$query").status shouldBe HttpStatusCode.BadRequest
+                }
+            }
+        }
+
+        test("orders recordings with equal recording and demo times by capId, descending") {
+            http(emptyMap()) { repository ->
+                repository += listOf(demo("b"), demo("c"), demo("a"))
+                listOf("b", "c", "a").forEach { repository.recorded(it, 1.hours) }
+
+                capIds(client.get("/api/recordings").bodyAsText()) shouldBe listOf("c", "b", "a")
             }
         }
     })

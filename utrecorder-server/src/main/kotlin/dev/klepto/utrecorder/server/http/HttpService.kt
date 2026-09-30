@@ -14,19 +14,28 @@ import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.http.content.staticResources
+import io.ktor.server.plugins.compression.Compression
+import io.ktor.server.plugins.compression.deflate
+import io.ktor.server.plugins.compression.gzip
+import io.ktor.server.plugins.compression.matchContentType
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.partialcontent.PartialContent
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondRedirect
 import io.ktor.server.routing.RoutingContext
 import io.ktor.server.routing.get
+import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
@@ -39,15 +48,22 @@ import kotlin.time.Instant
  * [Service] that serves the recordings of [repository] and the state of the server over HTTP on [ServerConfig.port].
  *
  * The routes are:
- * - `GET /`: an empty page.
  * - `GET /demo/{capId}`: the mp4 of a [Recorded], [Uploaded] or [Archived] recording, with range support. If the
  *   recording is [Archived] and its mp4 is not in [ServerConfig.recordings], redirects to the download URL of [cache]
  *   instead, if [cache] names one. Every other request answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
  * - `GET /api/queue`: the next 10 demos to be recorded, in the order they are taken.
- * - `GET /api/recordings`: the 10 most recently recorded [Recorded], [Uploaded] or [Archived] recordings, newest
- *   first. A recording without [Recording.recordedAt] comes after every other one, ordered by the time its demo was
- *   added.
+ * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, most
+ *   recently recorded first. Recordings recorded at the same time are ordered by the time of their demo, then by
+ *   [Demo.capId], both descending. A recording without [Recording.recordedAt] comes after every other one. The page
+ *   skips `offset` recordings, `0` by default, and holds at most `limit` recordings, `10` by default and at most `50`.
+ *   A `limit` or `offset` that is not a non-negative integer answers `400`.
+ * - Any other path under `/api/`: `404` with a JSON body.
+ * - Every other `GET`: the web site from the `web` classpath resources. A path that names no file of the site answers
+ *   its `index.html`, and the `index` of the resources answers `404`. Files under `assets/` are cached for a year;
+ *   `index.html` is never cached without revalidation.
+ *
+ * JavaScript, CSS, HTML and JSON responses are compressed.
  *
  * Every request of `/demo/{capId}` for a stored recording counts one view of it through [cache].
  *
@@ -79,12 +95,21 @@ class HttpService(
     fun module(application: Application) {
         application.install(PartialContent)
         application.install(ContentNegotiation) { json() }
+        application.install(Compression) {
+            gzip { matchContentType(*COMPRESSED) }
+            deflate { matchContentType(*COMPRESSED) }
+        }
         application.routing {
-            get("/") { call.respond(HttpStatusCode.OK) }
             get("/demo/{capId}") { serveDemo(call.parameters["capId"].orEmpty()) }
             get("/api/jobs") { call.respond(jobs.jobs.first().map { it.toResponse() }) }
             get("/api/queue") { call.respond(repository.pending(LIMIT)) }
-            get("/api/recordings") { call.respond(latestRecordings()) }
+            get("/api/recordings") { serveRecordings() }
+            route("/api/{...}") { handle { call.respond(HttpStatusCode.NotFound, ErrorResponse("Not found")) } }
+            get("/index") { call.respond(HttpStatusCode.NotFound) }
+            staticResources("/", "web") {
+                default("index.html")
+                modify { resource, call -> call.response.header(HttpHeaders.CacheControl, cacheControl(resource.path)) }
+            }
         }
     }
 
@@ -108,14 +133,33 @@ class HttpService(
     }
 
     /**
-     * Returns the [LIMIT] most recently recorded [Recorded], [Uploaded] or [Archived] recordings, newest first.
+     * Answers with the page of recordings that the `limit` and `offset` parameters name, or `400` for a parameter that
+     * is not a non-negative integer.
      */
-    private suspend fun latestRecordings(): List<Recording> =
+    private suspend fun RoutingContext.serveRecordings() {
+        val limit = count(call.parameters["limit"], LIMIT)
+        val offset = count(call.parameters["offset"], 0)
+        if (limit == null || offset == null) {
+            call.respond(HttpStatusCode.BadRequest, ErrorResponse("Limit and offset must be non-negative integers"))
+            return
+        }
+        call.respond(recordings(limit.coerceAtMost(MAX_LIMIT), offset))
+    }
+
+    /**
+     * Returns at most [limit] [Recorded], [Uploaded] or [Archived] recordings, most recently recorded first, after
+     * skipping the first [offset] of them.
+     */
+    private suspend fun recordings(
+        limit: Int,
+        offset: Int,
+    ): List<Recording> =
         repository
             .all()
             .filter { it.status in COMPLETED }
             .sortedWith(NEWEST_RECORDED)
-            .take(LIMIT)
+            .drop(offset)
+            .take(limit)
 
     /**
      * One running recording, as `/api/jobs` lists it.
@@ -135,16 +179,60 @@ class HttpService(
         val startedAt: Instant,
     )
 
+    /**
+     * Body of an error response.
+     *
+     * @property error What went wrong.
+     */
+    @Serializable
+    private data class ErrorResponse(
+        val error: String,
+    )
+
     private companion object {
         const val LIMIT = 10
+
+        const val MAX_LIMIT = 50
+
+        val COMPRESSED =
+            arrayOf(
+                ContentType.Text.JavaScript,
+                ContentType.Application.JavaScript,
+                ContentType.Text.CSS,
+                ContentType.Text.Html,
+                ContentType.Application.Json,
+            )
 
         val COMPLETED = setOf(Recorded, Uploaded, Archived)
 
         val NEWEST_RECORDED: Comparator<Recording> =
             compareByDescending<Recording> { it.recordedAt }
                 .thenByDescending { it.demo.timestamp }
+                .thenByDescending { it.demo.capId }
 
         val log = logger<HttpService>()
+
+        /**
+         * Returns [value] as a non-negative integer, or `null` if it is not one. If [value] is `null`, returns [default]
+         * instead.
+         */
+        fun count(
+            value: String?,
+            default: Int,
+        ): Int? =
+            when (value) {
+                null -> default
+                else -> value.toIntOrNull()?.takeIf { it >= 0 }
+            }
+
+        /**
+         * Returns the `Cache-Control` header of the site resource at [path].
+         */
+        fun cacheControl(path: String): String =
+            when {
+                "/web/assets/" in path -> "public, max-age=31536000, immutable"
+                else -> "no-cache"
+            }
 
         fun RecordingJob.toResponse(): JobResponse = JobResponse(demo, attempt, progress?.state, progress?.progress, startedAt)
     }

@@ -12,6 +12,7 @@ dependencies {
     implementation(projects.utrecorderCommon)
     implementation(projects.utrecorderCore)
     implementation(projects.utrecorderUt99)
+    runtimeOnly(projects.utrecorderWeb)
     testImplementation(libs.ktor.client.mock)
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotlinx.coroutines.test)

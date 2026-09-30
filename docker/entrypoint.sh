@@ -6,7 +6,13 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime}"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
 
-Xvfb "$DISPLAY" -screen 0 "${SCREEN_SIZE}x24" -nolisten tcp -ac >/dev/null 2>&1 &
+# /tmp lives in the container's writable layer, so a `docker stop` followed by `docker start` keeps whatever the
+# previous Xvfb left there. The container runs a single display, so its lock file and socket are always stale on a
+# restart: remove them before Xvfb binds $DISPLAY again, or it finds the display already active and exits.
+rm -f "/tmp/.X${DISPLAY#:}-lock"
+rm -f "/tmp/.X11-unix/X${DISPLAY#:}"
+
+Xvfb "$DISPLAY" -screen 0 "${SCREEN_SIZE}x24" -nolisten tcp -ac &
 
 for _ in $(seq 1 100); do
     if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then

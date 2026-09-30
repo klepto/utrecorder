@@ -17,7 +17,10 @@ function removeMockServiceWorker(): Plugin {
   };
 }
 
-export default defineConfig({
+/** The server `npm run dev:server` proxies `/api` and `/demo` to. */
+const serverUrl = "http://localhost:8080";
+
+export default defineConfig(({ mode }) => ({
   plugins: [react(), removeMockServiceWorker()],
   define: {
     __APP_VERSION__: JSON.stringify(process.env.UTRECORDER_VERSION ?? "dev"),
@@ -25,6 +28,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    proxy: mode === "server" ? { "/api": serverUrl, "/demo": serverUrl } : undefined,
   },
   build: {
     outDir,
@@ -34,4 +38,4 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["src/test-setup.ts"],
   },
-});
+}));

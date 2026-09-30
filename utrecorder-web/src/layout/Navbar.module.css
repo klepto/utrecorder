@@ -1,0 +1,15 @@
+.link {
+  color: var(--mantine-color-dimmed);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.link:hover,
+.link[aria-current="page"] {
+  color: var(--mantine-color-text);
+}
+
+.menu {
+  background: var(--mantine-color-body);
+  border-bottom: 1px solid var(--mantine-color-dark-4);
+}
