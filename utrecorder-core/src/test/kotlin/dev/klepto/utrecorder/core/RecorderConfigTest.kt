@@ -26,7 +26,7 @@ class RecorderConfigTest :
                     "utrecorder.record.frame_idle_timeout" to "PT20M",
                     "utrecorder.record.arguments" to "-tune zerolatency",
                     "utrecorder.record.motion_blur" to "false",
-                    "utrecorder.record.color_grade" to "false",
+                    "utrecorder.record.motion_blur_samples" to "4",
                     "utrecorder.record.audio_bitrate" to "256k",
                     "utrecorder.record.audio_filter" to "highpass=f=80",
                     "utrecorder.record.audio_offset" to "0.25",
@@ -58,7 +58,7 @@ class RecorderConfigTest :
                 idleTimeout shouldBe 20.minutes
                 arguments shouldBe "-tune zerolatency"
                 motionBlur shouldBe false
-                colorGrade shouldBe false
+                motionBlurSamples shouldBe 4
             }
             with(config.video.linuxMesa) {
                 threads shouldBe 4
@@ -95,7 +95,7 @@ class RecorderConfigTest :
                 idleTimeout shouldBe 300.seconds
                 arguments shouldBe ""
                 motionBlur shouldBe true
-                colorGrade shouldBe true
+                motionBlurSamples shouldBe 2
             }
             with(config.video.linuxMesa) {
                 threads shouldBe 0

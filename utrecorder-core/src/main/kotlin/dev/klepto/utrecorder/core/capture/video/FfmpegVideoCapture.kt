@@ -135,7 +135,7 @@ class FfmpegVideoCapture(
     suspend fun extractHooks(system: Workspace): List<Path> = ARTIFACTS.extractTo(system::get)
 
     /**
-     * Returns the environment the video capture runs under: the port and fps the hook library reads, plus the Linux
+     * Returns the environment the video capture runs under: the port and render fps the hook library reads, plus the Linux
      * environment on Linux.
      */
     fun environment(
@@ -144,7 +144,7 @@ class FfmpegVideoCapture(
     ): Map<String, String> =
         buildMap {
             this["UTRECORDER_PORT"] = port.toString()
-            this["UTRECORDER_FPS"] = config.fps.toString()
+            this["UTRECORDER_FPS"] = config.renderFps().toString()
             if (installation.platform.operatingSystem != WINDOWS) putAll(linuxEnvironment(hooks))
         }
 
@@ -202,7 +202,7 @@ class FfmpegVideoCapture(
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo: the
-     * console's trim command `DemoFrames <fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
+     * console's trim command `DemoFrames <render fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
      * timer reset nearest the run start, `TimerStop <run stop>`, which ends the run one second after the Bunny Track
      * timer stops, `HideMessages`, which keeps chat and progress messages off the recorded HUD,
      * and the command of the recorder's [smoothing] when [VideoCaptureConfig.smoothRecorder] is on. If the demo shows
@@ -210,7 +210,7 @@ class FfmpegVideoCapture(
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
-            this += "DemoFrames %.6f".format(Locale.ROOT, config.fps.toDouble())
+            this += "DemoFrames %.6f".format(Locale.ROOT, config.renderFps().toDouble())
             description.runStart?.let {
                 this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
             }

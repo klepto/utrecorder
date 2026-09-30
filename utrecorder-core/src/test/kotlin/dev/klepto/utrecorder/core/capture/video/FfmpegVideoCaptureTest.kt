@@ -71,7 +71,7 @@ class FfmpegVideoCaptureTest :
 
         test("environment holds the port and the fps, and nothing else on Windows") {
             val environment = capture().environment(100, hooks)
-            val expected = mapOf("UTRECORDER_PORT" to "100", "UTRECORDER_FPS" to "60")
+            val expected = mapOf("UTRECORDER_PORT" to "100", "UTRECORDER_FPS" to "120")
 
             when (UtPlatform.current()) {
                 UtPlatform.WINDOWS -> environment shouldBe expected
@@ -179,14 +179,14 @@ class FfmpegVideoCaptureTest :
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, demoFrameInterval = 2.998.milliseconds)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30)).execScript(description) shouldBe
-                listOf("DemoFrames 30.000000", "HideMessages", "SmoothRecorder 0.002998 0.030 0.015")
+                listOf("DemoFrames 60.000000", "HideMessages", "SmoothRecorder 0.002998 0.030 0.015")
         }
 
         test("execScript leaves the recorder unsmoothed when the config turns smoothing off") {
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, demoFrameInterval = 2.998.milliseconds)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30, smoothRecorder = false)).execScript(description) shouldBe
-                listOf("DemoFrames 30.000000", "HideMessages")
+                listOf("DemoFrames 60.000000", "HideMessages")
         }
 
         test("execScript waits for the timer reset and the timer stop at the demo times the run starts and stops at") {
@@ -194,6 +194,6 @@ class FfmpegVideoCaptureTest :
                 DemoPlaybackConfig.of("staged-demo", Duration.ZERO, runStart = 10.120962.seconds, runStop = 64.572962.seconds)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 60, smoothRecorder = false)).execScript(description) shouldBe
-                listOf("DemoFrames 60.000000", "TimerReset 10.120962", "TimerStop 64.572962", "HideMessages")
+                listOf("DemoFrames 120.000000", "TimerReset 10.120962", "TimerStop 64.572962", "HideMessages")
         }
     })

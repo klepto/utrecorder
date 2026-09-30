@@ -15,4 +15,12 @@ class VideoCaptureConfigTest :
                     frameRateLimit = 0.0,
                 )
         }
+
+        test("renderFps renders the motion blur samples of every encoded frame") {
+            VideoCaptureConfig(ConfigReader.EMPTY, fps = 60, motionBlurSamples = 4).renderFps() shouldBe 240
+        }
+
+        test("renderFps renders one frame per encoded frame when motion blur is off") {
+            VideoCaptureConfig(ConfigReader.EMPTY, fps = 60, motionBlur = false).renderFps() shouldBe 60
+        }
     })

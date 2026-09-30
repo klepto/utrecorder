@@ -31,7 +31,7 @@ class FrameEncoderTest :
             svtav1Params: String = "tune=0",
             arguments: String = "",
             motionBlur: Boolean = true,
-            colorGrade: Boolean = true,
+            motionBlurSamples: Int = 2,
         ): VideoCaptureConfig =
             VideoCaptureConfig(
                 ConfigReader.EMPTY,
@@ -48,7 +48,7 @@ class FrameEncoderTest :
                 queue = 32,
                 arguments = arguments,
                 motionBlur = motionBlur,
-                colorGrade = colorGrade,
+                motionBlurSamples = motionBlurSamples,
             )
 
         val defaultConfig = videoConfig()
@@ -85,7 +85,7 @@ class FrameEncoderTest :
                 "&recv_buffer_size=${960 * 540 * 4}"
         }
 
-        test("captureArguments describes the raw 10-bit BGRA input by the frame size, fps and frame queue of the config") {
+        test("captureArguments describes the raw 10-bit BGRA input by the frame size, render fps and frame queue of the config") {
             val read = arguments()
             read[0] shouldBe "-y"
             read[1] shouldBe "-f"
@@ -95,21 +95,17 @@ class FrameEncoderTest :
             read[5] shouldBe "-s"
             read[6] shouldBe "960x540"
             read[7] shouldBe "-framerate"
-            read[8] shouldBe "60"
+            read[8] shouldBe "120"
             read[9] shouldBe "-thread_queue_size"
             read[10] shouldBe "32"
         }
 
-        test("captureArguments flips the frames, grades them, converts them to BT.709 limited-range yuv420p10le and blends them for a light motion blur") {
+        test("captureArguments flips and converts the frames to BT.709 limited-range yuv420p10le, then blends them") {
             val read = arguments()
             read[13] shouldBe "-vf"
             read[14] shouldBe
-                "vflip,format=gbrp10le,vibrance=intensity=0.15," +
-                "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
-                "lut=y='clip(pow(clip((val-(minval+maxval)/2)*1.05+(minval+maxval)/2\\,minval\\,maxval)/maxval\\,1/0.98)*maxval\\,minval\\,maxval)':" +
-                "u='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)':" +
-                "v='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)'," +
-                "tmix=frames=2:weights='1 1'"
+                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
+                "tmix=frames=3:weights='1 2 1',framestep=2"
             read[15] shouldBe "-map"
             read[16] shouldBe "0:v:0"
             read[17] shouldBe "-c:v"
@@ -143,18 +139,18 @@ class FrameEncoderTest :
         }
 
         test("captureArguments leaves out the frame blend when motion blur is off") {
-            val read = arguments(videoConfig(motionBlur = false, colorGrade = false))
+            val read = arguments(videoConfig(motionBlur = false))
             read[14] shouldBe
                 "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
-            read shouldNotContainAnyOf listOf("tmix=frames=2:weights='1 1'")
+            read[8] shouldBe "60"
         }
 
-        test("captureArguments leaves out the color grade when it is off") {
-            val read = arguments(videoConfig(colorGrade = false))
+        test("captureArguments blends as many frames as the motion blur samples") {
+            val read = arguments(videoConfig(motionBlurSamples = 4))
+            read[8] shouldBe "240"
             read[14] shouldBe
                 "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
-                "tmix=frames=2:weights='1 1'"
-            read shouldNotContainAnyOf listOf("vibrance=intensity=0.15", "gbrp10le")
+                "tmix=frames=5:weights='1 2 2 2 1',framestep=4"
         }
 
         test("captureArguments passes the bitrate as the average when the rate factor is blank") {

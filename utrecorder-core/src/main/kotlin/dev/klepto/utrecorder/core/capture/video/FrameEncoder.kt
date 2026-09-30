@@ -25,23 +25,6 @@ private const val STREAM_HOST = "127.0.0.1"
 private val log = logger<FrameEncoder>()
 
 /**
- * The `vibrance` filter step of the color grade, run on planar RGB: `vibrance` has no packed or YUV pixel format
- * support, so it runs before the frames are converted to YUV.
- */
-private const val VIBRANCE = "vibrance=intensity=0.15"
-
-/**
- * The `lut` filter step of the color grade, run on the converted YUV. ffmpeg's `eq` filter supports only 8-bit
- * pixel formats, so contrast 1.05 and gamma 0.98 are applied to the luma plane and saturation 1.1 scales the two
- * chroma planes around their neutral midpoint, replicating what `eq` does to an 8-bit `yuv420p` at the same
- * settings, without leaving the 10-bit path.
- */
-private const val COLOR_GRADE =
-    "lut=y='clip(pow(clip((val-(minval+maxval)/2)*1.05+(minval+maxval)/2\\,minval\\,maxval)/maxval\\,1/0.98)*maxval\\,minval\\,maxval)':" +
-        "u='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)':" +
-        "v='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)'"
-
-/**
  * An ffmpeg capture that encodes the raw frames the hook library streams over loopback TCP into the final codec.
  * Run it through [encode].
  *
@@ -87,7 +70,7 @@ class FrameEncoder(
         buildList {
             this += listOf("-y", "-f", "rawvideo", "-pix_fmt", "x2rgb10le")
             this += listOf("-s", "${config.width}x${config.height}")
-            this += listOf("-framerate", config.fps.toString())
+            this += listOf("-framerate", config.renderFps().toString())
             this += listOf("-thread_queue_size", config.queue.toString())
             this += listOf("-i", streamUrl())
             this += listOf("-vf", videoFilter())
@@ -106,18 +89,23 @@ class FrameEncoder(
         }
 
     /**
-     * Returns the `-vf` filter chain: a vertical flip, the color grade of [VideoCaptureConfig.colorGrade], a
-     * BT.709 limited-range conversion to the encoder's 10-bit 4:2:0 pixel format with accurate chroma downsampling,
-     * and a light frame blend of the converted frames when [VideoCaptureConfig.motionBlur] is on.
+     * Returns the `-vf` filter chain: a vertical flip, a BT.709 limited-range conversion to the encoder's 10-bit 4:2:0 pixel format with accurate chroma downsampling,
+     * and, when [VideoCaptureConfig.motionBlur] is on, a motion blur of the converted frames.
      */
     private fun videoFilter(): String {
-        val grade = if (config.colorGrade) "format=gbrp10le,$VIBRANCE," else ""
-        val gradeAfterConvert = if (config.colorGrade) ",$COLOR_GRADE" else ""
-        val blend = if (config.motionBlur) ",tmix=frames=2:weights='1 1'" else ""
-        return "vflip,$grade" +
-            "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le" +
-            gradeAfterConvert +
+        val blend = if (config.motionBlur) ",${motionBlur()}" else ""
+        return "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le" +
             blend
+    }
+
+    /**
+     * Returns the motion blur step: every [VideoCaptureConfig.motionBlurSamples] rendered frames blended into one, at
+     * full weight, with the rendered frame on either side of them at half weight.
+     */
+    private fun motionBlur(): String {
+        val samples = config.motionBlurSamples
+        val weights = listOf(1) + List(samples - 1) { 2 } + listOf(1)
+        return "tmix=frames=${samples + 1}:weights='${weights.joinToString(" ")}',framestep=$samples"
     }
 
     /**

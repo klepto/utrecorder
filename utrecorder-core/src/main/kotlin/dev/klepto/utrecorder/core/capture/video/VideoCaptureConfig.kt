@@ -13,7 +13,7 @@ import kotlin.time.Duration.Companion.seconds
  * literal default. Without arguments, it reads the configuration of the current process.
  *
  * @param reader The source of the `record.*` keys.
- * @property fps The rendered frames per demo second the video capture is locked to.
+ * @property fps The frames per demo second of the encoded video.
  * @property codec The ffmpeg video encoder the capture encodes into while the demo renders.
  * @property preset The encoder preset handed to codecs that take one, blank when the encoder has none.
  * @property crf The constant rate factor the encode targets, blank for an encode at an average [bitrate].
@@ -31,10 +31,10 @@ import kotlin.time.Duration.Companion.seconds
  * window covers the startup of the game before its first frame, so it outlasts the startup timeout of a playback.
  * @property arguments Extra arguments appended to the capture command line, split on spaces.
  * @property smoothRecorder Whether the capture smooths the movement and view of the player who recorded the demo.
- * @property motionBlur Whether the capture blends each frame with the previous one, a light 50/50 mix that softens
- * motion and helps the encode compress it.
- * @property colorGrade Whether the capture applies a light color grade to the converted frames: a vibrance lift and
- * a contrast, saturation and gamma tweak.
+ * @property motionBlur Whether the capture renders [motionBlurSamples] frames for every encoded frame and blends them
+ * into one, together with half of the rendered frame before them. The blur softens motion and helps the encode
+ * compress it.
+ * @property motionBlurSamples The rendered frames of every encoded frame when [motionBlur] is on.
  * @property linuxMesa The Mesa tuning of the video capture on Linux.
  */
 class VideoCaptureConfig(
@@ -58,11 +58,21 @@ class VideoCaptureConfig(
     val arguments: String = reader.get("record.arguments", ""),
     val smoothRecorder: Boolean = reader.get("record.smooth_recorder", true, String::toBoolean),
     val motionBlur: Boolean = reader.get("record.motion_blur", true, String::toBoolean),
-    val colorGrade: Boolean = reader.get("record.color_grade", true, String::toBoolean),
+    val motionBlurSamples: Int = reader.get("record.motion_blur_samples", 2, String::toInt),
     val linuxMesa: LinuxMesaConfig = LinuxMesaConfig(reader),
 ) {
     /**
      * Returns the viewport of the video capture: the configured resolution and no frame rate limit.
      */
     fun viewport(): DemoPlaybackViewport = DemoPlaybackViewport(width = width, height = height, frameRateLimit = 0.0)
+
+    /**
+     * Returns the rendered frames per demo second the video capture is locked to: [fps] times [motionBlurSamples] when
+     * [motionBlur] is on, otherwise [fps].
+     */
+    fun renderFps(): Int =
+        when {
+            motionBlur -> fps * motionBlurSamples
+            else -> fps
+        }
 }
