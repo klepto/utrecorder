@@ -18,6 +18,8 @@ import kotlin.time.Instant
  * @property recordedAt The time the mp4 was stored, or `null` if it was not recorded by the server.
  * @property processingTime The time the last attempt took to produce the mp4, or `null` if it was not recorded by
  * the server.
+ * @property itemId The id passed to `MediaUploader` for the item the mp4 was uploaded into, or `null` if the mp4 is not
+ * in the Archive, or its file there has been deleted.
  */
 @Serializable
 data class Recording(
@@ -30,6 +32,7 @@ data class Recording(
     val lastView: Instant? = null,
     val recordedAt: Instant? = null,
     val processingTime: Duration? = null,
+    val itemId: String? = null,
 )
 
 /**
@@ -53,10 +56,11 @@ enum class RecordingStatus {
     Archived,
 
     /**
-     * Recorded, but its mp4 was deleted before it was uploaded, to keep the recordings directory within its size limit.
-     * Pending again when it is viewed.
+     * Recorded, uploaded or archived, then beaten by a faster recording of the same player on the same map that has an
+     * mp4. Kept as a tombstone, with every other field unchanged. Its [Recording.lastUpdate] is the time it became
+     * outdated.
      */
-    Evicted,
+    Outdated,
 
     /** Given up on after its last capture failed. Pending again when a [RecordingRepository] is opened. */
     Failed,

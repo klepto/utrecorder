@@ -9,6 +9,8 @@ import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
+import dev.klepto.utrecorder.core.demo.DemoPlaybackHooks
+import dev.klepto.utrecorder.core.demo.DemoPlaybackMark
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.MediaTool
@@ -20,10 +22,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
-import kotlin.io.path.getLastModifiedTime
 import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Duration
@@ -31,14 +35,15 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
 
 /**
- * The audio capture of a recording: Unreal Tournament run at real speed with sound on, writing a wav through the OpenAL
- * wave output.
+ * The audio capture of a recording: Unreal Tournament run with sound on and the hook library loaded, writing a wav
+ * through the OpenAL wave output, its clock stepped one mixer period of the wav at a time.
  *
- * Use the constructor to create one. A capture stages the demo through a [DemoPlayback], and plays the demo windowed
- * and with sound. The run is killed once [DemoPlaybackConfig.timeout] has passed. The wav is placed by the marks the
- * run logged and moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in
- * the wav out of the demo's duration, read once a second while the run plays. A run that produces no wav, no marks, or
- * marks outside its wav fails with an [IllegalStateException].
+ * Use the constructor to create one. A capture stages the demo through a [DemoPlayback], extracts the hooks into a
+ * workspace of its own, and plays the demo windowed and with sound. The run is killed once
+ * [DemoPlaybackConfig.timeout] has passed. The wav is placed by the marks the run logged and moved into a workspace of
+ * the capture's own. The progress of a capture is the seconds of audio in the wav out of the demo's duration, read once
+ * a second while the run plays. A run that produces no wav, no marks, or marks outside its wav fails with an
+ * [IllegalStateException].
  *
  * @property config The audio capture configuration, carrying the sound viewport and its frame rate limit.
  * @property installation The installation the capture runs in.
@@ -63,10 +68,11 @@ class OpenalAudioCapture(
         workspace(AUDIO_CAPTURE, config = directories) { output ->
             playback.play(demo, STAGED_DEMO_PREFIX, AUDIO_CAPTURE) { description, system ->
                 val wav = system[WAVE_NAME]
+                val run = process(description, openAl(system), DemoPlaybackHooks.extract(system))
                 val result =
                     coroutineScope {
                         val progress = launch { reportProgress(wav, description, onProgress) }
-                        process(description, openAl(system)).launch(description.timeout).also { progress.cancel() }
+                        run.launch(description.timeout).also { progress.cancel() }
                     }
                 val track = track(wav, result.log, ffmpeg.duration(wav))
                 track.copy(file = wav.move(output[WAVE_NAME]))
@@ -107,25 +113,38 @@ class OpenalAudioCapture(
     }
 
     /**
-     * Returns the unstarted run that plays [description] under [openAlEnvironment]: with sound, and playing the exec
-     * script.
+     * Returns the environment the hook library reads: the sample rate of the wav and the samples of one mixer period,
+     * which put the hook library in audio mode.
      */
-    private fun process(
+    fun environment(): Map<String, String> =
+        mapOf(
+            "UTRECORDER_AUDIO_RATE" to WAVE_RATE.toString(),
+            "UTRECORDER_AUDIO_PERIOD" to WAVE_PERIOD.toString(),
+        )
+
+    /**
+     * Returns the unstarted run that plays [description] under [openAlEnvironment] with the hook library of [hooks]
+     * loaded: with sound, and playing the exec script.
+     */
+    fun process(
         description: DemoPlaybackConfig,
         openAlEnvironment: Map<String, String>,
+        hooks: List<Path>,
     ): UtProcess =
         playback.process(AUDIO_CAPTURE, description, config.viewport()) {
+            DemoPlaybackHooks.inject(this, hooks)
             exec += execScript(description)
             sound = true
             environment += openAlEnvironment
+            environment += this@OpenalAudioCapture.environment()
         }
 
     /**
      * Returns the audio track in [wavFile], placed by the marks the run logged in [log].
      *
-     * [wavDuration] is the length of the wav in seconds. The wav was opened [wavDuration] before its last-modified
-     * time, and the track starts as far into the wav as the start mark's wall time lies after that. The track runs for
-     * the wall time between the two marks.
+     * The hook library reports the position of the wav output as the date of the game, counted from [WAVE_EPOCH], so
+     * the date of a mark is its position in the wav. The track starts at the start mark and runs to the end mark.
+     * [wavDuration] is the length of the wav in seconds.
      *
      * @throws IllegalStateException when [wavFile] does not exist, [log] holds no start mark or no end mark, or the
      * marks fall outside the wav.
@@ -138,17 +157,16 @@ class OpenalAudioCapture(
         check(withContext(Dispatchers.IO) { wavFile.exists() }) { "The audio capture produced no $WAVE_NAME" }
 
         val marks = DemoPlaybackMarks.parse(log)
-        val opened = withContext(Dispatchers.IO) { wavFile.getLastModifiedTime() }.toMillis() / 1000.0 - wavDuration
-        val offset = marks.start.wallTime.toEpochMilli() / 1000.0 - opened
+        val start = wavePosition(marks.start)
+        val end = wavePosition(marks.end)
         val span = marks.end.demoTime - marks.start.demoTime
-        val length = (marks.end.wallTime.toEpochMilli() - marks.start.wallTime.toEpochMilli()) / 1000.0
-        check(offset >= 0) { "The audio capture's marks fall outside $WAVE_NAME" }
+        check(start >= 0 && end <= wavDuration) { "The audio capture's marks fall outside $WAVE_NAME" }
         check(span > Duration.ZERO) { "The audio capture's marks fall outside $WAVE_NAME" }
 
         return AudioTrack(
             file = wavFile,
-            offset = offset,
-            length = length,
+            offset = start,
+            length = end - start,
             demoEnd = marks.end.demoTime.toDouble(DurationUnit.SECONDS),
         )
     }
@@ -189,15 +207,39 @@ class OpenalAudioCapture(
         private const val WAVE_NAME = "audio.wav"
 
         /**
-         * The bytes the OpenAL wave output writes for each second of audio: 44100 stereo int16 samples.
+         * The sample rate of the wav.
          */
-        private const val WAVE_BYTES_PER_SECOND = 44100.0 * 2 * 2
+        private const val WAVE_RATE = 44100
+
+        /**
+         * The samples the OpenAL mixer renders at a time, which are also the samples of one clock step of the run.
+         */
+        private const val WAVE_PERIOD = 512
+
+        /**
+         * The bytes the OpenAL wave output writes for each second of audio: [WAVE_RATE] stereo int16 samples.
+         */
+        private const val WAVE_BYTES_PER_SECOND = WAVE_RATE * 2 * 2.0
+
+        /**
+         * The date the hook library counts the position of the wav output from.
+         */
+        private val WAVE_EPOCH = LocalDateTime.of(2000, 1, 1, 0, 0)
+
+        /**
+         * Returns the position of [mark] in the wav, in seconds: the time from [WAVE_EPOCH] to the date of [mark].
+         */
+        private fun wavePosition(mark: DemoPlaybackMark): Double {
+            val epoch = WAVE_EPOCH.atZone(ZoneId.systemDefault()).toInstant()
+            return ChronoUnit.MILLIS.between(epoch, mark.wallTime) / 1000.0
+        }
 
         /**
          * Returns the OpenAL configuration that writes stereo int16 wave output to [wavName], a path relative to the
-         * game binary.
+         * game binary, one mixer period of [WAVE_PERIOD] samples at a time.
          */
         private fun waveConf(wavName: String): String =
-            "[general]\ndrivers = wave\nfrequency = 44100\nchannels = stereo\nsample-type = int16\n\n[wave]\nfile = $wavName\n"
+            "[general]\ndrivers = wave\nfrequency = $WAVE_RATE\nchannels = stereo\nsample-type = int16\n" +
+                "period_size = $WAVE_PERIOD\n\n[wave]\nfile = $wavName\n"
     }
 }

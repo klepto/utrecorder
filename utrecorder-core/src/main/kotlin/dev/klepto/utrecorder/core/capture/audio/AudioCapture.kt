@@ -4,7 +4,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import java.nio.file.Path
 
 /**
- * The audio capture of a recording: a demo played at real speed with sound on, its audio written to an [AudioTrack].
+ * The audio capture of a recording: a demo played with sound on, its audio written to an [AudioTrack].
  *
  * [OpenalAudioCapture] runs it through Unreal Tournament with the OpenAL wave output.
  */

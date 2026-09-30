@@ -14,6 +14,7 @@ import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
@@ -92,6 +93,16 @@ class HttpServiceTest :
                     id: String,
                     md5: String,
                 ): Boolean = true
+
+                override suspend fun describe(
+                    id: String,
+                    metadata: MediaMetadata,
+                ) {}
+
+                override suspend fun delete(
+                    id: String,
+                    name: String,
+                ) {}
 
                 override fun downloadUrl(
                     id: String,
@@ -222,6 +233,42 @@ class HttpServiceTest :
         test("answers 404 for a recorded recording whose mp4 is missing") {
             http(mapOf("missing" to Recorded)) {
                 client.get("/demo/missing").status shouldBe HttpStatusCode.NotFound
+            }
+        }
+
+        test("serves an outdated recording from disk while its mp4 exists") {
+            http(mapOf("outdated" to Outdated), listOf("outdated")) {
+                client.get("/demo/outdated").bodyAsText() shouldBe "0123456789"
+            }
+        }
+
+        test("answers 404 without redirecting for an outdated recording whose mp4 is gone") {
+            http(mapOf("outdated" to Outdated)) {
+                val response = createClient { followRedirects = false }.get("/demo/outdated")
+
+                response.status shouldBe HttpStatusCode.NotFound
+            }
+        }
+
+        test("lists an outdated recording while its mp4 exists, in the same order as the others") {
+            http(
+                mapOf("outdated" to Outdated, "recorded" to Recorded),
+                listOf("outdated", "recorded"),
+            ) { repository ->
+                now.set(Instant.parse("2026-09-27T00:00:00Z"))
+                repository.recorded("outdated", 1.hours)
+                now.set(Instant.parse("2026-09-27T01:00:00Z"))
+                repository.recorded("recorded", 1.hours)
+                repository.finish("outdated", Outdated)
+                repository.finish("recorded", Recorded)
+
+                capIds(client.get("/api/recordings").bodyAsText()) shouldBe listOf("recorded", "outdated")
+            }
+        }
+
+        test("drops an outdated recording once its mp4 is gone") {
+            http(mapOf("outdated" to Outdated)) {
+                capIds(client.get("/api/recordings").bodyAsText()) shouldBe emptyList()
             }
         }
 

@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.server.recording
 
-import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.logger
@@ -9,15 +8,14 @@ import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
+import dev.klepto.utrecorder.server.recording.RecordingStatus.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -28,9 +26,13 @@ import kotlin.time.measureTimedValue
  * [Service] that records the demos of [demos] into [ServerConfig.recordings], in the order [repository] gives them.
  *
  * Only the fastest demo of each player on each map is recorded. Players are told apart by [Demo.userId]. Of two
- * demos with the same cap time, the one added first is recorded. A demo without a [Demo.userId] is always recorded.
- * Whenever [demos] changes, a recording of each such demo is stored in [repository], and every recording that has not
- * been recorded and whose demo is no longer among them is removed.
+ * demos with the same cap time, the one added first is recorded. A demo without a [Demo.userId] is never recorded.
+ * Whenever [demos] changes, and after each capture ends, a recording of each such demo is stored in [repository].
+ *
+ * A [Recorded], [Uploaded] or [Archived] recording stays chosen until a faster recording of the same player on the same
+ * map is [Recorded], [Uploaded] or [Archived] as well; it is set to [Outdated] then. Every recording that has not been
+ * recorded and whose demo is no longer chosen is removed. A [RecordingStatus.Recording] one is left alone until its
+ * capture ends.
  *
  * On start, every [RecordingStatus.Recording], [Failed] or [Unresolvable] recording of [repository] is set to [Pending]
  * again, before any demo is taken.
@@ -56,6 +58,8 @@ class RecordingService(
     private val config: ServerConfig = ServerConfig(),
     private val jobs: RecordingJobs = RecordingJobs(),
 ) : Service {
+    private val queueing = Mutex()
+
     init {
         require(recorders.isNotEmpty()) { "Recorders must not be empty" }
     }
@@ -76,15 +80,20 @@ class RecordingService(
     }
 
     /**
-     * Stores a recording of the fastest demo of each player on each map in [repository], and removes every recording
-     * that has not been recorded and whose demo is not among them.
+     * Stores a recording of the fastest demo of each player on each map in [repository]. Chooses those demos, and the
+     * fastest [COMPLETED] recording of each player on each map. Removes every recording that has not been recorded and
+     * whose demo is not chosen, and sets every [COMPLETED] recording whose demo is not chosen to [Outdated].
      */
-    private suspend fun queueFastest() {
-        val fastest = fastest(demos.all())
-        val capIds = fastest.mapTo(HashSet()) { it.capId }
-        repository += fastest
-        repository.retainUnrecorded { it in capIds }
-    }
+    private suspend fun queueFastest(): Unit =
+        queueing.withLock {
+            val fastest = fastest(demos.all())
+            repository += fastest
+            val completed = repository.all().filter { it.status in COMPLETED }
+            val chosen = (fastest + fastest(completed.map { it.demo })).mapTo(HashSet()) { it.capId }
+            val beaten = completed.map { it.demo.capId }.filterTo(HashSet()) { it !in chosen }
+            repository.retainUnrecorded { it in chosen }
+            repository.updateAll { if (it.demo.capId in beaten && it.status in COMPLETED) it.copy(status = Outdated) else it }
+        }
 
     /**
      * Records the demos of [repository] on this recorder, one at a time.
@@ -94,10 +103,12 @@ class RecordingService(
             val demo = repository.take()
             if (config.mp4(demo.capId).fileExists()) {
                 repository.finish(demo.capId, Recorded)
+                queueFastest()
                 continue
             }
             val (result, processingTime) = recordTracked(demo)
             processRecording(demo, result, processingTime)
+            queueFastest()
             delay(config.recordingCooldown)
         }
     }
@@ -177,13 +188,15 @@ class RecordingService(
         recordingPath: Path,
     ) {
         recordingPath.move(config.mp4(demo.capId))
-        recordingPath.parent
-            .deleteCatching()
-            .onFailure { log.warn(it) { "Could not delete the workspace ${recordingPath.parent}" } }
+//        recordingPath.parent
+//            .deleteCatching()
+//            .onFailure { log.warn(it) { "Could not delete the workspace ${recordingPath.parent}" } }
     }
 
     private companion object {
         val REQUEUED = setOf(RecordingStatus.Recording, Failed, Unresolvable)
+
+        val COMPLETED = setOf(Recorded, Uploaded, Archived)
 
         val FASTEST_FIRST: Comparator<Demo> =
             compareBy<Demo> { it.capTime }
@@ -193,11 +206,12 @@ class RecordingService(
 
         /**
          * Returns the fastest of [demos] for each player on each map, oldest first. A demo without a [Demo.userId] is
-         * always returned.
+         * never returned.
          */
         fun fastest(demos: List<Demo>): List<Demo> =
             demos
-                .groupBy { (it.userId ?: it.capId) to it.map }
+                .filter { it.userId != null }
+                .groupBy { it.userId to it.map }
                 .values
                 .map { it.minWith(FASTEST_FIRST) }
                 .sortedBy { it.timestamp }

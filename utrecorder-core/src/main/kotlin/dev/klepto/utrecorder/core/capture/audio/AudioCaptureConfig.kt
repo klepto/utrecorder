@@ -17,7 +17,8 @@ import dev.klepto.utrecorder.core.demo.DemoPlaybackViewport
  * @property render Whether the audio capture draws frames; disabling it also collapses its marks.
  * @property width The viewport width of the audio capture.
  * @property height The viewport height of the audio capture.
- * @property fps The frame rate cap of the audio capture, which is also its console tick rate.
+ * @property fps The frame rate cap of the audio capture in real time. Its clock steps one mixer period of the wav per
+ * frame whatever the cap, so the cap only slows the run down.
  */
 class AudioCaptureConfig(
     reader: ConfigReader = SystemConfigReader(),

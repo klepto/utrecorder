@@ -51,7 +51,6 @@ class DemoPlayback(
                 prefix + IDS.next(),
                 parsed.duration,
                 parsed.packages,
-                parsed.frameInterval,
                 parsed.cap?.runStart,
                 parsed.cap?.runStop,
             )

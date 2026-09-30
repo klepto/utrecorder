@@ -16,14 +16,11 @@ import io.kotest.matchers.string.shouldStartWith
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
-import java.nio.file.attribute.FileTime
-import java.time.LocalDateTime
-import java.time.ZoneId
+import kotlin.io.path.absolutePathString
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.readText
-import kotlin.io.path.setLastModifiedTime
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 import kotlin.math.PI
@@ -43,8 +40,8 @@ class OpenalAudioCaptureTest :
         val config = AudioCaptureConfig(ConfigReader.EMPTY)
         val log =
             listOf(
-                "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 0 4567 12.5",
-                "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 45 0 98765 300.75",
+                "ScriptLog: UTRecorder: mark start 2000 1 1 0 0 6 0 4567 12.5",
+                "ScriptLog: UTRecorder: mark end 2000 1 1 0 5 46 0 98765 300.75",
             )
 
         afterSpec {
@@ -52,8 +49,6 @@ class OpenalAudioCaptureTest :
         }
 
         fun capture(settings: AudioCaptureConfig = config) = OpenalAudioCapture(settings, installation, directories)
-
-        fun wallClock(text: String): FileTime = FileTime.from(LocalDateTime.parse(text).atZone(ZoneId.systemDefault()).toInstant())
 
         fun writeWav(path: Path): Path {
             val sampleRate = 8000
@@ -89,7 +84,8 @@ class OpenalAudioCaptureTest :
                 conf shouldBe workspace["alsoft.conf"].toAbsolutePath()
                 conf.fileName.toString() shouldStartWith "audio-capture-"
                 conf.readText() shouldBe
-                    "[general]\ndrivers = wave\nfrequency = 44100\nchannels = stereo\nsample-type = int16\n\n" +
+                    "[general]\ndrivers = wave\nfrequency = 44100\nchannels = stereo\nsample-type = int16\n" +
+                    "period_size = 512\n\n" +
                     "[wave]\nfile = ${workspace["audio.wav"].fileName}\n"
                 environment["ALSOFT_DRIVERS"] shouldBe "wave"
                 environment["ALSOFT_LOGLEVEL"] shouldBe "2"
@@ -103,6 +99,36 @@ class OpenalAudioCaptureTest :
                 }
 
             conf() shouldNotBe conf()
+        }
+
+        test("environment puts the hook library in audio mode at the sample rate and the mixer period of the wav") {
+            capture().environment() shouldBe mapOf("UTRECORDER_AUDIO_RATE" to "44100", "UTRECORDER_AUDIO_PERIOD" to "512")
+        }
+
+        test("process loads the hook library through the injector on Windows and preloads it on Linux") {
+            val hookLibrary = systemDirectory / "uthooks.dll"
+            val injector = systemDirectory / "utinject.exe"
+            val (files, executable) =
+                workspace("audio-capture", installation.systemDirectory, directories) { workspace ->
+                    val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
+                    val process = capture().process(description, emptyMap(), listOf(hookLibrary, injector))
+                    val files = process.files(workspace)
+                    files to process.executable(files)
+                }
+
+            executable.environment["UTRECORDER_AUDIO_PERIOD"] shouldBe "512"
+            when (UtPlatform.current()) {
+                UtPlatform.WINDOWS -> {
+                    executable.executablePath shouldBe injector
+                    executable.arguments[0] shouldBe hookLibrary.absolutePathString()
+                    executable.arguments[1] shouldBe files.executable.absolutePathString()
+                }
+
+                UtPlatform.LINUX -> {
+                    executable.executablePath shouldBe files.executable
+                    executable.environment["LD_PRELOAD"] shouldBe hookLibrary.absolutePathString()
+                }
+            }
         }
 
         test("execScript rewinds the demo to the start") {
@@ -123,9 +149,8 @@ class OpenalAudioCaptureTest :
 
         test("track starts 6 seconds into the wav and runs for the 5 minutes 40 seconds between the marks") {
             val wav = writeWav(home / "audio.wav")
-            wav.setLastModifiedTime(wallClock("2026-09-13T10:30:11"))
 
-            capture().track(wav, log, 12.0) shouldBe
+            capture().track(wav, log, 400.0) shouldBe
                 AudioTrack(
                     file = wav,
                     offset = 6.0,
@@ -135,7 +160,7 @@ class OpenalAudioCaptureTest :
         }
 
         test("track fails naming the wav when the wav does not exist") {
-            val failure = shouldThrow<IllegalStateException> { capture().track(home / "missing.wav", log, 12.0) }
+            val failure = shouldThrow<IllegalStateException> { capture().track(home / "missing.wav", log, 400.0) }
 
             failure.message shouldContain "audio.wav"
         }
@@ -143,30 +168,41 @@ class OpenalAudioCaptureTest :
         test("track fails naming the missing mark when the log holds no end mark") {
             val wav = writeWav(home / "audio.wav")
 
-            val failure = shouldThrow<IllegalStateException> { capture().track(wav, log.dropLast(1), 12.0) }
+            val failure = shouldThrow<IllegalStateException> { capture().track(wav, log.dropLast(1), 400.0) }
 
             failure.message shouldContain "end mark"
         }
 
         test("track fails when the end mark lies no later in the demo than the start mark") {
             val wav = writeWav(home / "audio.wav")
-            wav.setLastModifiedTime(wallClock("2026-09-13T10:30:11"))
             val invertedLog =
                 listOf(
-                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 0 4567 12.5",
-                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 45 0 98765 10.0",
+                    "ScriptLog: UTRecorder: mark start 2000 1 1 0 0 6 0 4567 12.5",
+                    "ScriptLog: UTRecorder: mark end 2000 1 1 0 5 46 0 98765 10.0",
                 )
 
-            val failure = shouldThrow<IllegalStateException> { capture().track(wav, invertedLog, 12.0) }
+            val failure = shouldThrow<IllegalStateException> { capture().track(wav, invertedLog, 400.0) }
 
             failure.message shouldContain "outside"
         }
 
-        test("track fails when the start mark lies before the wav was opened") {
+        test("track fails when the end mark lies past the end of the wav") {
             val wav = writeWav(home / "audio.wav")
-            wav.setLastModifiedTime(wallClock("2026-09-13T10:30:40"))
 
-            val failure = shouldThrow<IllegalStateException> { capture().track(wav, log, 12.0) }
+            val failure = shouldThrow<IllegalStateException> { capture().track(wav, log, 300.0) }
+
+            failure.message shouldContain "outside"
+        }
+
+        test("track fails when the marks carry the wall clock rather than the position in the wav") {
+            val wav = writeWav(home / "audio.wav")
+            val wallClockLog =
+                listOf(
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 0 4567 12.5",
+                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 45 0 98765 300.75",
+                )
+
+            val failure = shouldThrow<IllegalStateException> { capture().track(wav, wallClockLog, 400.0) }
 
             failure.message shouldContain "outside"
         }

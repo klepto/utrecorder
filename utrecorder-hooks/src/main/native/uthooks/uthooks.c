@@ -1,17 +1,24 @@
 /*
  * Hook library loaded into the Unreal Tournament process. It steps the engine clocks by a fixed amount per presented
- * frame, and sends every frame presented while the demo plays to the frame socket as raw 10-bit BGRA pixels.
+ * frame, and sends every frame presented while the demo plays to the frame socket as raw 10-bit BGRA pixels. In audio
+ * mode it steps the engine clocks by one mixer period of the OpenAL wave output per presented frame instead, and lets
+ * the mixer render exactly that period before the next frame.
  */
 
 #ifdef _WIN32
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
 #include <winsock2.h>
 #include <windows.h>
 #else
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <dlfcn.h>
+#include <errno.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -51,6 +58,27 @@
 
 /* Clock steps in one frame. Before the demo plays, a presented frame advances the clocks by one step instead. */
 #define CLOCK_PREROLL_STEPS 20
+
+/* Highest sample rate UTRECORDER_AUDIO_RATE accepts, and highest period UTRECORDER_AUDIO_PERIOD accepts. */
+#define AUDIO_MAX_RATE 192000
+#define AUDIO_MAX_PERIOD 8192
+
+/* The part of the file name of the OpenAL Soft library that the mixer clock reads come from on Linux. */
+#define OPENAL_LIBRARY "libopenal"
+
+/* Longest wait of one side of the mixer lock, and how long a presented frame waits for the mixer before it gives up. */
+#define MIXER_WAIT_MS 50
+#define MIXER_STALL_MS 2000
+
+/* Days in each month of a year that is not a leap year. */
+static const int MONTH_DAYS[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+/* A variable of which every thread holds its own copy. */
+#ifdef _MSC_VER
+#define THREAD_LOCAL __declspec(thread)
+#else
+#define THREAD_LOCAL __thread
+#endif
 
 /* Calling convention of the OpenGL entry points. */
 #ifdef _WIN32
@@ -225,9 +253,19 @@ static double clockBaseCompat;
 static long long clockBaseSeconds;
 static long long clockBaseSlow;
 
-/* The frame rate in UTRECORDER_FPS, and the clock steps taken so far. */
+/* The frame rate in UTRECORDER_FPS, and the clock steps taken so far. In audio mode, a clock step is one sample. */
 static long long clockRate;
 static long long clockFrame;
+
+/*
+ * The sample rate in UTRECORDER_AUDIO_RATE and the samples of one mixer period in UTRECORDER_AUDIO_PERIOD. Both are set
+ * in audio mode only.
+ */
+static long long audioRate;
+static long long audioPeriod;
+
+/* Whether both variables were read. */
+static int audioResolved;
 
 /* Clock state: installation tried, clocks patched and stepping, demo started, demo ended. */
 static int clockInstalled;
@@ -259,9 +297,28 @@ static int demoResolved;
 static int captureArmed;
 static int speedHooked;
 
+/* Reads audioRate and audioPeriod on the first call. Leaves both 0 unless both variables are set and in range. */
+static void resolveAudio(void) {
+    if (audioResolved) return;
+    audioResolved = 1;
+    audioRate = environmentNumber("UTRECORDER_AUDIO_RATE", AUDIO_MAX_RATE);
+    audioPeriod = environmentNumber("UTRECORDER_AUDIO_PERIOD", AUDIO_MAX_PERIOD);
+    if (!audioRate || !audioPeriod) audioRate = audioPeriod = 0;
+}
+
 /* Returns the clock steps in one second. */
 static long long clockSteps(void) {
+    if (audioRate) return audioRate;
     return clockRate * CLOCK_PREROLL_STEPS;
+}
+
+/*
+ * Returns the clock steps a presented frame advances the clocks by: one mixer period in audio mode, else one frame while
+ * the demo plays and one step before it.
+ */
+static long long clockStepSize(void) {
+    if (audioRate) return audioPeriod;
+    return clockArmed ? CLOCK_PREROLL_STEPS : 1;
 }
 
 /* Returns the seconds the clocks have stepped since they were patched. */
@@ -284,6 +341,7 @@ static long long clockTicks(void) {
 #define SYMBOL_CYCLE "?GSecondsPerCycle@@3MA"
 #define SYMBOL_CYCLE_LONG "?GSecondsPerCycleLong@@3NA"
 #define SYMBOL_DEMO "?GIsDemoPlayback@@3HA"
+#define SYMBOL_SYSTEM_TIME "?appSystemTime@@YAXAAH0000000@Z"
 #define SET_SPEED_ABI __fastcall
 #define SET_SPEED_ARGS void *self, void *held, void *stack, void *result
 #define SET_SPEED_PASS self, held, stack, result
@@ -485,6 +543,47 @@ static void stepCycles(void) {
     clockCycleCount = clockCycleBase + (unsigned long long) ((double) clockFrame * clockCyclesPerStep);
 }
 
+/* The lock both sides of the mixer lock hold, and the signal each side waits on. */
+static SRWLOCK mixerLock = SRWLOCK_INIT;
+static CONDITION_VARIABLE mixerSignal = CONDITION_VARIABLE_INIT;
+
+/* Performance counter ticks in one second, read on the first call of mixerTicksPerSecond. */
+static long long mixerFrequency;
+
+/* Takes the mixer lock. */
+static void lockMixer(void) {
+    AcquireSRWLockExclusive(&mixerLock);
+}
+
+/* Gives the mixer lock back. */
+static void unlockMixer(void) {
+    ReleaseSRWLockExclusive(&mixerLock);
+}
+
+/* Wakes every thread waiting in waitMixer. */
+static void wakeMixer(void) {
+    WakeAllConditionVariable(&mixerSignal);
+}
+
+/* Waits in the mixer lock for a wake, for at most millis. Returns 0 when the wait timed out. */
+static int waitMixer(int millis) {
+    return SleepConditionVariableSRW(&mixerSignal, &mixerLock, (DWORD) millis, 0) || GetLastError() != ERROR_TIMEOUT;
+}
+
+/* Returns the ticks of the clock the mixer reads in one second. */
+static long long mixerTicksPerSecond(void) {
+    LARGE_INTEGER frequency;
+    if (!mixerFrequency && QueryPerformanceFrequency(&frequency)) mixerFrequency = frequency.QuadPart;
+    return mixerFrequency;
+}
+
+/* Returns the real reading of the clock the mixer reads. */
+static long long readRealMixer(void) {
+    LARGE_INTEGER count;
+    QueryPerformanceCounter(&count);
+    return count.QuadPart;
+}
+
 #else
 
 #define SYMBOL_SECONDS "_Z10appSecondsv"
@@ -495,6 +594,7 @@ static void stepCycles(void) {
 #define SYMBOL_CYCLE "GSecondsPerCycle"
 #define SYMBOL_CYCLE_LONG "GSecondsPerCycleLong"
 #define SYMBOL_DEMO "GIsDemoPlayback"
+#define SYMBOL_SYSTEM_TIME "_Z13appSystemTimeRiS_S_S_S_S_S_S_"
 #define SET_SPEED_ABI
 #define SET_SPEED_ARGS void *self, void *stack, void *result
 #define SET_SPEED_PASS self, stack, result
@@ -587,6 +687,62 @@ static void stepCycles(void) {
 static void releaseCycles(void) {
 }
 
+/* The lock both sides of the mixer lock hold, and the signal each side waits on. */
+static pthread_mutex_t mixerLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t mixerSignal = PTHREAD_COND_INITIALIZER;
+
+/* std::chrono::steady_clock::time_point as i386 System V returns it: through a hidden result pointer. */
+typedef struct {
+    long long ticks;
+} SteadyTime;
+
+typedef SteadyTime (*SteadyNowFunction)(void);
+
+/* The std::chrono::steady_clock::now that the mixer hooks call on. */
+static SteadyNowFunction realSteadyNow;
+
+/* Takes the mixer lock. */
+static void lockMixer(void) {
+    pthread_mutex_lock(&mixerLock);
+}
+
+/* Gives the mixer lock back. */
+static void unlockMixer(void) {
+    pthread_mutex_unlock(&mixerLock);
+}
+
+/* Wakes every thread waiting in waitMixer. */
+static void wakeMixer(void) {
+    pthread_cond_broadcast(&mixerSignal);
+}
+
+/* Waits in the mixer lock for a wake, for at most millis. Returns 0 when the wait timed out. */
+static int waitMixer(int millis) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += millis * 1000000L;
+    deadline.tv_sec += deadline.tv_nsec / 1000000000L;
+    deadline.tv_nsec %= 1000000000L;
+    return pthread_cond_timedwait(&mixerSignal, &mixerLock, &deadline) != ETIMEDOUT;
+}
+
+/* Returns the ticks of the clock the mixer reads in one second. */
+static long long mixerTicksPerSecond(void) {
+    return 1000000000LL;
+}
+
+/* Returns the reading of the real std::chrono::steady_clock::now, or a zero reading when it cannot be resolved. */
+static SteadyTime readRealSteady(void) {
+    SteadyTime zero = {0};
+    if (!realSteadyNow) realSteadyNow = (SteadyNowFunction) dlsym(RTLD_NEXT, "_ZNSt6chrono3_V212steady_clock3nowEv");
+    return realSteadyNow ? realSteadyNow() : zero;
+}
+
+/* Returns the real reading of the clock the mixer reads. */
+static long long readRealMixer(void) {
+    return readRealSteady().ticks;
+}
+
 #endif
 
 /* The appSecondsNew hook. */
@@ -640,9 +796,154 @@ static void clearTimestampGates(void) {
     }
 }
 
+/* Mixer lock state: a mixer thread has read the mixer clock, and the mixer reads the real clock again. */
+static int mixerStarted;
+static int mixerReleased;
+
+/* The real reading at the first mixer read, and the clock step then. The mixer clock counts on from both. */
+static long long mixerBaseTicks;
+static long long mixerBaseFrame;
+
+/* The amount added to the real reading after the mixer is released. */
+static long long mixerOffset;
+
+/* The clock step at which the current mixer thread started, where its wav output begins. */
+static long long waveStart;
+
+/* The clock step of the last mixer read, and the clock step at which the mixer last went idle. */
+static long long mixerRead;
+static long long mixerIdle = -1;
+
+/* The mixer clock reads of the calling thread. Above 0 on a mixer thread only. */
+static THREAD_LOCAL long long mixerThreadReads;
+
 /*
- * Sets the cycle scale so the real cycles between two presented frames count as one frame while the demo plays, and as
- * clockPreroll before it. Does nothing while the sites read the virtual count, after the demo, or without inlined sites.
+ * Returns the mixer clock at clock step frame: the real reading at mixerBaseFrame, plus the samples since then. Unless
+ * start is set, the reading falls half a sample later.
+ */
+static long long mixerClock(long long frame, int start) {
+    long long halfSamples = (frame - mixerBaseFrame) * 2 + (start ? 0 : 1);
+    return mixerBaseTicks + halfSamples * mixerTicksPerSecond() / (audioRate * 2);
+}
+
+/*
+ * Returns the clock the mixer thread reads in place of the real reading real. Until the release, that is the mixer clock
+ * of the current clock step, which moves only when a presented frame advances the clocks. The first read of a mixer
+ * thread is exactly on the step and starts its wav output. Every later read falls half a sample after the step, so the
+ * mixer counts every period up to the step as due and none after it.
+ */
+static long long readMixerClock(long long real) {
+    long long reading;
+    int start = mixerThreadReads++ == 0;
+    lockMixer();
+    if (mixerReleased) {
+        reading = real + mixerOffset;
+    } else {
+        if (!mixerStarted) {
+            mixerStarted = 1;
+            mixerBaseTicks = real;
+            mixerBaseFrame = clockFrame;
+        }
+        if (start) {
+            waveStart = clockFrame;
+            mixerIdle = -1;
+            fprintf(stderr, "uthooks: mixer started at clock sample %lld\n", clockFrame);
+            fflush(stderr);
+        }
+        mixerRead = clockFrame;
+        reading = mixerClock(clockFrame, start);
+    }
+    unlockMixer();
+    return reading;
+}
+
+/*
+ * Holds a mixer thread in place of a sleep. Marks the mixer idle at its last read, since it sleeps only once it has
+ * rendered every period due then, and waits until a presented frame advances the clocks past that read. Returns 0
+ * without waiting when the calling thread is no mixer thread or the mixer is released, so the caller sleeps for real.
+ */
+static int holdMixer(void) {
+    int held;
+    if (!mixerThreadReads) return 0;
+    lockMixer();
+    held = !mixerReleased;
+    if (held) {
+        mixerIdle = mixerRead;
+        wakeMixer();
+        if (clockFrame == mixerRead) waitMixer(MIXER_WAIT_MS);
+    }
+    unlockMixer();
+    return held;
+}
+
+/* Hands the mixer back to the real clock in audio mode, shifted to carry on from the mixer clock, and reports why. */
+static void releaseMixer(const char *reason) {
+    if (!audioRate) return;
+    lockMixer();
+    if (!mixerReleased) {
+        mixerReleased = 1;
+        if (mixerStarted) mixerOffset = mixerClock(clockFrame, 0) - readRealMixer();
+        wakeMixer();
+        fprintf(stderr, "uthooks: mixer released at wave sample %lld, %s\n", clockFrame - waveStart, reason);
+        fflush(stderr);
+    }
+    unlockMixer();
+}
+
+/*
+ * Advances the clocks by one mixer period and waits until the mixer has rendered it. Releases the mixer when it does not
+ * go idle within MIXER_STALL_MS.
+ */
+static void stepMixer(void) {
+    int waited = 0;
+    lockMixer();
+    clockFrame += audioPeriod;
+    wakeMixer();
+    while (mixerStarted && !mixerReleased && mixerIdle != clockFrame && waited < MIXER_STALL_MS) {
+        if (!waitMixer(MIXER_WAIT_MS)) waited += MIXER_WAIT_MS;
+    }
+    unlockMixer();
+    if (waited >= MIXER_STALL_MS) releaseMixer("the mixer stalled");
+}
+
+/* Returns the days in month, counted from 0, of year. */
+static int monthDays(int year, int month) {
+    int leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    return MONTH_DAYS[month] + (month == 1 && leap);
+}
+
+/* Returns the days in year. */
+static int yearDays(int year) {
+    return monthDays(year, 1) + 337;
+}
+
+/*
+ * The appSystemTime hook in audio mode. Reports the position of the wav output as a date, counted from 2000-01-01
+ * 00:00:00.000, a Saturday.
+ */
+static void hookSystemTime(int *year, int *month, int *dayOfWeek, int *day, int *hour, int *minute, int *second,
+                           int *millisecond) {
+    long long millis;
+    long long days;
+    lockMixer();
+    millis = mixerStarted ? (clockFrame - waveStart) * 1000 / audioRate : 0;
+    unlockMixer();
+    days = millis / 86400000;
+    *millisecond = (int) (millis % 1000);
+    *second = (int) (millis / 1000 % 60);
+    *minute = (int) (millis / 60000 % 60);
+    *hour = (int) (millis / 3600000 % 24);
+    *dayOfWeek = (int) ((days + 6) % 7);
+    for (*year = 2000; days >= yearDays(*year); (*year)++) days -= yearDays(*year);
+    for (*month = 0; days >= monthDays(*year, *month); (*month)++) days -= monthDays(*year, *month);
+    (*month)++;
+    *day = (int) days + 1;
+}
+
+/*
+ * Sets the cycle scale so the real cycles between two presented frames count as one clock step size while the demo
+ * plays or in audio mode, and as clockPreroll otherwise. Does nothing while the sites read the virtual count, after the
+ * demo, or without inlined sites.
  */
 static void scaleCycles(void) {
     unsigned long long now;
@@ -651,10 +952,10 @@ static void scaleCycles(void) {
     now = readCycles();
     if (clockPreviousCycles) {
         span = now - clockPreviousCycles;
-        if (!clockArmed) {
+        if (!clockArmed && !audioRate) {
             *clockCycleScaleLong = clockPreroll;
         } else if (span > 0) {
-            *clockCycleScaleLong = 1.0 / ((double) clockRate * (double) span);
+            *clockCycleScaleLong = (double) clockStepSize() / ((double) clockSteps() * (double) span);
         }
         if (clockCycleScale) *clockCycleScale = (float) *clockCycleScaleLong;
     }
@@ -675,12 +976,13 @@ static int demoPlaying(void) {
 }
 
 /*
- * Ends the capture: releases the cycle sites to the real counter when they have not released themselves already, drops
- * the pending frame, closes stream and reports the frame count.
+ * Ends the capture: releases the cycle sites to the real counter when they have not released themselves already,
+ * releases the mixer, drops the pending frame, closes stream and reports the frame count.
  */
 static void finishCapture(void) {
     clockFinished = 1;
     releaseCycles();
+    releaseMixer("the demo ended");
     pendingSize = 0;
     if (stream != STREAM_CLOSED) {
         closeStream(stream);
@@ -751,16 +1053,20 @@ static int missingClock(void) {
 }
 
 /*
- * Patches the Core clock functions and the frame delta sites to step at the frame rate in UTRECORDER_FPS. Leaves the
- * clocks alone when the rate is unset or a required clock function is missing.
+ * Patches the Core clock functions and the frame delta sites to step at the frame rate in UTRECORDER_FPS, or in audio
+ * mode by one mixer period per frame, with appSystemTime reporting the wav position. Leaves the clocks alone and
+ * releases the mixer when neither is set or a required clock function is missing.
  */
 static void installClock(void) {
     int patched = 0;
     int expected = 4;
     clockInstalled = 1;
     clockRate = environmentNumber("UTRECORDER_FPS", CLOCK_MAX_RATE);
-    if (!clockRate) return;
-    if (missingClock()) return;
+    resolveAudio();
+    if ((!clockRate && !audioRate) || missingClock()) {
+        releaseMixer("the engine clock is not stepped");
+        return;
+    }
     patched += patchSeconds(SYMBOL_NEW, &clockBaseNew, (void *) hookNew);
     patched += patchSeconds(SYMBOL_NOCHECK, &clockBaseNoCheck, (void *) hookNoCheck);
     patched += patchTime(SYMBOL_SECONDS, &clockBaseSeconds, (void *) hookSeconds);
@@ -768,6 +1074,10 @@ static void installClock(void) {
     if (coreSymbol(SYMBOL_COMPAT)) {
         expected++;
         patched += patchSeconds(SYMBOL_COMPAT, &clockBaseCompat, (void *) hookCompat);
+    }
+    if (audioRate) {
+        expected++;
+        patched += coreSymbol(SYMBOL_SYSTEM_TIME) && installJump(coreSymbol(SYMBOL_SYSTEM_TIME), (void *) hookSystemTime);
     }
     clearTimestampGates();
     clockCycleScale = (float *) coreSymbol(SYMBOL_CYCLE);
@@ -784,13 +1094,24 @@ static void installClock(void) {
     if (patched < expected) {
         fprintf(stderr, "uthooks: patched %d of %d engine clocks, playback may drift\n", patched, expected);
     }
-    fprintf(stderr, "uthooks: engine clock stepping %lld frames per second\n", clockRate);
+    if (audioRate) {
+        fprintf(stderr, "uthooks: engine clock stepping %lld samples per frame at %lld Hz\n", audioPeriod, audioRate);
+    } else {
+        fprintf(stderr, "uthooks: engine clock stepping %lld frames per second\n", clockRate);
+    }
 }
 
-/* Steps the clocks by one frame while the demo plays, and by one step before it. */
+/*
+ * Steps the clocks by one frame while the demo plays, and by one step before it. In audio mode, steps them by one mixer
+ * period and waits for the mixer to render it.
+ */
 static void advanceClock(void) {
     if (!clockRunning) return;
-    clockFrame += clockArmed ? CLOCK_PREROLL_STEPS : 1;
+    if (audioRate) {
+        stepMixer();
+    } else {
+        clockFrame += clockStepSize();
+    }
     stepCycles();
     scaleCycles();
 }
@@ -825,6 +1146,9 @@ static LoadLibraryExWFunction realLoadLibraryExW;
 
 /* This library's own module. */
 static HMODULE self;
+
+/* Whether the imports of OpenAL32.dll are hooked. */
+static int mixerHooked;
 
 /*
  * Points the import address entry of symbol in the imports that descriptor describes at replacement. Returns whether
@@ -871,8 +1195,36 @@ static BOOL WINAPI hookSwapBuffers(HDC context) {
     return realSwapBuffers(context);
 }
 
-/* Hooks the SwapBuffers import and the execSetSpeed slot of module, unless module is this library. */
+/* The QueryPerformanceCounter hook of OpenAL32.dll. Replaces the reading with the mixer clock in audio mode. */
+static BOOL WINAPI hookPerformanceCounter(LARGE_INTEGER *count) {
+    BOOL result = QueryPerformanceCounter(count);
+    resolveAudio();
+    if (result && audioRate) count->QuadPart = readMixerClock(count->QuadPart);
+    return result;
+}
+
+/* The Sleep hook of OpenAL32.dll. Holds a mixer thread instead of sleeping while the mixer is locked. */
+static VOID WINAPI hookSleep(DWORD millis) {
+    if (!holdMixer()) Sleep(millis);
+}
+
+/* Points the QueryPerformanceCounter and Sleep imports of OpenAL32.dll at their hooks, once it is loaded. */
+static void patchMixer(void) {
+    HMODULE openAl;
+    if (mixerHooked) return;
+    openAl = GetModuleHandleA("OpenAL32.dll");
+    if (!openAl) return;
+    mixerHooked = 1;
+    patchImport(openAl, "kernel32.dll", "QueryPerformanceCounter", (void *) hookPerformanceCounter);
+    patchImport(openAl, "kernel32.dll", "Sleep", (void *) hookSleep);
+}
+
+/*
+ * Hooks the SwapBuffers import and the execSetSpeed slot of module, unless module is this library, and the imports of
+ * OpenAL32.dll once it is loaded.
+ */
 static void patchLoadedModule(HMODULE module) {
+    patchMixer();
     if (!module || module == self) return;
     patchImport(module, "gdi32.dll", "SwapBuffers", (void *) hookSwapBuffers);
     installSpeedHook(module);
@@ -964,6 +1316,37 @@ void SDL_GL_SwapWindow(void *window) {
     if (!realSwapWindow) realSwapWindow = (SwapWindowFunction) dlsym(RTLD_NEXT, "SDL_GL_SwapWindow");
     presentFrame();
     if (realSwapWindow) realSwapWindow(window);
+}
+
+typedef int (*NanosleepFunction)(const struct timespec *, struct timespec *);
+
+/* The nanosleep that the interposer calls on. */
+static NanosleepFunction realNanosleep;
+
+/* Returns whether code at address belongs to the OpenAL Soft library. */
+static int inOpenAl(void *address) {
+    Dl_info info;
+    if (!dladdr(address, &info) || !info.dli_fname) return 0;
+    return strstr(info.dli_fname, OPENAL_LIBRARY) != 0;
+}
+
+/*
+ * The std::chrono::steady_clock::now interposer. Replaces the reading with the mixer clock in audio mode when OpenAL
+ * Soft reads the clock, which it does in its mixer threads only.
+ */
+SteadyTime _ZNSt6chrono3_V212steady_clock3nowEv(void) {
+    SteadyTime time = readRealSteady();
+    resolveAudio();
+    if (audioRate && inOpenAl(__builtin_return_address(0))) time.ticks = readMixerClock(time.ticks);
+    return time;
+}
+
+/* The nanosleep interposer. Holds a mixer thread instead of sleeping while the mixer is locked. */
+int nanosleep(const struct timespec *request, struct timespec *remaining) {
+    if (holdMixer()) return 0;
+    if (!realNanosleep) realNanosleep = (NanosleepFunction) dlsym(RTLD_NEXT, "nanosleep");
+    if (!realNanosleep) return -1;
+    return realNanosleep(request, remaining);
 }
 
 #endif

@@ -2,23 +2,29 @@
 // UTRecorderSmooth - smooths the movement and view of the player a demo was
 // recorded by, udemo's PlayerLinked, during playback.
 //
-// Ported from BC_RecSmooth of BersCam v2.1b by Berserker_BG, used with his
-// permission. The BersCam editor link, the capture log and the settings are
-// left out; every part of the smoothing is always on.
+// Ported from DemoSmoother of DemoSmoothing by Berserker_BG, used with his
+// permission, with its velocity-aided smoothing two demo frames behind. The
+// menu and the settings are left out; every part of the smoothing is always
+// on.
 //
-// Every frame it keeps the followed player's snapshots with the demo time each
-// was taken at, and places the player where a weighted straight-line fit
-// through the snapshots around one moment puts him. That moment runs a fixed
-// delay behind the demo, set with the demo's frame interval before the first
-// frame. No moment before the start of the timeline or before the latest
-// teleport or respawn is shown: the player holds there until the delay has
-// passed.
+// Every frame it keeps the followed player's snapshots with the demo time and
+// the velocity each was taken at. His position follows the path his velocity
+// traces between the snapshots, and a weighted fit of how far the snapshots
+// sit from that path takes out the rounding of each position to a whole unit.
+// His view follows a weighted curve through the view snapshots. Both are read
+// at one moment, which runs two demo frames behind the demo. The smoother
+// measures the demo's frame interval itself. No moment before the start of
+// the timeline or before the latest teleport or respawn is shown: the player
+// holds there until the delay has passed.
 //
 // Nothing the demo delivers is changed: the pose written here stays on the
 // player only until the next demo frame overwrites it. While a smoother
 // exists, udemo's own recorder smoothing is off.
 //=============================================================================
 class UTRecorderSmooth extends Actor;
+
+// How many demo frames behind the demo the player is shown.
+const FRAMES_BEHIND = 2.0;
 
 var DemoPlaybackSpec     Spec;     // udemo's playback spectator
 var PlayerPawn           Rec;      // the followed player (udemo's PlayerLinked)
@@ -49,12 +55,26 @@ var float RT[256], RVY[256], RVP[256], RBY[256], RBP[256];
 var int   RSeg[256];
 var int   RHead, RCount;
 
+// ---- the velocity path -------------------------------------------------------
+// Per snapshot: his velocity in units per demo second, and the path that
+// velocity traces, relative to the mover under him. The path's value is kept
+// at PMid, halfway back to the previous snapshot - or at the snapshot itself
+// where a piece starts. Three channels, each with pieces of its own: X/Y
+// (bit 1), Z (bit 2) and camera height (bit 4).
+var float PVX[256], PVY[256], PVZ[256];
+var float PMid[256];
+var float PDX[256], PDY[256], PDZ[256], PDC[256];
+var int   VelXY[256], VelZ[256], VelC[256];   // the snapshot's piece per channel
+var byte  VelNew[256];                        // the channels whose piece starts at the snapshot
+var int   VelXYN, VelZN, VelCN;               // the newest piece per channel
+
 // ---- what the demo last delivered (the player may be showing ours) --------
-var bool    bHaveRawLoc, bRawAir, bHaveRawRot, bHaveRawEye;
+var bool    bHaveRawLoc, bRawAir, bHaveRawRot, bHaveRawEye, bHaveRawVel;
 var vector  RawLoc;
 var int     RawVP, RawVY, RawBP, RawBY;
 var float   UVY, UVP, UBY, UBP;          // running unwrapped rotation
 var float   RawEye;
+var vector  RawVel;                      // in units per demo second
 var Mover   RawMover;                    // under him at the newest demo frame
 // The mover under him at the end of last frame, and where it was then.
 var Mover   TrackMover;
@@ -64,6 +84,10 @@ var float   ZMovedT;                     // when his height last changed
 var int     Seg, SegZ, SegC, RSegN;
 var bool    bHaveCut;                    // a teleport or respawn is not snapped to yet
 var float   CutT;                        // the time of its first snapshot
+// Demo seconds per game second, the last time the driver showed it (see
+// GameSpeed).
+var float   VelScale;
+var bool    bHaveVelScale;
 
 // ---- what we wrote last frame --------------------------------------------
 var bool    bWroteLoc, bWroteRot, bWroteEye;
@@ -92,10 +116,15 @@ var byte    RateMode;
 var float   LastLT, SmDLT;
 var bool    bHaveLT;
 
-// ---- delays -----------------------------------------------------------------
-// The demo's frame interval and the delays of position and rotation, set once
-// before the first frame (see UTRecorderConsole.SpawnSmoother).
-var float   IRec, DPos, DRot;
+// ---- the delay --------------------------------------------------------------
+// The demo's frame interval, measured over its first 32 reads (see
+// MeasureInterval), and the delay the moments shown run behind the demo.
+var float   IRecBuf[32];
+var int     IRecN;
+var float   IRec;
+var bool    bDelaySet;
+var float   DCur;            // the delay in use, eased towards Delay()
+var bool    bDCur;
 var float   ShowFrom;        // no moment before it is shown: the timeline's start, or the latest cut
 var float   FAdv;            // this frame's demo advance
 
@@ -103,6 +132,7 @@ var bool    bNativeOff;      // udemo's recorder smoothing is off because of us
 
 // ---- this frame -------------------------------------------------------------
 var vector  FLoc;            // the player's position before anything is written
+var vector  FVel;            // the player's velocity, in units per game second
 var vector  FTickCarry;      // how far a mover carried him this frame (taken off FLoc)
 var rotator FView, FBody;
 var float   FEye;
@@ -112,6 +142,7 @@ var bool    bFPrime;         // this frame starts the timeline over
 var bool    bFLocFresh, bFRotFresh, bFEyeFresh;
 var float   StarveAdv;       // demo time read while held at the newest snapshot
 var float   FStep;           // demo time read this frame
+var float   FNow;            // the demo's clock this frame
 var float   FTarget;         // the eye height the steady eye height moves towards (see SteadyTarget)
 var bool    bFTargetDemo;    // FTarget is the demo's own eye height: he crouches
 // the landing near the moment shown, this frame (see LandCheck)
@@ -320,7 +351,7 @@ function ForgetWrites()
 }
 
 // Forgets everything that describes the demo's timeline. The demo's frame
-// interval and the delays are kept.
+// interval and the delay are kept.
 function ResetHistory()
 {
 	ForgetWrites();
@@ -331,6 +362,7 @@ function ResetHistory()
 	bHaveRawLoc = false;
 	bHaveRawRot = false;
 	bHaveRawEye = false;
+	bHaveRawVel = false;
 	RawMover = None;
 	TrackMover = None;
 	Seg = 0;
@@ -429,7 +461,10 @@ function Observe(float Delta)
 	Off += (OffEst - Off) * FMin(1.0, 2.0 * Adv);
 
 	if (bNew)
+	{
+		MeasureInterval(Spt - LastSpt, NFr);
 		TakeSamples(St, NFr);
+	}
 	else
 		ReadFrameValues();
 	LastFrame = Frame;
@@ -492,6 +527,7 @@ function ShiftTimes(float By)
 	{
 		i = (PHead - k) & 255;
 		PT[i] -= By;
+		PMid[i] -= By;
 	}
 	for (k = 0; k < RCount; k++)
 	{
@@ -549,21 +585,70 @@ function GuardRate(float Adv, float Spt, bool bNew)
 	RateLast = Ratio;
 }
 
+// Takes the demo's frame interval as the median of the demo time per demo
+// frame over the first 32 reads that took in fewer than 50 demo frames and
+// no more than a tenth of a second each. Measured once for the whole
+// playback.
+function MeasureInterval(float DT, int NFr)
+{
+	local float E, Tmp;
+	local int i, j;
+
+	if (bDelaySet || NFr <= 0 || NFr >= 50 || DT <= 0.0)
+		return;
+	E = DT / NFr;
+	if (E > 0.1)
+		return;
+	IRecBuf[IRecN] = E;
+	IRecN++;
+	if (IRecN < 32)
+		return;
+	for (i = 1; i < 32; i++)
+	{
+		Tmp = IRecBuf[i];
+		j = i - 1;
+		while (j >= 0 && IRecBuf[j] > Tmp)
+		{
+			IRecBuf[j + 1] = IRecBuf[j];
+			j--;
+		}
+		IRecBuf[j + 1] = Tmp;
+	}
+	IRec = (IRecBuf[15] + IRecBuf[16]) * 0.5;
+	bDelaySet = true;
+	Log("UTRecorder: recorder smoother measured a demo frame interval of" @ IRec @ "s", 'UTRecorder');
+}
+
+// The demo's frame interval: 8 ms until it is measured.
 function float Interval()
 {
-	return IRec;
+	if (bDelaySet)
+		return IRec;
+	return 0.008;
+}
+
+// How far behind the demo the moments shown run: FRAMES_BEHIND demo frames,
+// and 30 ms until the frame interval is measured.
+function float Delay()
+{
+	if (bDelaySet)
+		return FRAMES_BEHIND * IRec;
+	return FMax(FRAMES_BEHIND * 0.008, 0.03);
 }
 
 // Reads this frame's values of the player, and which of them the demo
 // delivered - a value equal to what we wrote last frame is ours. Carried by a
 // mover, ours comes back moved by the carry, and taking the carry off again
 // can differ from it in the last digits - hence the twentieth of a unit there.
+// The demo's own position is in whole units, so a position in whole units is
+// the demo's even then.
 function ReadFrameValues()
 {
 	FTickCarry = vect(0,0,0);
 	if (TrackMover != None && Rec.Base == TrackMover && !TrackMover.bDeleteMe)
 		FTickCarry = TrackMover.Location - TrackLoc;
 	FLoc = Rec.Location - FTickCarry;
+	FVel = Rec.Velocity;
 	FView = Rec.ViewRotation;
 	FBody = Rec.Rotation;
 	FEye = Rec.EyeHeight;
@@ -587,9 +672,25 @@ function ReadFrameValues()
 		else
 			FEye = FBaseEye;
 	}
-	bFLocFresh = !(bWroteLoc && (Rec.Location == WLoc || (FTickCarry != vect(0,0,0) && VSize(FLoc - WLoc) < 0.05)));
+	bFLocFresh = !(bWroteLoc && (Rec.Location == WLoc
+		|| (FTickCarry != vect(0,0,0) && VSize(FLoc - WLoc) < 0.05 && !WholeUnits(FLoc))));
 	bFRotFresh = !(bWroteRot && FView.Pitch == WVP && FView.Yaw == WVY && FBody.Pitch == WBP && FBody.Yaw == WBY);
 	bFEyeFresh = !(bWroteEye && FEye == WEye);
+}
+
+// Whether every component of V is within a hundredth of a whole unit.
+function bool WholeUnits(vector V)
+{
+	return OffWhole(V.X) < 0.01 && OffWhole(V.Y) < 0.01 && OffWhole(V.Z) < 0.01;
+}
+
+// How far F is from the nearest whole number.
+function float OffWhole(float F)
+{
+	local float D;
+
+	D = Abs(F - float(int(F)));
+	return FMin(D, 1.0 - D);
 }
 
 // Takes the snapshots of a frame that read demo data. A changed value becomes
@@ -603,7 +704,7 @@ function TakeSamples(float St, int NFr)
 	local float Dist, DT, Hold, DZ, DE, PrevT, OldEye, F, OldT, VE;
 	local float OVY, OVP, OBY, OBP;
 	local int DVY, DVP, DBY, DBP, NVP, NVY, NBP, NBY, k, N;
-	local vector Own, MV, OldLoc, OldM, NewM;
+	local vector Own, MV, OldLoc, OldM, NewM, NewVel, OldVel;
 
 	ReadFrameValues();
 	bAir = (Rec.Base == None);
@@ -611,6 +712,10 @@ function TakeSamples(float St, int NFr)
 	Hold = FMax(3.0 * Interval(), 0.02);
 	PrevT = LastSpt - T0;
 	N = Min(NFr - 1, 8);
+	NewVel = FVel * GameSpeed();
+	OldVel = NewVel;
+	if (bHaveRawVel)
+		OldVel = RawVel;
 
 	// A UTPure-style player's view copy holds the eye height its previous
 	// frame ended with. Where the demo's own value for that frame holds the
@@ -713,16 +818,18 @@ function TakeSamples(float St, int NFr)
 			OldM.Y = PMY[PHead];
 			OldM.Z = PMZ[PHead];
 			if (PrevT > OldT + 0.0005)
-				PushP(PrevT, OldLoc, OldEye, OldM + (NewM - OldM) * ((PrevT - OldT) / (St - OldT)));
+				PushP(PrevT, OldLoc, OldEye, OldM + (NewM - OldM) * ((PrevT - OldT) / (St - OldT)), OldVel);
 			for (k = 1; k <= N; k++)
 			{
 				F = float(k) / float(N + 1);
 				PushP(PrevT + (St - PrevT) * F, OldLoc + (RawLoc - OldLoc) * F, OldEye + (RawEye - OldEye) * F,
-					OldM + (NewM - OldM) * ((PrevT + (St - PrevT) * F - OldT) / (St - OldT)));
+					OldM + (NewM - OldM) * ((PrevT + (St - PrevT) * F - OldT) / (St - OldT)), OldVel + (NewVel - OldVel) * F);
 			}
 		}
-		PushP(St, RawLoc, RawEye, NewM);
+		PushP(St, RawLoc, RawEye, NewM, NewVel);
 	}
+	RawVel = NewVel;
+	bHaveRawVel = true;
 
 	// ---- rotation: view and body, each the demo's when it is not ours
 	bVFresh = !(bWroteRot && FView.Pitch == WVP && FView.Yaw == WVY);
@@ -802,6 +909,29 @@ function TakeSamples(float St, int NFr)
 		PushR(St, UVY, UVP, UBY, UBP);
 }
 
+// Demo seconds per game second, which turns his velocity into units per demo
+// second. Read from the driver while it plays at a set speed, and kept from
+// the last time it did.
+function float GameSpeed()
+{
+	local float S;
+
+	if (Spec.Driver.PlayBackMode != 2)
+	{
+		S = Level.TimeDilation / FMax(Spec.Driver.mySpeed, 0.000001);
+		if (S > 0.05 && S < 20.0)
+		{
+			VelScale = S;
+			bHaveVelScale = true;
+		}
+	}
+	if (bHaveVelScale)
+		return VelScale;
+	if (Spec.Driver.PlayBackMode == 2)
+		return Level.TimeDilation;
+	return 1.0;
+}
+
 // The shortest signed turn between two rotator values.
 function int ShortTurn(int D)
 {
@@ -811,12 +941,16 @@ function int ShortTurn(int D)
 	return D;
 }
 
-// A position snapshot at demo time T: position L, eye height E, and M, where
-// the mover under him (RawMover, if any) was then.
-function PushP(float T, vector L, float E, vector M)
+// A position snapshot at demo time T: position L, eye height E, M, where the
+// mover under him (RawMover, if any) was then, and velocity Vel. Carries the
+// velocity path on to it, halfway back to the previous snapshot, along the
+// average of the two velocities - or starts the path over at L where a piece
+// starts.
+function PushP(float T, vector L, float E, vector M, vector Vel)
 {
-	local int Prev;
-	local vector V;
+	local int Prev, Starts;
+	local float H;
+	local vector V, R;
 
 	Prev = PHead;
 	PHead = (PHead + 1) & 255;
@@ -844,6 +978,56 @@ function PushP(float T, vector L, float E, vector M)
 		PAir[PHead] = 1;
 	else
 		PAir[PHead] = 0;
+
+	// ---- the velocity path
+	PVX[PHead] = Vel.X;
+	PVY[PHead] = Vel.Y;
+	PVZ[PHead] = Vel.Z;
+	// a piece starts wherever the channel's own piece or the mover under him changes
+	Starts = 0;
+	if (PCount == 0 || PSeg[Prev] != Seg || PMov[Prev] != RawMover)
+		Starts = Starts | 1;
+	if (PCount == 0 || PSegZ[Prev] != SegZ || PMov[Prev] != RawMover)
+		Starts = Starts | 2;
+	if (PCount == 0 || PSegC[Prev] != SegC || PMov[Prev] != RawMover)
+		Starts = Starts | 4;
+	if ((Starts & 1) != 0)
+		VelXYN++;
+	if ((Starts & 2) != 0)
+		VelZN++;
+	if ((Starts & 4) != 0)
+		VelCN++;
+	VelNew[PHead] = byte(Starts);
+	VelXY[PHead] = VelXYN;
+	VelZ[PHead] = VelZN;
+	VelC[PHead] = VelCN;
+	if (PCount == 0)
+		PMid[PHead] = T;
+	else
+		PMid[PHead] = 0.5 * (PT[Prev] + T);
+	R = L;
+	if (RawMover != None)
+		R = L - M;
+	if ((Starts & 1) != 0)
+	{
+		PDX[PHead] = R.X;
+		PDY[PHead] = R.Y;
+	}
+	else
+	{
+		H = PMid[PHead] - MidOf(Prev, 1);
+		PDX[PHead] = PDX[Prev] + 0.5 * (PVX[Prev] + Vel.X) * H;
+		PDY[PHead] = PDY[Prev] + 0.5 * (PVY[Prev] + Vel.Y) * H;
+	}
+	if ((Starts & 2) != 0)
+		PDZ[PHead] = R.Z;
+	else
+		PDZ[PHead] = PDZ[Prev] + 0.5 * (PVZ[Prev] + Vel.Z) * (PMid[PHead] - MidOf(Prev, 2));
+	if ((Starts & 4) != 0)
+		PDC[PHead] = R.Z;
+	else
+		PDC[PHead] = PDC[Prev] + 0.5 * (PVZ[Prev] + Vel.Z) * (PMid[PHead] - MidOf(Prev, 4));
+
 	if (PCount < 256)
 		PCount++;
 	LastPT = T;
@@ -948,11 +1132,10 @@ function Rebase()
 }
 
 // =============================================================================
-// The fit: a weighted straight line through the snapshots near Tau, read at
-// Tau. The weight falls smoothly to nothing at Hb before Tau and Hf after it,
-// and the result is held to the range of the snapshots it used. With fewer
-// than two snapshots in reach it declines, and the caller joins the snapshots
-// either side in a straight line instead.
+// The fits: weighted fits through the snapshots near Tau, read at Tau. The
+// weight falls smoothly to nothing at Hb before Tau and Hf after it, and the
+// result is held to the range of the snapshots it used. With too few
+// snapshots in reach a fit declines, and the caller falls back.
 // =============================================================================
 
 function float Weight(float D, float Hb, float Hf)
@@ -969,104 +1152,9 @@ function float Weight(float D, float Hb, float Hf)
 	return U * U * U;
 }
 
-// X and Y from the position snapshots in piece Want, relative to snapshot
-// Ref's, so the sums stay small.
-function bool FitXY(float Tau, float Hb, float Hf, int Want, int Ref, out float OX, out float OY)
-{
-	local float S0, S1, S2, SX, SY, TX, TY, LoX, HiX, LoY, HiY, D, W, Den, X, Y;
-	local int k, i, N;
-
-	LoX = 1000000.0;
-	LoY = 1000000.0;
-	HiX = -1000000.0;
-	HiY = -1000000.0;
-	for (k = 0; k < PCount; k++)
-	{
-		i = (PHead - k) & 255;
-		D = PT[i] - Tau;
-		if (D <= -Hb)
-			break;
-		if (D >= Hf || PSeg[i] != Want)
-			continue;
-		W = Weight(D, Hb, Hf);
-		if (W <= 0.0)
-			continue;
-		X = PX[i] - PX[Ref];
-		Y = PY[i] - PY[Ref];
-		N++;
-		S0 += W;
-		S1 += W * D;
-		S2 += W * D * D;
-		SX += W * X;
-		TX += W * D * X;
-		SY += W * Y;
-		TY += W * D * Y;
-		LoX = FMin(LoX, X);
-		HiX = FMax(HiX, X);
-		LoY = FMin(LoY, Y);
-		HiY = FMax(HiY, Y);
-	}
-	if (N < 2)
-		return false;
-	Den = S0 * S2 - S1 * S1;
-	if (Den > 0.000001 * S0 * S2)
-	{
-		OX = (S2 * SX - S1 * TX) / Den;
-		OY = (S2 * SY - S1 * TY) / Den;
-	}
-	else
-	{
-		OX = SX / S0;
-		OY = SY / S0;
-	}
-	OX = PX[Ref] + FClamp(OX, LoX, HiX);
-	OY = PY[Ref] + FClamp(OY, LoY, HiY);
-	return true;
-}
-
-// Z from the position snapshots in Z piece Want, relative to snapshot Ref's.
-function bool FitZ(float Tau, float Hb, float Hf, int Want, int Ref, out float OZ)
-{
-	local float S0, S1, S2, SZ, TZ, LoZ, HiZ, D, W, Den, Z;
-	local int k, i, N;
-
-	LoZ = 1000000.0;
-	HiZ = -1000000.0;
-	for (k = 0; k < PCount; k++)
-	{
-		i = (PHead - k) & 255;
-		D = PT[i] - Tau;
-		if (D <= -Hb)
-			break;
-		if (D >= Hf || PSegZ[i] != Want)
-			continue;
-		W = Weight(D, Hb, Hf);
-		if (W <= 0.0)
-			continue;
-		Z = PZ[i] - PZ[Ref];
-		N++;
-		S0 += W;
-		S1 += W * D;
-		S2 += W * D * D;
-		SZ += W * Z;
-		TZ += W * D * Z;
-		LoZ = FMin(LoZ, Z);
-		HiZ = FMax(HiZ, Z);
-	}
-	if (N < 2)
-		return false;
-	Den = S0 * S2 - S1 * S1;
-	if (Den > 0.000001 * S0 * S2)
-		OZ = (S2 * SZ - S1 * TZ) / Den;
-	else
-		OZ = SZ / S0;
-	OZ = PZ[Ref] + FClamp(OZ, LoZ, HiZ);
-	return true;
-}
-
-// The camera height - Z and eye height together - from the snapshots in
-// camera height piece Want, relative to snapshot Ref's. The eye height is
-// EyeOf's, written out here for speed.
+// A weighted straight line through the camera height - Z and eye height
+// together - of the snapshots in camera height piece Want, relative to
+// snapshot Ref's. The eye height is EyeOf's, written out here for speed.
 function bool FitC(float Tau, float Hb, float Hf, int Want, int Ref, out float OC)
 {
 	local float S0, S1, S2, SC, TC, LoC, HiC, D, W, Den, CV, ERef, E;
@@ -1120,14 +1208,14 @@ function float EyeOf(int i)
 	return PES[i];
 }
 
-// All four rotation channels from the snapshots in rotation piece Want,
-// relative to snapshot Ref's.
+// A weighted parabola through all four rotation channels of the snapshots in
+// rotation piece Want, relative to snapshot Ref's. Needs three snapshots of
+// more than a hundredth of the full weight.
 function bool FitRot(float Tau, float Hb, float Hf, int Want, int Ref, out float OVY, out float OVP, out float OBY, out float OBP)
 {
-	local float S0, S1, S2, D, W, Den;
-	local float SA, SB, SC, SD, TA, TB, TC, TD;
-	local float LoA, HiA, LoB, HiB, LoC, HiC, LoD, HiD;
-	local float VA, VB, VC, VD;
+	local float D, W, U, U2, S0, S1, S2, S3, S4, Det, K0, K1, K2;
+	local float TA0, TA1, TA2, TB0, TB1, TB2, TC0, TC1, TC2, TD0, TD1, TD2;
+	local float VA, VB, VC, VD, LoA, HiA, LoB, HiB, LoC, HiC, LoD, HiD;
 	local int k, i, N;
 
 	LoA = 100000000.0;
@@ -1149,22 +1237,32 @@ function bool FitRot(float Tau, float Hb, float Hf, int Want, int Ref, out float
 		W = Weight(D, Hb, Hf);
 		if (W <= 0.0)
 			continue;
+		if (W > 0.01)
+			N++;
+		// time in units of Hb, so the sums stay in range
+		U = D / Hb;
+		U2 = U * U;
+		S0 += W;
+		S1 += W * U;
+		S2 += W * U2;
+		S3 += W * U2 * U;
+		S4 += W * U2 * U2;
 		VA = RVY[i] - RVY[Ref];
 		VB = RVP[i] - RVP[Ref];
 		VC = RBY[i] - RBY[Ref];
 		VD = RBP[i] - RBP[Ref];
-		N++;
-		S0 += W;
-		S1 += W * D;
-		S2 += W * D * D;
-		SA += W * VA;
-		TA += W * D * VA;
-		SB += W * VB;
-		TB += W * D * VB;
-		SC += W * VC;
-		TC += W * D * VC;
-		SD += W * VD;
-		TD += W * D * VD;
+		TA0 += W * VA;
+		TA1 += W * U * VA;
+		TA2 += W * U2 * VA;
+		TB0 += W * VB;
+		TB1 += W * U * VB;
+		TB2 += W * U2 * VB;
+		TC0 += W * VC;
+		TC1 += W * U * VC;
+		TC2 += W * U2 * VC;
+		TD0 += W * VD;
+		TD1 += W * U * VD;
+		TD2 += W * U2 * VD;
 		LoA = FMin(LoA, VA);
 		HiA = FMax(HiA, VA);
 		LoB = FMin(LoB, VB);
@@ -1174,28 +1272,247 @@ function bool FitRot(float Tau, float Hb, float Hf, int Want, int Ref, out float
 		LoD = FMin(LoD, VD);
 		HiD = FMax(HiD, VD);
 	}
-	if (N < 2)
+	if (N < 3)
 		return false;
-	Den = S0 * S2 - S1 * S1;
-	if (Den > 0.000001 * S0 * S2)
-	{
-		OVY = (S2 * SA - S1 * TA) / Den;
-		OVP = (S2 * SB - S1 * TB) / Den;
-		OBY = (S2 * SC - S1 * TC) / Den;
-		OBP = (S2 * SD - S1 * TD) / Den;
-	}
-	else
-	{
-		OVY = SA / S0;
-		OVP = SB / S0;
-		OBY = SC / S0;
-		OBP = SD / S0;
-	}
-	OVY = RVY[Ref] + FClamp(OVY, LoA, HiA);
-	OVP = RVP[Ref] + FClamp(OVP, LoB, HiB);
-	OBY = RBY[Ref] + FClamp(OBY, LoC, HiC);
-	OBP = RBP[Ref] + FClamp(OBP, LoD, HiD);
+	// the constant term of the solution, by Cramer's rule
+	K0 = S2 * S4 - S3 * S3;
+	K1 = S1 * S4 - S3 * S2;
+	K2 = S1 * S3 - S2 * S2;
+	Det = S0 * K0 - S1 * K1 + S2 * K2;
+	if (Det <= 0.000001 * S0 * S2 * S4)
+		return false;
+	OVY = RVY[Ref] + FClamp((TA0 * K0 - S1 * (TA1 * S4 - S3 * TA2) + S2 * (TA1 * S3 - S2 * TA2)) / Det, LoA, HiA);
+	OVP = RVP[Ref] + FClamp((TB0 * K0 - S1 * (TB1 * S4 - S3 * TB2) + S2 * (TB1 * S3 - S2 * TB2)) / Det, LoB, HiB);
+	OBY = RBY[Ref] + FClamp((TC0 * K0 - S1 * (TC1 * S4 - S3 * TC2) + S2 * (TC1 * S3 - S2 * TC2)) / Det, LoC, HiC);
+	OBP = RBP[Ref] + FClamp((TD0 * K0 - S1 * (TD1 * S4 - S3 * TD2) + S2 * (TD1 * S3 - S2 * TD2)) / Det, LoD, HiD);
 	return true;
+}
+
+// =============================================================================
+// The velocity path
+// =============================================================================
+
+// Snapshot i's path time on channel Chan: PMid, or the snapshot's own time
+// where the channel's piece starts.
+function float MidOf(int i, int Chan)
+{
+	if ((VelNew[i] & Chan) != 0)
+		return PT[i];
+	return PMid[i];
+}
+
+// Snapshot i's piece on channel Chan.
+function int VelocityPiece(int i, int Chan)
+{
+	if (Chan == 1)
+		return VelXY[i];
+	if (Chan == 2)
+		return VelZ[i];
+	return VelC[i];
+}
+
+// The snapshot after i, or -1 when i is the newest.
+function int NextP(int i)
+{
+	if (i == PHead)
+		return -1;
+	return (i + 1) & 255;
+}
+
+// The velocity path of channel Chan at time T, from snapshot J on: on from
+// the path time of J or of the snapshot after it, whichever T has passed,
+// with the velocity turning evenly towards the next snapshot's. OA is X or
+// the height, OB is Y.
+function PathAt(int Chan, int J, float T, out float OA, out float OB)
+{
+	local int B, N, Q;
+	local float X, H;
+
+	B = J;
+	X = T - MidOf(J, Chan);
+	Q = -1;
+	N = NextP(J);
+	if (N >= 0 && VelocityPiece(N, Chan) == VelocityPiece(J, Chan))
+	{
+		if (T <= PMid[N])
+			Q = N;
+		else
+		{
+			B = N;
+			X = T - PMid[N];
+			Q = NextP(N);
+			if (Q >= 0 && VelocityPiece(Q, Chan) != VelocityPiece(N, Chan))
+				Q = -1;
+		}
+	}
+	if (Q >= 0)
+		H = 2.0 * FMax(PMid[Q] - MidOf(B, Chan), 0.000001);
+	if (Chan == 1)
+	{
+		OA = PDX[B] + PVX[B] * X;
+		OB = PDY[B] + PVY[B] * X;
+		if (Q >= 0)
+		{
+			OA += (PVX[Q] - PVX[B]) / H * X * X;
+			OB += (PVY[Q] - PVY[B]) / H * X * X;
+		}
+		return;
+	}
+	if (Chan == 2)
+		OA = PDZ[B] + PVZ[B] * X;
+	else
+		OA = PDC[B] + PVZ[B] * X;
+	if (Q >= 0)
+		OA += (PVZ[Q] - PVZ[B]) / H * X * X;
+	OB = 0.0;
+}
+
+// How far snapshot i sits from the velocity path of channel Chan, off the
+// mover under him.
+function Resid(int Chan, int i, out float RA, out float RB)
+{
+	local float X;
+	local vector R;
+
+	R.X = PX[i];
+	R.Y = PY[i];
+	R.Z = PZ[i];
+	if (PMov[i] != None)
+	{
+		R.X -= PMX[i];
+		R.Y -= PMY[i];
+		R.Z -= PMZ[i];
+	}
+	X = PT[i] - MidOf(i, Chan);
+	RB = 0.0;
+	if (Chan == 1)
+	{
+		RA = R.X - (PDX[i] + PVX[i] * X);
+		RB = R.Y - (PDY[i] + PVY[i] * X);
+	}
+	else if (Chan == 2)
+		RA = R.Z - (PDZ[i] + PVZ[i] * X);
+	else
+		RA = R.Z + EyeOf(i) - (PDC[i] + PVZ[i] * X);
+}
+
+// How far the snapshots of J's piece sit from the velocity path of channel
+// Chan at time T: a weighted mean over the tenth of a second before T for
+// X/Y, a weighted straight line over the twentieth before T for the heights,
+// reaching Hf ahead. Without a snapshot in reach, J's own.
+function Drift(int Chan, int J, float T, float Hf, out float OA, out float OB)
+{
+	local float Hb, D, W, S0, S1, S2, SA, TA, SB, LoA, HiA, LoB, HiB, RA, RB, Den;
+	local int k, i, N, Want;
+
+	Want = VelocityPiece(J, Chan);
+	Hb = 0.05;
+	if (Chan == 1)
+		Hb = 0.1;
+	LoA = 1000000.0;
+	LoB = 1000000.0;
+	HiA = -1000000.0;
+	HiB = -1000000.0;
+	for (k = 0; k < PCount; k++)
+	{
+		i = (PHead - k) & 255;
+		D = PT[i] - T;
+		if (D <= -Hb)
+			break;
+		if (D >= Hf || VelocityPiece(i, Chan) != Want)
+			continue;
+		W = Weight(D, Hb, Hf);
+		if (W <= 0.0)
+			continue;
+		Resid(Chan, i, RA, RB);
+		N++;
+		S0 += W;
+		S1 += W * D;
+		S2 += W * D * D;
+		SA += W * RA;
+		TA += W * D * RA;
+		SB += W * RB;
+		LoA = FMin(LoA, RA);
+		HiA = FMax(HiA, RA);
+		LoB = FMin(LoB, RB);
+		HiB = FMax(HiB, RB);
+	}
+	if (N == 0)
+	{
+		Resid(Chan, J, OA, OB);
+		return;
+	}
+	OA = SA / S0;
+	OB = SB / S0;
+	if (Chan != 1 && N >= 2)
+	{
+		Den = S0 * S2 - S1 * S1;
+		if (Den > 0.000001 * S0 * S2)
+			OA = (S2 * SA - S1 * TA) / Den;
+	}
+	OA = FClamp(OA, LoA, HiA);
+	OB = FClamp(OB, LoB, HiB);
+}
+
+// Where the mover under him at snapshot J was at time T, on a straight line
+// to the next snapshot of the same piece. None: nothing.
+function vector MoverPosAt(int Chan, int J, float T)
+{
+	local vector M;
+	local int N;
+	local float A;
+
+	if (PMov[J] == None)
+		return vect(0,0,0);
+	M.X = PMX[J];
+	M.Y = PMY[J];
+	M.Z = PMZ[J];
+	N = NextP(J);
+	if (N < 0 || VelocityPiece(N, Chan) != VelocityPiece(J, Chan))
+		return M;
+	A = FClamp((T - PT[J]) / FMax(PT[N] - PT[J], 0.000001), 0.0, 1.0);
+	M.X += (PMX[N] - PMX[J]) * A;
+	M.Y += (PMY[N] - PMY[J]) * A;
+	M.Z += (PMZ[N] - PMZ[J]) * A;
+	return M;
+}
+
+// Channel Chan at time T within J's piece: the velocity path, its drift from
+// the snapshots and the mover under him.
+function PieceVal(int Chan, int J, float T, float Hf, out float OA, out float OB)
+{
+	local float PA, PB, DA, DB;
+	local vector M;
+
+	PathAt(Chan, J, T, PA, PB);
+	Drift(Chan, J, T, Hf, DA, DB);
+	M = MoverPosAt(Chan, J, T);
+	if (Chan == 1)
+	{
+		OA = PA + DA + M.X;
+		OB = PB + DB + M.Y;
+		return;
+	}
+	OA = PA + DA + M.Z;
+	OB = 0.0;
+}
+
+// Channel Chan at Tau, A of the way from J to Nx. A new piece between them -
+// a step, a take-off or a landing - joins each side's own value at its end of
+// the gap in a straight line.
+function ChanAt(int Chan, float Tau, int J, int Nx, float A, float Hf, out float OA, out float OB)
+{
+	local float AA, AB, BA, BB;
+
+	if (Nx >= 0 && VelocityPiece(Nx, Chan) != VelocityPiece(J, Chan) && PSeg[Nx] == PSeg[J])
+	{
+		PieceVal(Chan, J, PT[J], Hf, AA, AB);
+		PieceVal(Chan, Nx, PT[Nx], Hf, BA, BB);
+		OA = AA + (BA - AA) * A;
+		OB = AB + (BB - AB) * A;
+		return;
+	}
+	PieceVal(Chan, J, Tau, Hf, OA, OB);
 }
 
 // =============================================================================
@@ -1204,12 +1521,12 @@ function bool FitRot(float Tau, float Hb, float Hf, int Want, int Ref, out float
 
 // The position and eye height at Tau. J is the newest snapshot at or before
 // Tau and Nx the one after it; before the first snapshot the first one is
-// held. The camera height is fitted, and the eye height is what it leaves
-// above the body.
+// held. The camera height is taken on its own channel, and the eye height is
+// what it leaves above the body. Hb and Hf are the reach of LandCheck.
 function bool EvalLoc(float Tau, float Hb, float Hf, out vector L, out float OE)
 {
 	local int k, i, J, Nx;
-	local float FX, FY, FZ, ZA, ZB, A, CA, CB, CF;
+	local float A, HfL, FX, FY, FZ, CF, Spare;
 
 	J = -1;
 	Nx = -1;
@@ -1233,56 +1550,19 @@ function bool EvalLoc(float Tau, float Hb, float Hf, out vector L, out float OE)
 		J = Nx;
 		Nx = -1;
 	}
-	// how far Tau is from J to Nx, for the straight joins below
+	// how far Tau is from J to Nx, for the straight joins
 	A = 0.0;
 	if (Nx >= 0)
 		A = FClamp((Tau - PT[J]) / FMax(PT[Nx] - PT[J], 0.000001), 0.0, 1.0);
-	if (!FitXY(Tau, Hb, Hf, PSeg[J], J, FX, FY))
-	{
-		FX = PX[J];
-		FY = PY[J];
-		if (Nx >= 0 && PSeg[Nx] == PSeg[J])
-		{
-			FX += (PX[Nx] - PX[J]) * A;
-			FY += (PY[Nx] - PY[J]) * A;
-		}
-	}
-	if (Nx >= 0 && PSegZ[Nx] != PSegZ[J] && PSeg[Nx] == PSeg[J])
-	{
-		// a step, a take-off or a landing between J and Nx: each side's own
-		// height at its end of the gap, joined in a straight line
-		if (!FitZ(PT[J], Hb, Hf, PSegZ[J], J, ZA))
-			ZA = PZ[J];
-		if (!FitZ(PT[Nx], Hb, Hf, PSegZ[Nx], Nx, ZB))
-			ZB = PZ[Nx];
-		FZ = ZA + (ZB - ZA) * A;
-	}
-	else if (!FitZ(Tau, Hb, Hf, PSegZ[J], J, FZ))
-	{
-		FZ = PZ[J];
-		if (Nx >= 0 && PSegZ[Nx] == PSegZ[J])
-			FZ += (PZ[Nx] - PZ[J]) * A;
-	}
+	// the drift reaches ahead to every snapshot read so far
+	HfL = FMax(FNow - Tau, 0.25 * FMax(Interval(), 0.001));
+	ChanAt(1, Tau, J, Nx, A, HfL, FX, FY);
+	ChanAt(2, Tau, J, Nx, A, HfL, FZ, Spare);
 	L.X = FX;
 	L.Y = FY;
 	L.Z = FZ;
 	L += MoverCarry(Tau, J);
-	if (Nx >= 0 && PSegC[Nx] != PSegC[J] && PSeg[Nx] == PSeg[J])
-	{
-		// a take-off or a landing between J and Nx: joined in a straight line,
-		// as the height is
-		if (!FitC(PT[J], Hb, Hf, PSegC[J], J, CA))
-			CA = PZ[J] + EyeOf(J);
-		if (!FitC(PT[Nx], Hb, Hf, PSegC[Nx], Nx, CB))
-			CB = PZ[Nx] + EyeOf(Nx);
-		CF = CA + (CB - CA) * A;
-	}
-	else if (!FitC(Tau, Hb, Hf, PSegC[J], J, CF))
-	{
-		CF = PZ[J] + EyeOf(J);
-		if (Nx >= 0 && PSegC[Nx] == PSegC[J])
-			CF += ((PZ[Nx] - PZ[J]) + (EyeOf(Nx) - EyeOf(J))) * A;
-	}
+	ChanAt(4, Tau, J, Nx, A, HfL, CF, Spare);
 	OE = CF - FZ;
 	// coming down into a landing: never below where he settles
 	if (bFLand && Tau < PT[LandG])
@@ -1297,9 +1577,9 @@ function bool EvalLoc(float Tau, float Hb, float Hf, out vector L, out float OE)
 // deeper than a landing's. The hold comes in over a hundredth of a second.
 //
 // Tau is the moment shown, J the newest snapshot at or before it, Nx the one
-// after (-1: none), Hb and Hf the fit's reach. Sets bFLand and, with it,
-// LandG (the landing's first ground snapshot), LandSegC, LandEnd, LandR and
-// LandW (how far the hold has come in).
+// after (-1: none), Hb and Hf the reach. Sets bFLand and, with it, LandG (the
+// landing's first ground snapshot), LandSegC, LandEnd, LandR and LandW (how
+// far the hold has come in).
 function LandCheck(float Tau, int J, int Nx, float Hb, float Hf)
 {
 	local int a, g, b, i, s, n, ka, kg, p;
@@ -1383,7 +1663,7 @@ function LandCheck(float Tau, int J, int Nx, float Hb, float Hf)
 		return;
 	// where the approach is when the hold is in (bFLand is still false, so
 	// FitC reads the plain snapshots)
-	T1 = PT[g] + Ts - DPos + 0.01;
+	T1 = PT[g] + Ts - DCur + 0.01;
 	if (T1 < PT[g])
 	{
 		if (!FitC(T1, Hb, Hf, PSegC[a], a, C1))
@@ -1394,7 +1674,7 @@ function LandCheck(float Tau, int J, int Nx, float Hb, float Hf)
 	LandG = g;
 	LandSegC = PSegC[g];
 	LandEnd = PT[s];
-	LandW = FClamp((Tau - (PT[g] + Ts - DPos)) / 0.01, 0.0, 1.0);
+	LandW = FClamp((Tau - (PT[g] + Ts - DCur)) / 0.01, 0.0, 1.0);
 	bFLand = true;
 }
 
@@ -1460,8 +1740,43 @@ function vector MoverCarry(float Tau, int J)
 	return E - T;
 }
 
-// The four rotation channels at Tau.
-function bool EvalRot(float Tau, float Hb, float Hf, out float OVY, out float OVP, out float OBY, out float OBP)
+// The four rotation channels at Tau: the parabola through the snapshots from
+// two demo frames - at least a thirtieth of a second - before Tau to every
+// snapshot read so far, or else the snapshots either side joined in a
+// straight line.
+function bool EvalRot(float Tau, out float OVY, out float OVP, out float OBY, out float OBP)
+{
+	local int k, i, J, Nx;
+	local float IE;
+
+	J = -1;
+	Nx = -1;
+	for (k = 0; k < RCount; k++)
+	{
+		i = (RHead - k) & 255;
+		if (RT[i] <= Tau)
+		{
+			J = i;
+			break;
+		}
+		Nx = i;
+	}
+	if (J < 0)
+	{
+		if (Nx < 0)
+			return false;
+		J = Nx;
+		Nx = -1;
+	}
+	IE = FMax(Interval(), 0.001);
+	if (FitRot(Tau, FMax(0.033, 2.0 * IE), FMax(FNow - Tau, 0.25 * IE), RSeg[J], J, OVY, OVP, OBY, OBP))
+		return true;
+	return HeldRot(Tau, OVY, OVP, OBY, OBP);
+}
+
+// The four rotation channels at Tau, the snapshots either side joined in a
+// straight line.
+function bool HeldRot(float Tau, out float OVY, out float OVP, out float OBY, out float OBP)
 {
 	local int k, i, J, Nx;
 	local float A;
@@ -1485,8 +1800,6 @@ function bool EvalRot(float Tau, float Hb, float Hf, out float OVY, out float OV
 		J = Nx;
 		Nx = -1;
 	}
-	if (FitRot(Tau, Hb, Hf, RSeg[J], J, OVY, OVP, OBY, OBP))
-		return true;
 	OVY = RVY[J];
 	OVP = RVP[J];
 	OBY = RBY[J];
@@ -1522,7 +1835,7 @@ function SnapToCut()
 // with the view held level.
 function Place()
 {
-	local float DP, DR, IE, Hf, Hb, Hfr, Hbr, NewestP, NewestR, TP, TR, OE, Now;
+	local float IE, Hf, Hb, NewestP, NewestR, TP, TR, OE, Now;
 	local float OVY, OVP, OBY, OBP;
 	local vector L;
 	local rotator R;
@@ -1532,13 +1845,19 @@ function Place()
 	if (PCount == 0 || RCount == 0)
 		return;
 	SnapToCut();
+	// the delay in use eases towards the delay by a tenth of the demo advance
+	if (!bDCur)
+	{
+		DCur = Delay();
+		bDCur = true;
+	}
+	DCur += FClamp(Delay() - DCur, -0.1 * FAdv, 0.1 * FAdv);
 	Now = ClockAcc + Off;
-	DP = DPos;
-	DR = FMin(DRot, DPos);
+	FNow = Now;
 	IE = FMax(Interval(), 0.001);
 
 	// ---- the moments shown
-	TP = FMax(Now - DP, ShowFrom);
+	TP = FMax(Now - DCur, ShowFrom);
 	NewestP = PT[PHead];
 	if (TP > NewestP)
 	{
@@ -1563,7 +1882,7 @@ function Place()
 		TP = TauP;
 	// from the clock, not from TP: TP holds while he stands still, and a turn
 	// on the spot must not hold with it
-	TR = FMax(Now - DR, ShowFrom);
+	TR = FMax(Now - DCur, ShowFrom);
 	NewestR = RT[RHead];
 	if (TR > NewestR)
 		TR = NewestR;
@@ -1573,19 +1892,16 @@ function Place()
 	TauR = TR;
 	bHaveTau = true;
 
-	// ---- the fits: the window reaches back twice as far as it reaches ahead
-	Hf = FMax(DP - IE, 2.0 * IE);
+	Hf = FMax(DCur - IE, 2.0 * IE);
 	Hb = FMax(2.0 * Hf, 0.04);
 	bHaveL = EvalLoc(TP, Hb, Hf, L, OE);
-	Hfr = FMax(DR - IE, 1.5 * IE);
-	Hbr = FMax(2.0 * Hfr, 0.02);
-	bHaveR = EvalRot(TR, Hbr, Hfr, OVY, OVP, OBY, OBP);
+	bHaveR = EvalRot(TR, OVY, OVP, OBY, OBP);
 
 	// ---- movement
 	if (bHaveL)
 	{
-		// Placed with world collision off: the fit can sit a fraction of a unit
-		// inside a wall the snapshots touched.
+		// Placed with world collision off: the path can sit a fraction of a
+		// unit inside a wall the snapshots touched.
 		bOldCW = Rec.bCollideWorld;
 		Rec.bCollideWorld = false;
 		Rec.SetLocation(L);
@@ -1680,7 +1996,4 @@ defaultproperties
 	PHead=-1
 	RHead=-1
 	RateFix=1.000000
-	IRec=0.008000
-	DPos=0.050000
-	DRot=0.025000
 }

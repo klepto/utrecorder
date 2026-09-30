@@ -1,5 +1,5 @@
 /**
- * The server's JSON, exactly as `HttpService` answers it. Every field is present; a nullable one is `null`, never
+ * The server's JSON, exactly as `HttpService` answers it. Every field but `Demo.medal` is present; a nullable one is `null`, never
  * missing. A duration is an ISO-8601 duration string such as `PT1M2.345S`, an instant an ISO-8601 UTC string, and an
  * enum its constant's name.
  */
@@ -20,6 +20,11 @@ export interface Demo {
   timestamp: string;
   /** The URL the `.dem` file downloads from. */
   demoUrl: string;
+  /**
+   * The medal of the cap, as UTBT numbers it: `0` casual, `1` certified, `2` bronze, `3` silver, `4` gold, `5`
+   * champion, `6` world record. Missing if the server does not report it, which reads as casual.
+   */
+  medal?: number;
 }
 
 /** A step of a recording, in the order a recording runs them. */
@@ -46,7 +51,7 @@ export type RecordingStatus =
   | "Recorded"
   | "Uploaded"
   | "Archived"
-  | "Evicted"
+  | "Outdated"
   | "Failed"
   | "Unresolvable";
 

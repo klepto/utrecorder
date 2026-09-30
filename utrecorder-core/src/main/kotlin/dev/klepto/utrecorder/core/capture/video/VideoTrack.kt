@@ -8,12 +8,9 @@ import java.nio.file.Path
  * @property file The video file that holds the frames.
  * @property length How many seconds [file] runs.
  * @property demoStart The demo time, in seconds, the first frame of [file] shows. If it is not known, it is `null`.
- * @property smoothingDelay How many seconds behind the demo [file] shows the movement of the player who recorded the
- * demo. If that movement is not smoothed, it is `0.0`.
  */
 data class VideoTrack(
     val file: Path,
     val length: Double,
     val demoStart: Double?,
-    val smoothingDelay: Double = 0.0,
 )

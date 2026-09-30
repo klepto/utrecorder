@@ -1,6 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test, vi } from "vitest";
 import { useQueue } from "../api/queries";
@@ -56,7 +56,8 @@ describe("QueueList", () => {
     expect(rows[0]).toHaveTextContent(/2[89] Sept 2026/);
     expect(rows[4]).toHaveTextContent("Nyx");
     expect(screen.getAllByText(/up next/)).toHaveLength(1);
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelectorAll("img")).toHaveLength(5);
+    expect(within(rows[0]).getByRole("img", { name: "Champion Medal" })).toBeInTheDocument();
   });
 
   test("shows 1 minute when nothing is capturing, and still once the estimate has passed", () => {

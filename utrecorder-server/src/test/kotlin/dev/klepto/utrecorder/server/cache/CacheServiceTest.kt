@@ -10,9 +10,9 @@ import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Evicted
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Recording
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import dev.klepto.utrecorder.server.upload.MediaMetadata
 import dev.klepto.utrecorder.server.upload.MediaUploader
@@ -90,6 +90,16 @@ class CacheServiceTest :
                     md5: String,
                 ): Boolean = true
 
+                override suspend fun describe(
+                    id: String,
+                    metadata: MediaMetadata,
+                ) {}
+
+                override suspend fun delete(
+                    id: String,
+                    name: String,
+                ) {}
+
                 override fun downloadUrl(
                     id: String,
                     name: String,
@@ -127,7 +137,7 @@ class CacheServiceTest :
 
         test("deletes the mp4 of an archived recording not viewed within the cache TTL, and keeps the recording") {
             cache(mapOf("expired" to Archived), listOf("expired")) { service, repository, recordings ->
-                now.set(now.get() + 8.days)
+                now.set(now.get() + 15.days)
                 service.evict()
 
                 recordings.resolve("expired.mp4").shouldNotExist()
@@ -137,9 +147,9 @@ class CacheServiceTest :
 
         test("keeps the mp4 of an archived recording viewed within the cache TTL") {
             cache(mapOf("viewed" to Archived), listOf("viewed")) { service, _, recordings ->
-                now.set(now.get() + 6.days)
+                now.set(now.get() + 13.days)
                 service.view("viewed")
-                now.set(now.get() + 6.days)
+                now.set(now.get() + 13.days)
                 service.evict()
 
                 recordings.resolve("viewed.mp4").shouldExist()
@@ -148,10 +158,40 @@ class CacheServiceTest :
 
         test("keeps the mp4 of an archived recording never viewed until the cache TTL passes from its archiving") {
             cache(mapOf("fresh" to Archived), listOf("fresh")) { service, _, recordings ->
-                now.set(now.get() + 6.days)
+                now.set(now.get() + 13.days)
                 service.evict()
 
                 recordings.resolve("fresh.mp4").shouldExist()
+            }
+        }
+
+        test("deletes the mp4 of an outdated recording once the cache TTL passes from when it became outdated") {
+            cache(mapOf("outdated" to Outdated), listOf("outdated")) { service, repository, recordings ->
+                now.set(now.get() + 15.days)
+                service.evict()
+
+                recordings.resolve("outdated.mp4").shouldNotExist()
+                repository["outdated"]?.status shouldBe Outdated
+            }
+        }
+
+        test("keeps the mp4 of an outdated recording within the cache TTL") {
+            cache(mapOf("outdated" to Outdated), listOf("outdated")) { service, _, recordings ->
+                now.set(now.get() + 13.days)
+                service.evict()
+
+                recordings.resolve("outdated.mp4").shouldExist()
+            }
+        }
+
+        test("does not extend the cache TTL of an outdated recording by viewing it") {
+            cache(mapOf("outdated" to Outdated), listOf("outdated")) { service, _, recordings ->
+                now.set(now.get() + 13.days)
+                service.view("outdated")
+                now.set(now.get() + 2.days)
+                service.evict()
+
+                recordings.resolve("outdated.mp4").shouldNotExist()
             }
         }
 
@@ -183,22 +223,20 @@ class CacheServiceTest :
             }
         }
 
-        test("deletes archived, then recorded mp4 files, least recently viewed first, down to the target size") {
-            val statuses = mapOf("arch1" to Archived, "arch2" to Archived, "recd1" to Recorded, "recd2" to Recorded, "upld1" to Uploaded)
-            cache(statuses, statuses.keys.toList(), maxBytes = 24, targetBytes = 12) { service, repository, recordings ->
+        test("deletes archived, then outdated mp4 files, oldest first within outdated, down to the target size") {
+            val statuses = mapOf("arch1" to Archived, "out1" to Outdated, "out2" to Outdated, "recd1" to Recorded)
+            cache(statuses, statuses.keys.toList(), maxBytes = 16, targetBytes = 9) { service, repository, recordings ->
                 now.set(now.get() + 1.days)
-                service.view("arch2")
-                service.view("recd2")
+                repository.update("out2") { it.copy(status = Recorded) }
+                repository.update("out2") { it.copy(status = Outdated) }
                 service.evict()
 
                 recordings.resolve("arch1.mp4").shouldNotExist()
-                recordings.resolve("arch2.mp4").shouldNotExist()
-                recordings.resolve("recd1.mp4").shouldNotExist()
-                recordings.resolve("recd2.mp4").shouldExist()
-                recordings.resolve("upld1.mp4").shouldExist()
-                repository["arch1"]?.status shouldBe Archived
-                repository["recd1"]?.status shouldBe Evicted
-                repository["recd2"]?.status shouldBe Recorded
+                recordings.resolve("out1.mp4").shouldNotExist()
+                recordings.resolve("out2.mp4").shouldExist()
+                recordings.resolve("recd1.mp4").shouldExist()
+                repository["out2"]?.status shouldBe Outdated
+                repository["recd1"]?.status shouldBe Recorded
             }
         }
 
@@ -212,9 +250,22 @@ class CacheServiceTest :
             }
         }
 
-        test("sets an evicted recording to pending when viewed") {
-            cache(mapOf("evicted" to Evicted), emptyList()) { service, _, _ ->
-                service.view("evicted")?.status shouldBe Pending
+        test("never trims a recorded, uploaded or recording mp4, even above the target size") {
+            val statuses = mapOf("recd1" to Recorded, "upld1" to Uploaded, "recg1" to Recording)
+            cache(statuses, statuses.keys.toList(), maxBytes = 1, targetBytes = 0) { service, _, recordings ->
+                service.evict()
+
+                recordings.resolve("recd1.mp4").shouldExist()
+                recordings.resolve("upld1.mp4").shouldExist()
+                recordings.resolve("recg1.mp4").shouldExist()
+            }
+        }
+
+        test("keeps the status of a recording when it is viewed") {
+            cache(mapOf("archived" to Archived), emptyList()) { service, repository, _ ->
+                service.view("archived")
+
+                repository["archived"]?.status shouldBe Archived
             }
         }
 

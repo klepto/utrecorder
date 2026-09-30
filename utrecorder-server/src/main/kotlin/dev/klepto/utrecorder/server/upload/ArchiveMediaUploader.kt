@@ -9,23 +9,34 @@ import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.expectSuccess
+import io.ktor.client.request.delete
+import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.isSuccess
+import io.ktor.http.parameters
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.put
 import java.nio.file.Path
 import kotlin.io.path.name
 
 /**
  * [MediaUploader] over the S3-like upload API and the metadata API of the Internet Archive.
  *
- * The Archive identifier of the item `<id>` is `<prefix>-<id>`, with the prefix [ServerConfig.archivePrefix]. Each item
- * is created in [ServerConfig.archiveCollection] with the media type `movies`, the title, description and subjects of
- * its [MediaMetadata], and without a derive. An upload has no time limit, only the socket timeout.
+ * The Archive identifier of the item `<id>` is `<prefix>-<id>`, with the prefix [ServerConfig.archivePrefix], cut from
+ * its end to at most 100 characters. Each item is created in [ServerConfig.archiveCollection] with the media type
+ * `movies`, the title, description and subjects of its [MediaMetadata], and without a derive. An upload has no time
+ * limit, only the socket timeout.
  *
  * @property config The keys, collection and identifier prefix of the Archive account.
  * @param engine The Ktor client engine the requests run over.
@@ -70,6 +81,35 @@ class ArchiveMediaUploader(
             .any { it.md5 == md5 }
     }
 
+    override suspend fun describe(
+        id: String,
+        metadata: MediaMetadata,
+    ) {
+        val form =
+            parameters {
+                append("-target", "metadata")
+                append("-patch", metadataPatch(metadata).toString())
+            }
+        client.submitForm("https://archive.org/metadata/${identifier(id)}", form) {
+            header(HttpHeaders.Authorization, authorization)
+        }
+    }
+
+    override suspend fun delete(
+        id: String,
+        name: String,
+    ) {
+        val response =
+            client.delete("https://s3.us.archive.org/${identifier(id)}/$name") {
+                expectSuccess = false
+                header(HttpHeaders.Authorization, authorization)
+                header("x-archive-cascade-delete", "1")
+            }
+        check(response.status.isSuccess() || response.status == HttpStatusCode.NotFound) {
+            "The Archive refused to delete $name of ${identifier(id)}: ${response.status}"
+        }
+    }
+
     override fun downloadUrl(
         id: String,
         name: String,
@@ -78,7 +118,7 @@ class ArchiveMediaUploader(
     /**
      * Returns the Archive identifier of the item [id].
      */
-    private fun identifier(id: String): String = "${config.archivePrefix}-$id"
+    private fun identifier(id: String): String = "${config.archivePrefix}-$id".take(IDENTIFIER_MAX_LENGTH)
 
     /**
      * Metadata of one Archive item.
@@ -102,11 +142,29 @@ class ArchiveMediaUploader(
 
     private companion object {
         val JSON: Json = Json { ignoreUnknownKeys = true }
+        const val IDENTIFIER_MAX_LENGTH: Int = 100
 
         /**
          * Returns [value] as an Archive metadata header value: `uri(<value>)`, with [value] percent-encoded as UTF-8.
          */
         fun encodeValue(value: String): String = "uri(${value.encodeUrlPathSegment()})"
+
+        /**
+         * Returns the JSON Patch that replaces the title and description of an item with those of [metadata].
+         */
+        fun metadataPatch(metadata: MediaMetadata): JsonArray =
+            buildJsonArray {
+                addJsonObject {
+                    put("op", "replace")
+                    put("path", "/title")
+                    put("value", metadata.title)
+                }
+                addJsonObject {
+                    put("op", "replace")
+                    put("path", "/description")
+                    put("value", toHtml(metadata.description))
+                }
+            }
 
         /**
          * Returns [text] as HTML, with its markup characters escaped and each line break as `<br />`.

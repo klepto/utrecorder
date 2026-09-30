@@ -12,6 +12,7 @@ import dev.klepto.utrecorder.server.recording.RecordingJob
 import dev.klepto.utrecorder.server.recording.RecordingJobs
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import io.ktor.http.ContentType
@@ -50,12 +51,14 @@ import kotlin.time.Instant
  * The routes are:
  * - `GET /demo/{capId}`: the mp4 of a [Recorded], [Uploaded] or [Archived] recording, with range support. If the
  *   recording is [Archived] and its mp4 is not in [ServerConfig.recordings], redirects to the download URL of [cache]
- *   instead, if [cache] names one. Every other request answers `404`.
+ *   instead, if [cache] names one. The mp4 of an [Outdated] recording is served the same way, but never redirected;
+ *   once its mp4 is gone, the recording answers `404`. Every other request answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
  * - `GET /api/queue`: the next 10 demos to be recorded, in the order they are taken.
- * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, most
- *   recently recorded first. Recordings recorded at the same time are ordered by the time of their demo, then by
- *   [Demo.capId], both descending. A recording without [Recording.recordedAt] comes after every other one. The page
+ * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, plus every
+ *   [Outdated] recording whose mp4 still exists, most recently recorded first. Recordings recorded at the same time
+ *   are ordered by the time of their demo, then by [Demo.capId], both descending. A recording without
+ *   [Recording.recordedAt] comes after every other one. The page
  *   skips `offset` recordings, `0` by default, and holds at most `limit` recordings, `10` by default and at most `50`.
  *   A `limit` or `offset` that is not a non-negative integer answers `400`.
  * - Any other path under `/api/`: `404` with a JSON body.
@@ -114,11 +117,12 @@ class HttpService(
     }
 
     /**
-     * Answers with the mp4 of the recording [capId], a redirect to its download URL, or `404`.
+     * Answers with the mp4 of the recording [capId], a redirect to its download URL, or `404`. An [Outdated] recording
+     * is never redirected: once its mp4 is gone, it answers `404`.
      */
     private suspend fun RoutingContext.serveDemo(capId: String) {
         val recording = cache.view(capId)
-        if (recording == null || recording.status !in COMPLETED) {
+        if (recording == null || recording.status !in SERVABLE) {
             call.respond(HttpStatusCode.NotFound)
             return
         }
@@ -147,8 +151,8 @@ class HttpService(
     }
 
     /**
-     * Returns at most [limit] [Recorded], [Uploaded] or [Archived] recordings, most recently recorded first, after
-     * skipping the first [offset] of them.
+     * Returns at most [limit] [Recorded], [Uploaded] or [Archived] recordings, plus every [Outdated] recording whose
+     * mp4 still exists, most recently recorded first, after skipping the first [offset] of them.
      */
     private suspend fun recordings(
         limit: Int,
@@ -156,7 +160,7 @@ class HttpService(
     ): List<Recording> =
         repository
             .all()
-            .filter { it.status in COMPLETED }
+            .filter { it.status in COMPLETED || (it.status == Outdated && config.mp4(it.demo.capId).fileExists()) }
             .sortedWith(NEWEST_RECORDED)
             .drop(offset)
             .take(limit)
@@ -204,6 +208,8 @@ class HttpService(
             )
 
         val COMPLETED = setOf(Recorded, Uploaded, Archived)
+
+        val SERVABLE = COMPLETED + Outdated
 
         val NEWEST_RECORDED: Comparator<Recording> =
             compareByDescending<Recording> { it.recordedAt }

@@ -1,6 +1,6 @@
 import type { Demo, Job, Recording } from "../api/types";
 
-/** Returns a sample demo of the cap `capId`. */
+/** Returns a sample demo of the cap `capId`, whose medal cycles through every medal and none. */
 const demo = (capId: string, map: string, player: string, capTime: string, timestamp: string): Demo => {
   return {
     capId,
@@ -10,6 +10,7 @@ const demo = (capId: string, map: string, player: string, capTime: string, times
     capTime,
     timestamp,
     demoUrl: `https://example.com/demos/${capId}.dem`,
+    ...(Number(capId) % 8 === 7 ? {} : { medal: Number(capId) % 8 }),
   };
 };
 
@@ -42,7 +43,7 @@ export const queue: Demo[] = [
 
 const maps = ["CTF-BT-Maverick", "CTF-BT-Skyfall", "CTF-BT-Andromeda", "CTF-BT-Citadel"];
 const players = ["Shadow", "Nyx", "Vex", "Kite", "Orin"];
-const statuses = ["Recorded", "Uploaded", "Archived"] as const;
+const statuses = ["Recorded", "Uploaded", "Archived", "Outdated"] as const;
 
 /** Returns the `index`-th sample recording, newest first, recorded `index` hours before the newest. */
 const recording = (index: number): Recording => {

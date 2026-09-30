@@ -23,7 +23,6 @@ import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class FfmpegVideoCaptureTest :
@@ -70,7 +69,7 @@ class FfmpegVideoCaptureTest :
         }
 
         test("environment holds the port and the fps, and nothing else on Windows") {
-            val environment = capture().environment(100, hooks)
+            val environment = capture().environment(100)
             val expected = mapOf("UTRECORDER_PORT" to "100", "UTRECORDER_FPS" to "120")
 
             when (UtPlatform.current()) {
@@ -95,7 +94,7 @@ class FfmpegVideoCaptureTest :
 
             val tuning =
                 capture(tunedConfig)
-                    .environment(100, hooks)
+                    .environment(100)
                     .filterKeys { it in setOf("LP_NUM_THREADS", "mesa_glthread", "MESA_NO_ERROR", "LP_NATIVE_VECTOR_WIDTH") }
 
             when (UtPlatform.current()) {
@@ -116,7 +115,7 @@ class FfmpegVideoCaptureTest :
         }
 
         test("environment uses the processor count as the llvmpipe thread count when none is configured") {
-            val threads = capture().environment(100, hooks)["LP_NUM_THREADS"]
+            val threads = capture().environment(100)["LP_NUM_THREADS"]
 
             when (UtPlatform.current()) {
                 UtPlatform.WINDOWS -> threads shouldBe null
@@ -175,15 +174,15 @@ class FfmpegVideoCaptureTest :
             hideHud("UTBT_BTMod_v18") shouldBe emptyList()
         }
 
-        test("execScript trims the demo to the configured fps, hides messages and smooths the recorder at fixed delays") {
-            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, demoFrameInterval = 2.998.milliseconds)
+        test("execScript trims the demo to the configured fps, hides messages and smooths the recorder") {
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30)).execScript(description) shouldBe
-                listOf("DemoFrames 60.000000", "HideMessages", "SmoothRecorder 0.002998 0.030 0.015")
+                listOf("DemoFrames 60.000000", "HideMessages", "SmoothRecorder")
         }
 
         test("execScript leaves the recorder unsmoothed when the config turns smoothing off") {
-            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, demoFrameInterval = 2.998.milliseconds)
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30, smoothRecorder = false)).execScript(description) shouldBe
                 listOf("DemoFrames 60.000000", "HideMessages")

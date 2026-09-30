@@ -27,7 +27,7 @@ describe("RecordingList", () => {
 
     expect(await screen.findAllByRole("button")).toHaveLength(10);
     expect(screen.getAllByText("Shadow").length).toBeGreaterThan(0);
-    expect(screen.getByText("0:40.00 by", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("0:40.00")).toBeInTheDocument();
     expect(document.querySelector("video")).toBeNull();
   });
 
@@ -71,7 +71,7 @@ describe("RecordingList", () => {
   test("shows the player unlinked when the cap list leaves out the user", () => {
     render(wrap(<RecordingList query={{ data: [recordings[0]], isPending: false, isError: false }} />));
 
-    expect(screen.getByText("0:40.00 by Shadow")).toBeInTheDocument();
+    expect(screen.getByText("0:40.00").parentElement).toHaveTextContent("0:40.00 by Shadow");
     expect(screen.queryByRole("link")).toBeNull();
   });
 
@@ -132,6 +132,20 @@ describe("RecordingList", () => {
     await waitFor(() =>
       expect(thumbnail).toHaveAttribute("src", "https://api.utbt.net/screenshots/derived/96/default.webp"),
     );
+  });
+
+  test("shows the outdated label on an Outdated recording", () => {
+    const outdated = recordings.find((recording) => recording.status === "Outdated")!;
+    render(wrap(<RecordingList query={{ data: [outdated], isPending: false, isError: false }} />));
+
+    expect(screen.getByText("outdated")).toBeInTheDocument();
+  });
+
+  test("shows no outdated label on an Archived recording", () => {
+    const archived = recordings.find((recording) => recording.status === "Archived")!;
+    render(wrap(<RecordingList query={{ data: [archived], isPending: false, isError: false }} />));
+
+    expect(screen.queryByText("outdated")).toBeNull();
   });
 
   test("renders none of error, md5, views or demoUrl", async () => {

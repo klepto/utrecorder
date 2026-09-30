@@ -242,6 +242,7 @@ class RecordingRepository(
         val lastView: Instant? = null,
         val recordedAt: Instant? = null,
         val processingTime: Duration? = null,
+        val itemId: String? = null,
     )
 
     /**
@@ -278,6 +279,7 @@ class RecordingRepository(
                 lastView = recording.lastView,
                 recordedAt = recording.recordedAt,
                 processingTime = recording.processingTime,
+                itemId = recording.itemId,
             )
 
         /**
@@ -294,6 +296,7 @@ class RecordingRepository(
                 lastView = recording.lastView,
                 recordedAt = recording.recordedAt,
                 processingTime = recording.processingTime,
+                itemId = recording.itemId,
             )
     }
 

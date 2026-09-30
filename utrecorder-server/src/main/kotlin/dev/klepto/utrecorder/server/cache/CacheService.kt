@@ -10,9 +10,7 @@ import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.recording.Recording
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Evicted
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.upload.MediaUploader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -34,18 +32,18 @@ import kotlin.time.Duration.Companion.minutes
  * [Service] that keeps in [ServerConfig.recordings] only the mp4 files worth holding locally.
  *
  * On start, and then once a minute, [evict] deletes the mp4 of every [Archived] recording not viewed within
+ * [ServerConfig.cacheTtl], and of every [Outdated] recording whose [Recording.lastUpdate] is older than
  * [ServerConfig.cacheTtl], and every mp4 that has no recording in [repository]. If the mp4 files still take more than
- * [ServerConfig.cacheMaxBytes], it deletes more of them until they take at most
- * [ServerConfig.cacheTargetBytes].
+ * [ServerConfig.cacheMaxBytes], it deletes more of them until they take at most [ServerConfig.cacheTargetBytes]: first
+ * [Archived], then [Outdated]. The mp4 of a `Recorded`, `Uploaded` or `Recording` recording is never deleted.
  *
  * [view] counts one view of a recording. If the recording is [Archived] and its mp4 is not in
- * [ServerConfig.recordings], the mp4 is downloaded again from [uploader] in the background, one recording at a time. If
- * the recording is [Evicted], it is set to [Pending], so it is recorded again.
+ * [ServerConfig.recordings], the mp4 is downloaded again from [uploader] in the background, one recording at a time.
  *
  * A delete or a download that fails is logged, and tried again on the next pass or the next view.
  *
  * @property repository The recordings whose mp4 files are kept.
- * @property uploader The remote storage an evicted mp4 is downloaded from again, or `null` if nothing is uploaded.
+ * @property uploader The remote storage a missing mp4 is downloaded from again, or `null` if nothing is uploaded.
  * @property config The recordings directory, the cache TTL, the size limits and the directories a download runs in.
  * @property clock The source of the time of a view and of the age of a recording.
  */
@@ -67,8 +65,8 @@ class CacheService(
 
     /**
      * Returns the recording stored under [capId], after counting one view of it. If the recording is [Archived] and its
-     * mp4 is not in [ServerConfig.recordings], queues a download of the mp4, unless one is queued already. If the
-     * recording is [Evicted], sets it to [Pending]. If there is no recording, returns `null` instead.
+     * mp4 is not in [ServerConfig.recordings], queues a download of the mp4, unless one is queued already. If there is
+     * no recording, returns `null` instead.
      */
     suspend fun view(capId: String): Recording? {
         repository.update(capId) { viewed(it) }
@@ -83,13 +81,16 @@ class CacheService(
 
     /**
      * Deletes from [ServerConfig.recordings] the mp4 of every [Archived] recording last viewed more than
-     * [ServerConfig.cacheTtl] ago, and every mp4 that has no recording in [repository]. A recording never viewed is
-     * measured from the time it was set to [Archived]. The recordings stay in [repository].
+     * [ServerConfig.cacheTtl] ago, measured from [Recording.lastUpdate] when never viewed, and of every [Outdated]
+     * recording whose [Recording.lastUpdate] is older than [ServerConfig.cacheTtl]. Also deletes every mp4 that has no
+     * recording in [repository]. The recordings stay in [repository].
      *
-     * If the mp4 files left take more than [ServerConfig.cacheMaxBytes], deletes more of them until they take
-     * at most [ServerConfig.cacheTargetBytes]: first those of [Archived] recordings, then those of [Recorded]
-     * recordings, each set to [Evicted]. Within each, the least recently viewed goes first, and a recording never
-     * viewed is measured from the time its status last changed. The mp4 of any other recording is never deleted.
+     * If the mp4 files left take more than [ServerConfig.cacheMaxBytes], deletes more of them until they take at most
+     * [ServerConfig.cacheTargetBytes]: first those of [Archived] recordings, then, only once no [Archived] mp4 is left,
+     * those of [Outdated] recordings. Within [Archived], the least recently viewed goes first, measured from
+     * [Recording.lastUpdate] when never viewed; within [Outdated], the oldest [Recording.lastUpdate] goes first. The mp4
+     * of any other recording is never deleted. When only such mp4 files are left above [ServerConfig.cacheTargetBytes],
+     * logs a warning and stops.
      */
     suspend fun evict() {
         val recordings = repository.all().associateBy { it.demo.capId }
@@ -110,19 +111,15 @@ class CacheService(
     }
 
     /**
-     * Returns [recording] with one more view, viewed now. An [Evicted] recording is returned as [Pending].
+     * Returns [recording] with one more view, viewed now.
      */
     private fun viewed(recording: Recording): Recording =
-        recording.copy(
-            views = recording.views + 1,
-            lastView = clock.now(),
-            status = if (recording.status == Evicted) Pending else recording.status,
-        )
+        recording.copy(views = recording.views + 1, lastView = clock.now())
 
     /**
-     * Deletes the mp4 files of [recordings] in trim order, if they take more than [ServerConfig.cacheMaxBytes],
-     * until they take at most [ServerConfig.cacheTargetBytes]. Sets each [Recorded] recording whose mp4 is
-     * deleted to [Evicted].
+     * Deletes the mp4 files of [recordings] in trim order, if they take more than [ServerConfig.cacheMaxBytes], until
+     * they take at most [ServerConfig.cacheTargetBytes]. Logs a warning if only mp4 files that are never trimmed are
+     * left above [ServerConfig.cacheTargetBytes].
      */
     private suspend fun trim(recordings: Collection<Recording>) {
         val sizes = mp4Sizes()
@@ -137,16 +134,12 @@ class CacheService(
             val capId = recording.demo.capId
             if (!delete(config.mp4(capId))) continue
             total -= sizes.getValue(capId)
-            if (recording.status == Recorded) evictRecorded(capId)
         }
-        log.info { "Trimmed ${config.recordings} to $total bytes" }
-    }
-
-    /**
-     * Sets the recording [capId] to [Evicted], unless it left [Recorded] meanwhile.
-     */
-    private suspend fun evictRecorded(capId: String) {
-        repository.update(capId) { if (it.status == Recorded) it.copy(status = Evicted) else it }
+        if (total > config.cacheTargetBytes) {
+            log.warn { "Cannot trim ${config.recordings} below $total bytes: only undeletable mp4 files left" }
+        } else {
+            log.info { "Trimmed ${config.recordings} to $total bytes" }
+        }
     }
 
     /**
@@ -186,14 +179,16 @@ class CacheService(
     }
 
     /**
-     * Returns `true` if the mp4 of [recording] may be deleted: [recording] is `null`, or it is [Archived] and was last
-     * viewed, or else set to [Archived], more than [ServerConfig.cacheTtl] ago.
+     * Returns `true` if the mp4 of [recording] may be deleted: [recording] is `null`, it is [Archived] and was last
+     * viewed, or else set to [Archived], more than [ServerConfig.cacheTtl] ago, or it is [Outdated] and its
+     * [Recording.lastUpdate] is more than [ServerConfig.cacheTtl] ago.
      */
     private fun isExpired(recording: Recording?): Boolean =
         when {
             recording == null -> true
-            recording.status != Archived -> false
-            else -> clock.now() - (recording.lastView ?: recording.lastUpdate) > config.cacheTtl
+            recording.status == Archived -> clock.now() - (recording.lastView ?: recording.lastUpdate) > config.cacheTtl
+            recording.status == Outdated -> clock.now() - recording.lastUpdate > config.cacheTtl
+            else -> false
         }
 
     /**
@@ -226,11 +221,21 @@ class CacheService(
         }
 
     private companion object {
-        val TRIM_ORDER = listOf(Archived, Recorded)
+        val TRIM_ORDER = listOf(Archived, Outdated)
 
         val TRIM_COMPARATOR: Comparator<Recording> =
             compareBy<Recording> { TRIM_ORDER.indexOf(it.status) }
-                .thenBy { it.lastView ?: it.lastUpdate }
+                .thenBy { trimAge(it) }
+
+        /**
+         * Returns the time [recording] is trimmed from: the last view, or else [Recording.lastUpdate], for [Archived];
+         * [Recording.lastUpdate] alone, ignoring any view, for [Outdated].
+         */
+        fun trimAge(recording: Recording) =
+            when (recording.status) {
+                Outdated -> recording.lastUpdate
+                else -> recording.lastView ?: recording.lastUpdate
+            }
 
         val log = logger<CacheService>()
     }

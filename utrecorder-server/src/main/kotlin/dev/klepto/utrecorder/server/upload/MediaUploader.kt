@@ -29,6 +29,24 @@ interface MediaUploader {
     ): Boolean
 
     /**
+     * Sets the title and description of the existing item [id] to those of [metadata]. Throws if the item cannot be
+     * changed.
+     */
+    suspend fun describe(
+        id: String,
+        metadata: MediaMetadata,
+    )
+
+    /**
+     * Deletes the file [name] of the item [id]. Returns normally if the item does not hold the file. Throws if the
+     * file cannot be deleted.
+     */
+    suspend fun delete(
+        id: String,
+        name: String,
+    )
+
+    /**
      * Returns the URL the file [name] of the item [id] downloads from.
      */
     fun downloadUrl(

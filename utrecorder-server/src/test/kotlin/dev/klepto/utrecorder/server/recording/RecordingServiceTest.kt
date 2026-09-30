@@ -9,9 +9,13 @@ import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import dev.klepto.utrecorder.ut99.UtPackageException
 import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.assertions.throwables.shouldThrow
@@ -59,6 +63,7 @@ class RecordingServiceTest :
                 capId = capId,
                 map = "CTF-BT-Maverick",
                 player = "klepto",
+                userId = capId,
                 capTime = 10.seconds,
                 timestamp = Instant.parse("2026-09-26T12:00:00Z") + minute.minutes,
                 demoUrl = "http://api.utbt.net/demos/$capId",
@@ -350,7 +355,7 @@ class RecordingServiceTest :
             }
         }
 
-        test("records only the fastest demo of each player on each map, and every demo without a user id") {
+        test("records only the fastest demo of each player on each map, and no demo without a user id") {
             val recordings = createTempDirectory(root, "recordings")
 
             fun cap(
@@ -378,13 +383,14 @@ class RecordingServiceTest :
                         config(recordings),
                     )
                 },
-            ) {
+            ) { repository ->
                 eventually(5.seconds) {
-                    names(recordings) shouldContainExactlyInAnyOrder
-                        listOf("fastest.mp4", "other-player.mp4", "other-map.mp4", "no-user.mp4", "no-user-again.mp4")
+                    names(recordings) shouldContainExactlyInAnyOrder listOf("fastest.mp4", "other-player.mp4", "other-map.mp4")
                 }
                 delay(100.milliseconds)
-                names(recordings).size shouldBe 5
+                names(recordings).size shouldBe 3
+                repository["no-user"] shouldBe null
+                repository["no-user-again"] shouldBe null
             }
         }
 
@@ -403,6 +409,114 @@ class RecordingServiceTest :
                     eventually(5.seconds) { repository["slower"] shouldBe null }
                     gate.complete(Unit)
                     eventually(5.seconds) { names(recordings) shouldContainExactlyInAnyOrder listOf("busy.mp4", "faster.mp4") }
+                    job.cancelAndJoin()
+                }
+            }
+        }
+
+        test("sets a beaten recorded, uploaded or archived recording to outdated once the faster one is recorded") {
+            val recordings = createTempDirectory(root, "recordings")
+            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
+                val demos = DemoRepository(store)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                repository +=
+                    listOf(
+                        demo("recorded", 0).copy(userId = "1", capTime = 12.seconds),
+                        demo("uploaded", 1).copy(userId = "2", capTime = 12.seconds),
+                        demo("archived", 2).copy(userId = "3", capTime = 12.seconds),
+                    )
+                repository.finish("recorded", Recorded)
+                repository.update("uploaded") { it.copy(status = Uploaded, md5 = "uploaded-md5") }
+                repository.update("archived") { it.copy(status = Archived, md5 = "archived-md5", views = 2) }
+                demos +=
+                    listOf(
+                        demo("faster-recorded", 3).copy(userId = "1", capTime = 10.seconds),
+                        demo("faster-uploaded", 4).copy(userId = "2", capTime = 10.seconds),
+                        demo("faster-archived", 5).copy(userId = "3", capTime = 10.seconds),
+                    )
+                val recorder = recorder { demo, _ -> done(demo) }
+                coroutineScope {
+                    val job = launch { RecordingService(demos, repository, listOf(recorder), config(recordings)).start() }
+                    eventually(5.seconds) {
+                        repository["recorded"]?.status shouldBe Outdated
+                        repository["uploaded"]?.status shouldBe Outdated
+                        repository["archived"]?.status shouldBe Outdated
+                    }
+                    repository["faster-recorded"]?.status shouldBe Recorded
+                    repository["uploaded"]?.md5 shouldBe "uploaded-md5"
+                    repository["archived"]?.md5 shouldBe "archived-md5"
+                    repository["archived"]?.views shouldBe 2
+                    job.cancelAndJoin()
+                }
+            }
+        }
+
+        test("keeps a recorded recording while the faster demo of its player on its map is only pending or failed") {
+            val recordings = createTempDirectory(root, "recordings")
+            val gate = CompletableDeferred<Unit>()
+            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
+                val demos = DemoRepository(store)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                repository +=
+                    listOf(
+                        demo("beaten-by-pending", 0).copy(userId = "1", capTime = 12.seconds),
+                        demo("beaten-by-failed", 1).copy(userId = "2", capTime = 12.seconds),
+                    )
+                repository.finish("beaten-by-pending", Recorded)
+                repository.finish("beaten-by-failed", Recorded)
+                demos +=
+                    listOf(
+                        demo("pending", 2).copy(userId = "1", capTime = 10.seconds),
+                        demo("busy", 3),
+                        demo("failed", 4).copy(userId = "2", capTime = 10.seconds),
+                    )
+                val recorder =
+                    recorder { demo, _ ->
+                        when (demo.capId) {
+                            "failed" -> RecorderResult.Failed(IllegalStateException("Capture failed"))
+                            else -> done(demo).also { gate.await() }
+                        }
+                    }
+                coroutineScope {
+                    val job =
+                        launch {
+                            RecordingService(demos, repository, listOf(recorder), config(recordings, maxAttempts = 1)).start()
+                        }
+                    eventually(5.seconds) { repository["busy"]?.status shouldBe RecordingStatus.Recording }
+                    repository["failed"]?.status shouldBe Failed
+                    repository["pending"]?.status shouldBe Pending
+                    repository["beaten-by-pending"]?.status shouldBe Recorded
+                    repository["beaten-by-failed"]?.status shouldBe Recorded
+                    gate.complete(Unit)
+                    job.cancelAndJoin()
+                }
+            }
+        }
+
+        test("sets a beaten recording to outdated once its capture ends") {
+            val recordings = createTempDirectory(root, "recordings")
+            val gate = CompletableDeferred<Unit>()
+            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
+                val demos = DemoRepository(store)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                val record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult = { demo, _ ->
+                    if (demo.capId == "slower") gate.await()
+                    done(demo)
+                }
+                demos += listOf(demo("slower", 0).copy(userId = "1", capTime = 12.seconds))
+                coroutineScope {
+                    val job =
+                        launch {
+                            RecordingService(demos, repository, listOf(recorder(record), recorder(record)), config(recordings))
+                                .start()
+                        }
+                    eventually(5.seconds) { repository["slower"]?.status shouldBe RecordingStatus.Recording }
+                    demos += listOf(demo("faster", 1).copy(userId = "1", capTime = 10.seconds))
+                    eventually(5.seconds) { repository["faster"]?.status shouldBe Recorded }
+                    repository["slower"]?.status shouldBe RecordingStatus.Recording
+                    gate.complete(Unit)
+                    eventually(5.seconds) { repository["slower"]?.status shouldBe Outdated }
+                    recordings.resolve("slower.mp4").exists() shouldBe true
                     job.cancelAndJoin()
                 }
             }

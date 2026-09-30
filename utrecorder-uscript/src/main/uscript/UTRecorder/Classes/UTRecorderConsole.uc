@@ -23,11 +23,8 @@
 //   TimerStop <demo time>
 //                     end the run TIMER_END_DELAY seconds of demo time after
 //                     the demo time the Bunny Track timer of the run stops at,
-//   SmoothRecorder <interval> <movement> <rotation>
-//                     smooth the followed player's movement and view with a
-//                     UTRecorderSmooth, for a demo whose frames are
-//                     <interval> seconds apart, showing his movement and his
-//                     view the given seconds behind the demo.
+//   SmoothRecorder    smooth the followed player's movement and view with a
+//                     UTRecorderSmooth.
 //=============================================================================
 class UTRecorderConsole extends UTConsole
 	config(UTRecorder);
@@ -88,7 +85,6 @@ var bool bRewound;        // the rewind seek has been issued
 var int SettledTicks;     // settled ticks in a row before the rewind
 var float TimerEnd;       // demo time the end mark is due at, 0 when TimerStop was not run
 var bool bSmoothRecorder; // SmoothRecorder was run
-var float SmoothInterval, SmoothMovement, SmoothRotation; // what SmoothRecorder was run with
 var UTRecorderSmooth Smoother; // the smoother spawned in the demo level
 
 var float Elapsed;        // seconds since this console was created
@@ -322,39 +318,10 @@ function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
 }
 
 // Keeps a UTRecorderSmooth spawned in the demo level from the next tick on.
-// Args holds three space-separated numbers: the seconds between the demo's
-// frames, and how many seconds behind the demo the followed player's
-// movement and his view are shown.
-exec function SmoothRecorder(string Args)
+exec function SmoothRecorder()
 {
 	bSmoothRecorder = True;
-	SmoothInterval = float(NextArgument(Args));
-	SmoothMovement = float(NextArgument(Args));
-	SmoothRotation = float(NextArgument(Args));
-	Log("UTRecorder: smoothing the followed player, demo frame interval" @ SmoothInterval @ "s, movement shown"
-		@ SmoothMovement @ "s behind, rotation" @ SmoothRotation @ "s", 'UTRecorder');
-}
-
-// Returns the first space-separated word of Args and removes it from Args.
-function string NextArgument(out string Args)
-{
-	local int Space;
-	local string Word;
-
-	while (Left(Args, 1) == " ")
-		Args = Mid(Args, 1);
-
-	Space = InStr(Args, " ");
-	if (Space < 0)
-	{
-		Word = Args;
-		Args = "";
-		return Word;
-	}
-
-	Word = Left(Args, Space);
-	Args = Mid(Args, Space + 1);
-	return Word;
+	Log("UTRecorder: smoothing the followed player", 'UTRecorder');
 }
 
 // Spawns a UTRecorderSmooth in the demo level unless one is still there.
@@ -376,12 +343,6 @@ function SpawnSmoother()
 	if (Smoother == None)
 		return;
 
-	if (SmoothInterval > 0.0)
-		Smoother.IRec = SmoothInterval;
-	if (SmoothMovement > 0.0)
-		Smoother.DPos = SmoothMovement;
-	if (SmoothRotation > 0.0)
-		Smoother.DRot = SmoothRotation;
 	Log("UTRecorder: spawned recorder smoother" @ Smoother, 'UTRecorder');
 }
 

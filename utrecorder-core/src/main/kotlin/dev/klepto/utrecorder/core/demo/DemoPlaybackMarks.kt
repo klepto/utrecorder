@@ -18,7 +18,8 @@ import kotlin.time.Duration.Companion.seconds
  * time.
  *
  * @property label The kind of mark the game logged.
- * @property wallTime The wall-clock time the mark was logged, resolved in the system default time zone.
+ * @property wallTime The date the game reported when the mark was logged, resolved in the system default time zone.
+ * It is the wall-clock time unless the game's date is hooked.
  * @property frame The number of frames the game had rendered when the mark was logged.
  * @property demoTime The demo time the mark was logged at.
  */

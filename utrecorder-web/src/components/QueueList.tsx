@@ -1,12 +1,13 @@
 import { Table, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import type { Demo } from "../api/types";
-import { formatCapTime, formatRemaining } from "../format";
+import { formatRemaining } from "../format";
 import { capLinkProps } from "./capLinkProps";
 import type { JobsState } from "./JobsState";
 import { PlayerLink } from "./PlayerLink";
 import { QueryList, type QueryState } from "./QueryList";
 import classes from "./QueueList.module.css";
+import { RecordTime } from "./RecordTime";
 import { Timestamp } from "./Timestamp";
 import { Truncated } from "./Truncated";
 import { useNextStart } from "./useNextStart";
@@ -52,7 +53,9 @@ const QueueRow = ({ demo, next, deadline }: { demo: Demo; next: boolean; deadlin
         </Text>
       </Table.Td>
       <Table.Td>
-        <Text size="sm">{formatCapTime(demo.capTime)}</Text>
+        <Text size="sm">
+          <RecordTime demo={demo} />
+        </Text>
       </Table.Td>
       <Table.Td>
         <Timestamp value={demo.timestamp} />
@@ -87,7 +90,7 @@ export const QueueList = ({ query, jobs }: QueueListProps) => {
           <colgroup>
             <col />
             <col style={{ width: "30%" }} />
-            <col style={{ width: "4.5rem" }} />
+            <col style={{ width: "6.5rem" }} />
             <col style={{ width: "6.5rem" }} />
           </colgroup>
           <Table.Tbody>

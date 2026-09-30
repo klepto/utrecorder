@@ -8,13 +8,12 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * Settings of one run that plays a demo through the recorder console.
  *
- * Use [of] to create one from a demo file name, a demo duration, the packages the demo loads, its frame interval and
- * the demo times its run starts and stops at.
+ * Use [of] to create one from a demo file name, a demo duration, the packages the demo loads and the demo times its
+ * run starts and stops at.
  *
  * @property demoFileName The file name of the demo in the installation's `System` directory, without extension.
  * @property demoDuration How long the demo runs.
  * @property packages The packages the demo loads.
- * @property demoFrameInterval The median demo time between two demo frames, or `null` if the demo does not show one.
  * @property runStart The demo time the run the demo records starts at, or `null` if the demo does not show one.
  * @property runStop The demo time the Bunny Track timer of the run stops at, or `null` if the demo does not show one.
  * @property execLine The exec script line playing the demo.
@@ -28,7 +27,6 @@ data class DemoPlaybackConfig(
     val demoFileName: String,
     val demoDuration: Duration,
     val packages: List<UtPackage>,
-    val demoFrameInterval: Duration?,
     val runStart: Duration?,
     val runStop: Duration?,
     val execLine: String,
@@ -75,14 +73,12 @@ data class DemoPlaybackConfig(
 
         /**
          * Returns the settings of a run that plays the demo file [demoFileName], which is [demoDuration] long, loads
-         * [packages], holds demo frames [demoFrameInterval] apart and records a run that starts at [runStart] and
-         * stops at [runStop].
+         * [packages] and records a run that starts at [runStart] and stops at [runStop].
          */
         fun of(
             demoFileName: String,
             demoDuration: Duration,
             packages: List<UtPackage> = emptyList(),
-            demoFrameInterval: Duration? = null,
             runStart: Duration? = null,
             runStop: Duration? = null,
         ): DemoPlaybackConfig =
@@ -90,7 +86,6 @@ data class DemoPlaybackConfig(
                 demoFileName = demoFileName,
                 demoDuration = demoDuration,
                 packages = packages,
-                demoFrameInterval = demoFrameInterval,
                 runStart = runStart,
                 runStop = runStop,
                 execLine = "demoplay $demoFileName",

@@ -4,12 +4,12 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
-import dev.klepto.utrecorder.common.io.EmbeddedArtifacts
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
+import dev.klepto.utrecorder.core.demo.DemoPlaybackHooks
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.MediaProgress
@@ -21,8 +21,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.nio.file.Path
 import java.util.Locale
-import kotlin.io.path.absolutePathString
-import kotlin.io.path.name
 import kotlin.time.DurationUnit
 
 /**
@@ -63,7 +61,7 @@ class FfmpegVideoCapture(
                 val onFrames = frameProgress(description, frames, onProgress)
                 val encoder = FrameEncoder(config, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
                 val marks = DemoPlaybackMarks.parse(play(description, extractHooks(system), encoder, frames))
-                track(target, marks, smoothing(description))
+                track(target, marks)
             }
         }
 
@@ -103,58 +101,40 @@ class FfmpegVideoCapture(
     }
 
     /**
-     * Returns the video track in [videoFile], starting at the spawn mark of [marks]. The track shows the recorder's
-     * movement behind the demo by the movement delay of [smoothing].
+     * Returns the video track in [videoFile], starting at the spawn mark of [marks].
      */
     private suspend fun track(
         videoFile: Path,
         marks: DemoPlaybackMarks,
-        smoothing: RecorderSmoothing?,
     ): VideoTrack =
         VideoTrack(
             file = videoFile,
             length = ffmpeg.duration(videoFile),
             demoStart = marks.spawn?.demoTime?.toDouble(DurationUnit.SECONDS),
-            smoothingDelay = smoothing?.movement?.toDouble(DurationUnit.SECONDS) ?: 0.0,
         )
-
-    /**
-     * Returns the smoothing of the recorder for [description]'s demo. If [VideoCaptureConfig.smoothRecorder] is off,
-     * returns `null` instead.
-     */
-    fun smoothing(description: DemoPlaybackConfig): RecorderSmoothing? =
-        when {
-            config.smoothRecorder -> RecorderSmoothing.of(description.demoFrameInterval)
-            else -> null
-        }
 
     /**
      * Extracts the `uthooks` hook library and, on Windows, the `utinject` injector into [system], and returns their
      * paths. [system] names the files in the installation's `System` directory.
      */
-    suspend fun extractHooks(system: Workspace): List<Path> = ARTIFACTS.extractTo(system::get)
+    suspend fun extractHooks(system: Workspace): List<Path> = DemoPlaybackHooks.extract(system)
 
     /**
      * Returns the environment the video capture runs under: the port and render fps the hook library reads, plus the Linux
      * environment on Linux.
      */
-    fun environment(
-        port: Int,
-        hooks: List<Path>,
-    ): Map<String, String> =
+    fun environment(port: Int): Map<String, String> =
         buildMap {
             this["UTRECORDER_PORT"] = port.toString()
             this["UTRECORDER_FPS"] = config.renderFps().toString()
-            if (installation.platform.operatingSystem != WINDOWS) putAll(linuxEnvironment(hooks))
+            if (installation.platform.operatingSystem != WINDOWS) putAll(linuxEnvironment())
         }
 
     /**
-     * Returns the Linux part of the environment: the hook library of [hooks] preloaded, and the llvmpipe tuning of a
-     * software-rendered capture.
+     * Returns the Linux part of the environment: the llvmpipe tuning of a software-rendered capture.
      */
-    private fun linuxEnvironment(hooks: List<Path>): Map<String, String> =
+    private fun linuxEnvironment(): Map<String, String> =
         buildMap {
-            hookLibrary(hooks)?.let { this["LD_PRELOAD"] = it.absolutePathString() }
             this["LP_NUM_THREADS"] = threads().toString()
             if (config.linuxMesa.glthread) this["mesa_glthread"] = "true"
             if (config.linuxMesa.noError) this["MESA_NO_ERROR"] = "1"
@@ -181,23 +161,11 @@ class FfmpegVideoCapture(
         hooks: List<Path>,
     ): UtProcess =
         playback.process(VIDEO_CAPTURE, description, config.viewport()) {
-            injector(hooks)?.let { injector ->
-                program = injector
-                programArguments += hookLibrary(hooks)?.absolutePathString().orEmpty()
-            }
+            DemoPlaybackHooks.inject(this, hooks)
             exec += execScript(description)
             sound = false
-            environment += this@FfmpegVideoCapture.environment(port, hooks)
+            environment += this@FfmpegVideoCapture.environment(port)
             if (hidesHud(description)) userIni { this["Botpack.ChallengeHUD", "bHideHUD"] = "True" }
-        }
-
-    /**
-     * Returns the injector of [hooks] on Windows. On Linux, returns `null` instead.
-     */
-    private fun injector(hooks: List<Path>): Path? =
-        when (installation.platform.operatingSystem) {
-            WINDOWS -> hooks.firstOrNull { it.name.endsWith("utinject.exe") }
-            else -> null
         }
 
     /**
@@ -205,7 +173,8 @@ class FfmpegVideoCapture(
      * console's trim command `DemoFrames <render fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
      * timer reset nearest the run start, `TimerStop <run stop>`, which ends the run one second after the Bunny Track
      * timer stops, `HideMessages`, which keeps chat and progress messages off the recorded HUD,
-     * and the command of the recorder's [smoothing] when [VideoCaptureConfig.smoothRecorder] is on. If the demo shows
+     * and `SmoothRecorder`, which smooths the movement and view of the player who recorded the demo, when
+     * [VideoCaptureConfig.smoothRecorder] is on. If the demo shows
      * no run start or no run stop, `TimerReset` or `TimerStop` is left out.
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
@@ -218,7 +187,7 @@ class FfmpegVideoCapture(
                 this += "TimerStop %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
             }
             this += "HideMessages"
-            smoothing(description)?.let { this += it.command() }
+            if (config.smoothRecorder) this += "SmoothRecorder"
         }
 
     companion object {
@@ -238,19 +207,9 @@ class FfmpegVideoCapture(
         private const val VIDEO_NAME = "video.mp4"
 
         /**
-         * The base name of the hook library on either platform.
-         */
-        private const val HOOK_LIBRARY = "uthooks"
-
-        /**
          * The oldest version of the Bunny Track mod whose HUD the capture records.
          */
         private const val BT_MOD_HUD_VERSION = 18
-
-        /**
-         * The native artifacts the hooks module embeds in its jar.
-         */
-        private val ARTIFACTS = EmbeddedArtifacts("native")
 
         /**
          * The name of a Bunny Track mod package, capturing its version.
@@ -264,10 +223,5 @@ class FfmpegVideoCapture(
             description.packages
                 .mapNotNull { BT_MOD.matchEntire(it.name) }
                 .any { it.groupValues[1].toInt() < BT_MOD_HUD_VERSION }
-
-        /**
-         * Returns the hook library of [hooks], or `null` if [hooks] holds none.
-         */
-        private fun hookLibrary(hooks: List<Path>): Path? = hooks.firstOrNull { it.name.contains(HOOK_LIBRARY) }
     }
 }

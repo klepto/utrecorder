@@ -9,6 +9,7 @@ import io.kotest.matchers.shouldBe
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.plugins.ServerResponseException
+import io.ktor.client.request.forms.FormDataContent
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
@@ -106,6 +107,59 @@ class ArchiveMediaUploaderTest :
         test("builds the download URL") {
             ArchiveMediaUploader(config, engine()).downloadUrl(id, "$id.mp4") shouldBe
                 "https://archive.org/download/ut99-bt-$id/$id.mp4"
+        }
+
+        test("cuts a long identifier from its end to 100 characters") {
+            val longId = "424992398657978370-0123456789abcdef-ctf-bt-a-map-whose-name-is-far-too-long-for-the-archive-identifier"
+
+            ArchiveMediaUploader(config, engine()).downloadUrl(longId, "cap.mp4") shouldBe
+                "https://archive.org/download/" +
+                "ut99-bt-424992398657978370-0123456789abcdef-ctf-bt-a-map-whose-name-is-far-too-long-for-the-archive-/cap.mp4"
+        }
+
+        test("describes an item with one metadata POST replacing its title and description") {
+            val engine = engine("""{"success":true}""")
+            ArchiveMediaUploader(config, engine).describe(id, metadata)
+
+            val request = engine.requestHistory.single()
+            request.method shouldBe HttpMethod.Post
+            request.url.toString() shouldBe "https://archive.org/metadata/ut99-bt-$id"
+            request.headers[HttpHeaders.Authorization] shouldBe "LOW access:secret"
+            val form = (request.body as FormDataContent).formData
+            form.names() shouldContainExactlyInAnyOrder listOf("-target", "-patch")
+            form["-target"] shouldBe "metadata"
+            form["-patch"] shouldBe
+                """[{"op":"replace","path":"/title","value":"A & B"},""" +
+                """{"op":"replace","path":"/description","value":"Line &lt;1&gt;<br />Line 2"}]"""
+        }
+
+        test("throws when the metadata POST fails") {
+            val uploader = ArchiveMediaUploader(config, engine(status = HttpStatusCode.ServiceUnavailable))
+
+            shouldThrow<ServerResponseException> { uploader.describe(id, metadata) }
+        }
+
+        test("deletes a file with one DELETE that cascades and keeps no old version") {
+            val engine = engine(status = HttpStatusCode.NoContent)
+            ArchiveMediaUploader(config, engine).delete(id, "$id.mp4")
+
+            val request = engine.requestHistory.single()
+            request.method shouldBe HttpMethod.Delete
+            request.url.toString() shouldBe "https://s3.us.archive.org/ut99-bt-$id/$id.mp4"
+            request.headers.names().filter { it.startsWith("x-archive-") } shouldContainExactlyInAnyOrder
+                listOf("x-archive-cascade-delete")
+            request.headers["x-archive-cascade-delete"] shouldBe "1"
+            request.headers[HttpHeaders.Authorization] shouldBe "LOW access:secret"
+        }
+
+        test("treats a delete of a file the item no longer holds as done") {
+            ArchiveMediaUploader(config, engine(status = HttpStatusCode.NotFound)).delete(id, "$id.mp4")
+        }
+
+        test("throws when the DELETE fails") {
+            val uploader = ArchiveMediaUploader(config, engine(status = HttpStatusCode.ServiceUnavailable))
+
+            shouldThrow<IllegalStateException> { uploader.delete(id, "$id.mp4") }
         }
 
         test("rejects a configuration without keys") {
