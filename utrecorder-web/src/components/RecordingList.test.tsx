@@ -27,7 +27,7 @@ describe("RecordingList", () => {
 
     expect(await screen.findAllByRole("button")).toHaveLength(10);
     expect(screen.getAllByText("Shadow").length).toBeGreaterThan(0);
-    expect(screen.getByText("0:40.00")).toBeInTheDocument();
+    expect(screen.getByText("0:40.00 by", { exact: false })).toBeInTheDocument();
     expect(document.querySelector("video")).toBeNull();
   });
 
@@ -46,6 +46,33 @@ describe("RecordingList", () => {
 
     fireEvent.click(buttons[1]);
     await waitFor(() => expect(document.querySelector("video")).toBeNull());
+  });
+
+  test("expands on Enter", async () => {
+    render(wrap(<Connected />));
+
+    const button = (await screen.findAllByRole("button"))[0];
+    fireEvent.keyDown(button, { key: "Enter" });
+
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    await waitForVideo("/demo/1098");
+  });
+
+  test("links the player to their utbt.net profile without expanding", async () => {
+    render(wrap(<Connected />));
+
+    const link = (await screen.findAllByRole("link", { name: "Nyx" }))[0];
+    expect(link).toHaveAttribute("href", "https://utbt.net/players/u1097");
+
+    fireEvent.click(link);
+    expect(document.querySelector("video")).toBeNull();
+  });
+
+  test("shows the player unlinked when the cap list leaves out the user", () => {
+    render(wrap(<RecordingList query={{ data: [recordings[0]], isPending: false, isError: false }} />));
+
+    expect(screen.getByText("0:40.00 by Shadow")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   test("replaces the video with an alert on a playback error", async () => {
@@ -92,6 +119,17 @@ describe("RecordingList", () => {
 
     expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
     expect(screen.getAllByRole("button")).toHaveLength(2);
+  });
+
+  test("shows the utbt.net thumbnail of the map and falls back to the placeholder", async () => {
+    render(wrap(<Connected />));
+
+    await screen.findAllByRole("button");
+    const thumbnail = document.querySelector("img");
+    expect(thumbnail).toHaveAttribute("src", "https://api.utbt.net/screenshots/derived/96/CTF-BT-Maverick.webp");
+
+    fireEvent.error(thumbnail as HTMLImageElement);
+    await waitFor(() => expect(thumbnail).toHaveAttribute("src", "/map-placeholder.svg"));
   });
 
   test("renders none of error, md5, views or demoUrl", async () => {

@@ -19,7 +19,7 @@ function renderPage() {
 }
 
 function items() {
-  return document.querySelectorAll(".mantine-Accordion-item");
+  return document.querySelectorAll("[aria-expanded]");
 }
 
 describe("RecordingsPage", () => {

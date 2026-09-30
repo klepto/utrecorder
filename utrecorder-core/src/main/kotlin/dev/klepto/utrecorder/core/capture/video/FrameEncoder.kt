@@ -100,11 +100,11 @@ class FrameEncoder(
 
     /**
      * Returns the motion blur step: every [VideoCaptureConfig.motionBlurSamples] rendered frames blended into one, at
-     * full weight, with the rendered frame on either side of them at half weight.
+     * full weight, with the rendered frame on either side of them at quarter weight.
      */
     private fun motionBlur(): String {
         val samples = config.motionBlurSamples
-        val weights = listOf(1) + List(samples - 1) { 2 } + listOf(1)
+        val weights = listOf(1) + List(samples - 1) { 4 } + listOf(1)
         return "tmix=frames=${samples + 1}:weights='${weights.joinToString(" ")}',framestep=$samples"
     }
 

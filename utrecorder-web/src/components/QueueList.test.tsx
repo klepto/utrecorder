@@ -1,8 +1,8 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { useQueue } from "../api/queries";
 import { server } from "../mocks/server";
 import { QueueList } from "./QueueList";
@@ -23,15 +23,42 @@ function renderList() {
 }
 
 describe("QueueList", () => {
-  test("numbers the demos in queue order from 1", async () => {
+  test("lists the demos in queue order and labels only the first as up next", async () => {
     renderList();
 
-    const items = await screen.findAllByRole("listitem");
-    expect(items).toHaveLength(5);
-    expect(items[0]).toHaveTextContent("Vex");
-    expect(items[0]).toHaveTextContent("2:10.50");
-    expect(items[4]).toHaveTextContent("Nyx");
-    expect(screen.getByRole("list").tagName).toBe("OL");
+    const rows = await screen.findAllByRole("row");
+    expect(rows).toHaveLength(5);
+    expect(screen.queryByRole("columnheader")).toBeNull();
+    expect(rows[0]).toHaveTextContent("up next");
+    expect(rows[0]).toHaveTextContent("CTF-BT-Andromeda");
+    expect(rows[0]).toHaveTextContent("Vex");
+    expect(rows[0]).toHaveTextContent("2:10.50");
+    expect(rows[0]).toHaveTextContent(/2[89] Sept 2026/);
+    expect(rows[4]).toHaveTextContent("Nyx");
+    expect(screen.getAllByText("up next")).toHaveLength(1);
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  test("opens the cap on utbt.net when a row is clicked", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderList();
+
+    fireEvent.click((await screen.findAllByRole("row", { name: "CTF-BT-Andromeda on utbt.net" }))[0]);
+
+    expect(open).toHaveBeenCalledWith("https://utbt.net/caps/1101", "_blank", "noopener,noreferrer");
+    open.mockRestore();
+  });
+
+  test("links the player to their utbt.net profile without opening the cap", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderList();
+
+    const link = await screen.findByRole("link", { name: "Kite" });
+    fireEvent.click(link);
+
+    expect(link).toHaveAttribute("href", "https://utbt.net/players/u1102");
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
   });
 
   test("shows skeleton rows while loading", () => {

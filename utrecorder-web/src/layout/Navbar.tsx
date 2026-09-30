@@ -56,7 +56,7 @@ export function Navbar() {
     <Container size="lg" h={60}>
       <Group h="100%" justify="space-between" wrap="nowrap">
         <Anchor component={Link} to="/" onClick={close} display="flex">
-          <img src="/logo.svg" alt="utrecorder" height={28} />
+          <span className={classes.logo} role="img" aria-label="utrecorder" />
         </Anchor>
         <Group gap="md" visibleFrom="sm">
           <NavLinks />

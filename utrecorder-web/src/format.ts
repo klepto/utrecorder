@@ -44,9 +44,17 @@ export function formatRelativeTime(value: string, now: number = Date.now()): str
   return relative.format(0, "second");
 }
 
-/** Formats the ISO-8601 instant `value` as a local date and time, for a tooltip. */
+/** Formats the ISO-8601 instant `value` as a local date and time, such as `30/09/2026, 15:23:53`, for a tooltip. */
 export function formatExactTime(value: string): string {
-  return new Date(value).toLocaleString();
+  return new Date(value).toLocaleString("en-GB");
+}
+
+/**
+ * Formats the ISO-8601 instant `value` as a date, such as `30 Sept 2026`, in the browser's time zone. If `timeZone` is
+ * provided, uses that time zone instead.
+ */
+export function formatDate(value: string, timeZone?: string): string {
+  return new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone });
 }
 
 const STAGES: Record<RecorderStage, string> = {

@@ -57,7 +57,7 @@ class ServerConfig(
     val cacheTargetBytes: Long = reader.get("server.cache_target_gigabytes", 50L, String::toLong) * BYTES_PER_GIGABYTE,
     val port: Int = reader.get("server.port", 8080, String::toInt),
     val recordingMaxAttempts: Int = reader.get("server.recording.max_attempts", 3, String::toInt),
-    val recordingCooldown: Duration = reader.duration("server.recording.cooldown", 1.minutes),
+    val recordingCooldown: Duration = reader.duration("server.recording.cooldown", 10.seconds),
     val recordingRecentAge: Duration = reader.duration("server.recording.recent_age", 7.days),
     val recordingBacklogBuffer: Int = reader.get("server.recording.backlog_buffer", 1, String::toInt),
     val utbtApiUrl: String = reader.get("server.utbt.api_url", "https://gateway.utbt.net"),

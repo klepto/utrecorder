@@ -1,3 +1,10 @@
+.logo {
+  width: 140px;
+  height: 28px;
+  background-color: var(--mantine-color-anchor);
+  mask: url("/logo.svg") no-repeat left center / contain;
+}
+
 .link {
   color: var(--mantine-color-dimmed);
   text-decoration: none;
@@ -10,6 +17,6 @@
 }
 
 .menu {
-  background: var(--mantine-color-body);
-  border-bottom: 1px solid var(--mantine-color-dark-4);
+  background: var(--utrecorder-color-chrome);
+  border-bottom: 1px solid var(--mantine-color-default-border);
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatCapTime, formatExactTime, formatRelativeTime, formatStage, parseDuration } from "./format";
+import { formatCapTime, formatDate, formatExactTime, formatRelativeTime, formatStage, parseDuration } from "./format";
 
 describe("format", () => {
   test("parseDuration reads hours, minutes and seconds", () => {
@@ -32,8 +32,14 @@ describe("format", () => {
     expect(formatRelativeTime("2026-09-28T17:00:00Z", now)).toBe("1 hour ago");
   });
 
-  test("formatExactTime gives a local date and time", () => {
-    expect(formatExactTime("2026-09-28T18:00:00Z")).toMatch(/2026/);
+  test("formatExactTime gives a British local date and time", () => {
+    expect(formatExactTime("2026-09-28T12:00:00Z")).toMatch(/^28\/09\/2026, \d{2}:00:00$/);
+  });
+
+  test("formatDate gives day, short month and year", () => {
+    expect(formatDate("2026-09-30T13:39:12Z", "UTC")).toBe("30 Sept 2026");
+    expect(formatDate("2026-01-05T00:07:00Z", "UTC")).toBe("5 Jan 2026");
+    expect(formatDate("2026-01-04T23:07:00Z", "Europe/Vilnius")).toBe("5 Jan 2026");
   });
 
   test("formatStage labels each stage, and Starting for none", () => {

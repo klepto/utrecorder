@@ -105,7 +105,7 @@ class FrameEncoderTest :
             read[13] shouldBe "-vf"
             read[14] shouldBe
                 "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
-                "tmix=frames=3:weights='1 2 1',framestep=2"
+                "tmix=frames=3:weights='1 4 1',framestep=2"
             read[15] shouldBe "-map"
             read[16] shouldBe "0:v:0"
             read[17] shouldBe "-c:v"
@@ -150,7 +150,7 @@ class FrameEncoderTest :
             read[8] shouldBe "240"
             read[14] shouldBe
                 "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
-                "tmix=frames=5:weights='1 2 2 2 1',framestep=4"
+                "tmix=frames=5:weights='1 4 4 4 1',framestep=4"
         }
 
         test("captureArguments passes the bitrate as the average when the rate factor is blank") {

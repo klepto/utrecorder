@@ -1,0 +1,12 @@
+.header {
+  background: var(--utrecorder-color-chrome);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  flex-grow: 1;
+}

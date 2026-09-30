@@ -5,7 +5,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { AppRoutes } from "./routes";
-import { theme } from "./theme";
+import { cssVariablesResolver, theme } from "./theme";
 
 /** Starts the MSW worker in the default development mode, so `npm run dev` serves the API from the fixtures. */
 async function startMocks(): Promise<void> {
@@ -24,7 +24,7 @@ await startMocks();
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <MantineProvider theme={theme} forceColorScheme="dark">
+      <MantineProvider theme={theme} cssVariablesResolver={cssVariablesResolver} forceColorScheme="dark">
         <BrowserRouter>
           <AppRoutes />
         </BrowserRouter>

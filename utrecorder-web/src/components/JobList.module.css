@@ -1,0 +1,52 @@
+.progress {
+  background-color: var(--mantine-color-body);
+}
+
+.progress::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 2px 4px color-mix(in srgb, var(--mantine-color-black) 25%, transparent);
+  pointer-events: none;
+}
+
+.section {
+  background-image: linear-gradient(
+    90deg,
+    var(--mantine-color-anchor),
+    color-mix(in srgb, var(--mantine-primary-color-filled) 50%, var(--mantine-color-anchor)),
+    var(--mantine-color-anchor)
+  );
+  background-size: 200% 100%;
+  animation: section-flow 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes section-flow {
+  from {
+    background-position-x: 0%;
+  }
+
+  to {
+    background-position-x: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .section {
+    animation: none;
+  }
+}
+
+.filled {
+  clip-path: inset(0 calc(100% - var(--stage-progress-filled)) 0 0);
+  transition: clip-path 100ms ease;
+}
+
+.filledLabel {
+  color: var(--mantine-color-body);
+}
+
+.filledLabel::before {
+  content: attr(data-label);
+}
