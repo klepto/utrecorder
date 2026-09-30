@@ -203,15 +203,19 @@ class FfmpegVideoCapture(
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo: the
      * console's trim command `DemoFrames <fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
-     * timer reset nearest the run start, `HideMessages`, which keeps chat and progress messages off the recorded HUD,
+     * timer reset nearest the run start, `TimerStop <run stop>`, which ends the run one second after the Bunny Track
+     * timer stops, `HideMessages`, which keeps chat and progress messages off the recorded HUD,
      * and the command of the recorder's [smoothing] when [VideoCaptureConfig.smoothRecorder] is on. If the demo shows
-     * no run start, `TimerReset` is left out.
+     * no run start or no run stop, `TimerReset` or `TimerStop` is left out.
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
             this += "DemoFrames %.6f".format(Locale.ROOT, config.fps.toDouble())
             description.runStart?.let {
                 this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
+            }
+            description.runStop?.let {
+                this += "TimerStop %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
             }
             this += "HideMessages"
             smoothing(description)?.let { this += it.command() }

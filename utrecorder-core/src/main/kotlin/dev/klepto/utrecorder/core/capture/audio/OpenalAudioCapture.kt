@@ -20,6 +20,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.util.Locale
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.io.path.getLastModifiedTime
@@ -114,7 +115,7 @@ class OpenalAudioCapture(
         openAlEnvironment: Map<String, String>,
     ): UtProcess =
         playback.process(AUDIO_CAPTURE, description, config.viewport()) {
-            exec += execScript()
+            exec += execScript(description)
             sound = true
             environment += openAlEnvironment
         }
@@ -153,13 +154,21 @@ class OpenalAudioCapture(
     }
 
     /**
-     * Returns the lines the capture adds to the exec script after the line that plays the demo: `RewindStart`, which
-     * seeks back to the demo's start once the ticks settle, and `DisableRendering` when the config turns the audio
-     * capture's rendering off.
+     * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo:
+     * `RewindStart`, which seeks back to the demo's start once the ticks settle, `TimerReset <run start>` and
+     * `TimerStop <run stop>`, which end the run where the video capture ends it, and `DisableRendering` when the
+     * config turns the audio capture's rendering off. If the demo shows no run start or no run stop, `TimerReset` or
+     * `TimerStop` is left out.
      */
-    fun execScript(): List<String> =
+    fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
             this += "RewindStart"
+            description.runStart?.let {
+                this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
+            }
+            description.runStop?.let {
+                this += "TimerStop %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
+            }
             if (!config.render) this += "DisableRendering"
         }
 

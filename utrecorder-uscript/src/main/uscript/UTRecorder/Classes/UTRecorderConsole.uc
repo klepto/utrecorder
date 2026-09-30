@@ -5,9 +5,10 @@
 // Configured through System/UTRecorder.ini and installed as the
 // [Engine.Engine] Console. It does nothing until bAutoExit is on. While it
 // is on, the console logs a start and an end mark around the demo, then
-// stops playback and exits the process once the demo is over, the demo
-// spectator is gone, or a timeout runs out. It also stops warp zones from
-// moving actors on the client, since the demo already carries every position.
+// stops playback and exits the process once the demo passes the end TimerStop
+// set, the demo is over, the demo spectator is gone, or a timeout runs out.
+// It also stops warp zones from moving actors on the client, since the demo
+// already carries every position.
 //
 // Exec commands, typically run from an -EXEC script:
 //   DisableRendering  stop drawing the world,
@@ -19,6 +20,9 @@
 //                     make DemoFrames log the spawn mark instead once the demo
 //                     reaches the demo time the Bunny Track timer of the run
 //                     resets at,
+//   TimerStop <demo time>
+//                     end the run TIMER_END_DELAY seconds of demo time after
+//                     the demo time the Bunny Track timer of the run stops at,
 //   SmoothRecorder <interval> <movement> <rotation>
 //                     smooth the followed player's movement and view with a
 //                     UTRecorderSmooth, for a demo whose frames are
@@ -35,6 +39,8 @@ const SHOW_REALTIME = 0x00004000;
 const SETTLED_DELTA = 0.05;
 // Settled ticks in a row RewindStart waits for before seeking back.
 const SETTLED_TICKS = 10;
+// Seconds of demo time the end mark follows the stop of the Bunny Track timer.
+const TIMER_END_DELAY = 1.0;
 
 // Master switch. Off by default, so the console behaves like UTConsole while
 // it stays installed for normal play.
@@ -80,6 +86,7 @@ var bool bMarkedEnd;      // the end mark has been logged
 var bool bRewindStart;    // seek back to the demo's start once ticks settle
 var bool bRewound;        // the rewind seek has been issued
 var int SettledTicks;     // settled ticks in a row before the rewind
+var float TimerEnd;       // demo time the end mark is due at, 0 when TimerStop was not run
 var bool bSmoothRecorder; // SmoothRecorder was run
 var float SmoothInterval, SmoothMovement, SmoothRotation; // what SmoothRecorder was run with
 var UTRecorderSmooth Smoother; // the smoother spawned in the demo level
@@ -393,6 +400,15 @@ exec function TimerReset(float Start)
 	Log("UTRecorder: waiting for the timer reset at demo time" @ Start, 'UTRecorder');
 }
 
+// Sets TimerEnd TIMER_END_DELAY seconds of demo time after Stop, the demo
+// time the Bunny Track timer of the run stops at, which makes CheckPlayback
+// end the run there.
+exec function TimerStop(float Stop)
+{
+	TimerEnd = Stop + TIMER_END_DELAY;
+	Log("UTRecorder: ending the run at demo time" @ TimerEnd @ "after the timer stop at demo time" @ Stop, 'UTRecorder');
+}
+
 // Signals the spawn once the demo reaches RunStart when TimerReset set it.
 // Otherwise signals it once the followed player is alive: at once if the
 // first player seen is alive, else when a dead one reaches SpawnHealth.
@@ -456,8 +472,9 @@ function SignalSpawn(string Reason)
 	Spec.Driver.SetSpeed(1.0);
 }
 
-// Logs the start and end marks, and begins the exit once the demo has sat
-// on its last frame for ExitDelay seconds.
+// Logs the start and end marks. Begins the exit ExitDelay seconds after the
+// demo passes TimerEnd once the start mark is logged, or once the demo has sat
+// on its last frame for ExitDelay seconds, whichever comes first.
 function CheckPlayback(float Delta)
 {
 	local DemoPlaybackSpec Spec;
@@ -491,6 +508,15 @@ function CheckPlayback(float Delta)
 	{
 		bMarkedStart = True;
 		MarkTime("start");
+	}
+
+	if (bMarkedStart && TimerEnd > 0.0 && LastStreamTime >= TimerEnd)
+	{
+		MarkEnd();
+		SinceEnd += Delta;
+		if (SinceEnd >= ExitDelay)
+			BeginExit("Bunny Track timer stopped at demo time" @ TimerEnd - TIMER_END_DELAY);
+		return;
 	}
 
 	if (Total <= 0)

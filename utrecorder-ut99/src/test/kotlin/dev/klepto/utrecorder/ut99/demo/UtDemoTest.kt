@@ -429,6 +429,18 @@ class UtDemoTest :
                 UtDemo.read(bytes).cap?.runStart shouldBe null
             }
 
+            test("read returns the run start plus the run time as the run stop") {
+                val bytes = capDemo(spawnMarker(2.5f, "CAPID1"), capMarker(77f, "CAPID1"))
+
+                UtDemo.read(bytes).cap?.runStop shouldBe 77.seconds
+            }
+
+            test("read returns a null run stop when the demo reports no run time") {
+                val bytes = capDemo(capMarker(77f, "CAPID1"), capped(77f, "kleps"))
+
+                UtDemo.read(bytes).cap?.runStop shouldBe null
+            }
+
             test("read returns the capper and the reported run time when the demo holds no marker") {
                 val bytes = capDemo(finished(77f, "kleps", "1:14.500", "1/1"), capped(77f, "kleps"))
 

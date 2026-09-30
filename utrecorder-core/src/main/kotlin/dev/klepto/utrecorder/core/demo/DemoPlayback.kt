@@ -53,6 +53,7 @@ class DemoPlayback(
                 parsed.packages,
                 parsed.frameInterval,
                 parsed.cap?.runStart,
+                parsed.cap?.runStop,
             )
         val uscript = DemoPlaybackUscript(installation)
         val stagedDemo = installation.systemDirectory[description.demoFileName + ".dem"]

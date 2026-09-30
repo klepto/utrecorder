@@ -33,6 +33,8 @@ import kotlin.time.Duration.Companion.seconds
  * @property smoothRecorder Whether the capture smooths the movement and view of the player who recorded the demo.
  * @property motionBlur Whether the capture blends each frame with the previous one, a light 50/50 mix that softens
  * motion and helps the encode compress it.
+ * @property colorGrade Whether the capture applies a light color grade to the converted frames: a vibrance lift and
+ * a contrast, saturation and gamma tweak.
  * @property linuxMesa The Mesa tuning of the video capture on Linux.
  */
 class VideoCaptureConfig(
@@ -56,6 +58,7 @@ class VideoCaptureConfig(
     val arguments: String = reader.get("record.arguments", ""),
     val smoothRecorder: Boolean = reader.get("record.smooth_recorder", true, String::toBoolean),
     val motionBlur: Boolean = reader.get("record.motion_blur", true, String::toBoolean),
+    val colorGrade: Boolean = reader.get("record.color_grade", true, String::toBoolean),
     val linuxMesa: LinuxMesaConfig = LinuxMesaConfig(reader),
 ) {
     /**

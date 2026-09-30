@@ -25,6 +25,23 @@ private const val STREAM_HOST = "127.0.0.1"
 private val log = logger<FrameEncoder>()
 
 /**
+ * The `vibrance` filter step of the color grade, run on planar RGB: `vibrance` has no packed or YUV pixel format
+ * support, so it runs before the frames are converted to YUV.
+ */
+private const val VIBRANCE = "vibrance=intensity=0.15"
+
+/**
+ * The `lut` filter step of the color grade, run on the converted YUV. ffmpeg's `eq` filter supports only 8-bit
+ * pixel formats, so contrast 1.05 and gamma 0.98 are applied to the luma plane and saturation 1.1 scales the two
+ * chroma planes around their neutral midpoint, replicating what `eq` does to an 8-bit `yuv420p` at the same
+ * settings, without leaving the 10-bit path.
+ */
+private const val COLOR_GRADE =
+    "lut=y='clip(pow(clip((val-(minval+maxval)/2)*1.05+(minval+maxval)/2\\,minval\\,maxval)/maxval\\,1/0.98)*maxval\\,minval\\,maxval)':" +
+        "u='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)':" +
+        "v='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)'"
+
+/**
  * An ffmpeg capture that encodes the raw frames the hook library streams over loopback TCP into the final codec.
  * Run it through [encode].
  *
@@ -89,14 +106,18 @@ class FrameEncoder(
         }
 
     /**
-     * Returns the `-vf` filter chain: a vertical flip, a light frame blend when [VideoCaptureConfig.motionBlur] is on,
-     * and a BT.709 limited-range conversion to the encoder's 10-bit 4:2:0 pixel format with accurate chroma
-     * downsampling.
+     * Returns the `-vf` filter chain: a vertical flip, the color grade of [VideoCaptureConfig.colorGrade], a
+     * BT.709 limited-range conversion to the encoder's 10-bit 4:2:0 pixel format with accurate chroma downsampling,
+     * and a light frame blend of the converted frames when [VideoCaptureConfig.motionBlur] is on.
      */
     private fun videoFilter(): String {
-        val blend = if (config.motionBlur) "tmix=frames=2:weights='1 1'," else ""
-        return "vflip,$blend" +
-            "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
+        val grade = if (config.colorGrade) "format=gbrp10le,$VIBRANCE," else ""
+        val gradeAfterConvert = if (config.colorGrade) ",$COLOR_GRADE" else ""
+        val blend = if (config.motionBlur) ",tmix=frames=2:weights='1 1'" else ""
+        return "vflip,$grade" +
+            "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le" +
+            gradeAfterConvert +
+            blend
     }
 
     /**

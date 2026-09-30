@@ -31,6 +31,7 @@ class FrameEncoderTest :
             svtav1Params: String = "tune=0",
             arguments: String = "",
             motionBlur: Boolean = true,
+            colorGrade: Boolean = true,
         ): VideoCaptureConfig =
             VideoCaptureConfig(
                 ConfigReader.EMPTY,
@@ -47,6 +48,7 @@ class FrameEncoderTest :
                 queue = 32,
                 arguments = arguments,
                 motionBlur = motionBlur,
+                colorGrade = colorGrade,
             )
 
         val defaultConfig = videoConfig()
@@ -98,12 +100,16 @@ class FrameEncoderTest :
             read[10] shouldBe "32"
         }
 
-        test("captureArguments flips the frames, blends them for a light motion blur and converts them to BT.709 limited-range yuv420p10le") {
+        test("captureArguments flips the frames, grades them, converts them to BT.709 limited-range yuv420p10le and blends them for a light motion blur") {
             val read = arguments()
             read[13] shouldBe "-vf"
             read[14] shouldBe
-                "vflip,tmix=frames=2:weights='1 1'," +
-                "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
+                "vflip,format=gbrp10le,vibrance=intensity=0.15," +
+                "scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
+                "lut=y='clip(pow(clip((val-(minval+maxval)/2)*1.05+(minval+maxval)/2\\,minval\\,maxval)/maxval\\,1/0.98)*maxval\\,minval\\,maxval)':" +
+                "u='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)':" +
+                "v='clip((val-(minval+maxval)/2)*1.1+(minval+maxval)/2\\,minval\\,maxval)'," +
+                "tmix=frames=2:weights='1 1'"
             read[15] shouldBe "-map"
             read[16] shouldBe "0:v:0"
             read[17] shouldBe "-c:v"
@@ -137,10 +143,18 @@ class FrameEncoderTest :
         }
 
         test("captureArguments leaves out the frame blend when motion blur is off") {
-            val read = arguments(videoConfig(motionBlur = false))
+            val read = arguments(videoConfig(motionBlur = false, colorGrade = false))
             read[14] shouldBe
                 "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
             read shouldNotContainAnyOf listOf("tmix=frames=2:weights='1 1'")
+        }
+
+        test("captureArguments leaves out the color grade when it is off") {
+            val read = arguments(videoConfig(colorGrade = false))
+            read[14] shouldBe
+                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
+                "tmix=frames=2:weights='1 1'"
+            read shouldNotContainAnyOf listOf("vibrance=intensity=0.15", "gbrp10le")
         }
 
         test("captureArguments passes the bitrate as the average when the rate factor is blank") {

@@ -3,6 +3,7 @@ package dev.klepto.utrecorder.core.capture.audio
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
@@ -27,6 +28,8 @@ import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 import kotlin.math.PI
 import kotlin.math.sin
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 class OpenalAudioCaptureTest :
     FunSpec({
@@ -103,11 +106,19 @@ class OpenalAudioCaptureTest :
         }
 
         test("execScript rewinds the demo to the start") {
-            capture().execScript() shouldBe listOf("RewindStart")
+            capture().execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe listOf("RewindStart")
         }
 
         test("execScript disables rendering when the config turns the audio capture's rendering off") {
-            capture(AudioCaptureConfig(ConfigReader.EMPTY, render = false)).execScript() shouldBe listOf("RewindStart", "DisableRendering")
+            capture(AudioCaptureConfig(ConfigReader.EMPTY, render = false))
+                .execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe listOf("RewindStart", "DisableRendering")
+        }
+
+        test("execScript passes the demo times the run starts and stops at") {
+            val description =
+                DemoPlaybackConfig.of("staged-demo", Duration.ZERO, runStart = 10.120962.seconds, runStop = 64.572962.seconds)
+
+            capture().execScript(description) shouldBe listOf("RewindStart", "TimerReset 10.120962", "TimerStop 64.572962")
         }
 
         test("track starts 6 seconds into the wav and runs for the 5 minutes 40 seconds between the marks") {

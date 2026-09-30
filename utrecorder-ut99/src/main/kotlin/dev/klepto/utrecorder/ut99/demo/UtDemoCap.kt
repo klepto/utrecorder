@@ -24,4 +24,11 @@ data class UtDemoCap(
      */
     val runStart: Duration?
         get() = runTime?.let { demoTime - it }
+
+    /**
+     * The demo time the Bunny Track timer of the run stops at: [runStart] plus [runTime], which is [demoTime]. If
+     * [runTime] is `null`, it is `null` too.
+     */
+    val runStop: Duration?
+        get() = runTime?.let { demoTime }
 }
