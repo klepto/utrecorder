@@ -12,6 +12,7 @@ const demo: Demo = {
   capTime: "PT1M2.345S",
   timestamp: "2026-09-28T18:04:11Z",
   demoUrl: "https://example.com/demos/1.dem",
+  medal: null,
 };
 
 const renderTime = (value: Demo) => {
@@ -26,7 +27,7 @@ describe("RecordTime", () => {
   test("shows the cap time after the medal the demo names", () => {
     renderTime({ ...demo, medal: 6 });
     expect(screen.getByRole("img", { name: "World Record" })).toBeInTheDocument();
-    expect(screen.getByText("1:02.34")).toBeInTheDocument();
+    expect(screen.getByText("1:02.345")).toBeInTheDocument();
   });
 
   test("shows the casual medal for a demo without a medal", () => {

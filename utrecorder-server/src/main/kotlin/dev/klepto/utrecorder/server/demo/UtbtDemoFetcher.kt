@@ -70,6 +70,7 @@ class UtbtDemoFetcher(
             capTime = cap.capTimeSeconds.seconds,
             timestamp = Instant.parse("${cap.added.replace(' ', 'T')}Z"),
             demoUrl = "${config.utbtDemoUrl}/${cap.id}",
+            medal = cap.medal,
         )
     }
 
@@ -92,6 +93,7 @@ class UtbtDemoFetcher(
      * @property user The UTBT identifier of the player who capped, or `null` if UTBT leaves it out.
      * @property capTimeSeconds The time the cap took, in seconds.
      * @property added The time UTBT added the cap, in UTC without a zone, such as `2026-09-26 12:19:59.891708`.
+     * @property medal The medal of the cap, as UTBT numbers it, or `null` if UTBT leaves it out.
      */
     @Serializable
     private data class Cap(
@@ -101,6 +103,7 @@ class UtbtDemoFetcher(
         val user: String? = null,
         @SerialName("cap_time_seconds") val capTimeSeconds: Double,
         val added: String,
+        val medal: Int? = null,
     )
 
     private companion object {

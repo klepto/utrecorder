@@ -22,16 +22,19 @@ const MEDALS: Medal[] = [
   { name: "Bronze Medal", icon: bronze, color: "var(--mantine-color-dimmed)" },
   { name: "Silver Medal", icon: silver, color: "var(--mantine-color-dimmed)" },
   { name: "Gold Medal", icon: gold, color: "oklch(85.2% .12 91.936)" },
-  { name: "Champion Medal", icon: champion, color: "oklch(70.4% .12 22.216)" },
+  { name: "Champion Medal", icon: champion, color: "oklch(64% .17 22.216)" },
   { name: "World Record", icon: worldRecord, color: "oklch(70.7% .1 254.624)" },
 ];
 
 /** The medal of `demo`, or the casual medal if it has none or one this site does not know. */
 const medalOf = (demo: Demo): Medal => {
-  return (demo.medal !== undefined && MEDALS[demo.medal]) || MEDALS[0];
+  return (demo.medal !== null && MEDALS[demo.medal]) || MEDALS[0];
 };
 
-/** The cap time of `demo` as `m:ss.cc` in the color of its medal, after the icon of its medal named by its alt text. */
+/**
+ * The cap time of `demo` as `formatCapTime` writes it, in the color of its medal, after the icon of its medal named by
+ * its alt text.
+ */
 export const RecordTime = ({ demo }: { demo: Demo }) => {
   const medal = medalOf(demo);
   return (
@@ -39,9 +42,9 @@ export const RecordTime = ({ demo }: { demo: Demo }) => {
       <img
         src={medal.icon}
         alt={medal.name}
-        width={16}
-        height={16}
-        style={{ verticalAlign: "-0.2em", marginRight: 4 }}
+        width={14}
+        height={14}
+        style={{ verticalAlign: "calc(-0.2em + 2px)", marginRight: 4 }}
       />
       {formatCapTime(demo.capTime)}
     </span>

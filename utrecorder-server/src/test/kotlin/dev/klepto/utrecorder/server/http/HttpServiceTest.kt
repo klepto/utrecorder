@@ -4,6 +4,7 @@ import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.core.RecorderStage
+import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.cache.CacheService
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
@@ -131,7 +132,7 @@ class HttpServiceTest :
                 repository += statuses.keys.map { demo(it) }
                 statuses.forEach { (capId, status) -> repository.finish(capId, status) }
                 val cache = CacheService(repository, uploader.takeIf { archive }, config, clock)
-                val service = HttpService(repository, jobs, cache, config)
+                val service = HttpService(repository, jobs, cache, config, VideoCaptureConfig(ConfigReader.EMPTY))
                 testApplication {
                     application { service.module(this) }
                     block(repository)
@@ -186,13 +187,13 @@ class HttpServiceTest :
                 client.get("/") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe "gzip"
                 client.get("/api/recordings") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe
                     "gzip"
-                client.get("/demo/local") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe null
+                client.get("/mp4/local") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe null
             }
         }
 
         test("serves a local mp4 with range support, and counts a view") {
             http(mapOf("local" to Recorded), listOf("local")) { repository ->
-                val response = client.get("/demo/local") { header(HttpHeaders.Range, "bytes=2-4") }
+                val response = client.get("/mp4/local") { header(HttpHeaders.Range, "bytes=2-4") }
 
                 response.status shouldBe HttpStatusCode.PartialContent
                 response.bodyAsText() shouldBe "234"
@@ -202,13 +203,13 @@ class HttpServiceTest :
 
         test("serves a local mp4 without the Archive keys") {
             http(mapOf("local" to Uploaded), listOf("local"), archive = false) {
-                client.get("/demo/local").bodyAsText() shouldBe "0123456789"
+                client.get("/mp4/local").bodyAsText() shouldBe "0123456789"
             }
         }
 
         test("redirects an archived recording without a local mp4 to its download URL, and counts a view") {
             http(mapOf("evicted" to Archived)) { repository ->
-                val response = createClient { followRedirects = false }.get("/demo/evicted")
+                val response = createClient { followRedirects = false }.get("/mp4/evicted")
 
                 response.status shouldBe HttpStatusCode.Found
                 response.headers[HttpHeaders.Location] shouldBe "https://archive.org/download/ut99-bt-evicted/evicted.mp4"
@@ -218,35 +219,73 @@ class HttpServiceTest :
 
         test("answers 404 for an archived recording without a local mp4 when nothing is archived") {
             http(mapOf("evicted" to Archived), archive = false) {
-                client.get("/demo/evicted").status shouldBe HttpStatusCode.NotFound
+                client.get("/mp4/evicted").status shouldBe HttpStatusCode.NotFound
             }
         }
 
         test("answers 404 for an unknown, pending or failed recording") {
             http(mapOf("pending" to Pending, "failed" to Failed), listOf("failed")) {
-                client.get("/demo/unknown").status shouldBe HttpStatusCode.NotFound
-                client.get("/demo/pending").status shouldBe HttpStatusCode.NotFound
-                client.get("/demo/failed").status shouldBe HttpStatusCode.NotFound
+                client.get("/mp4/unknown").status shouldBe HttpStatusCode.NotFound
+                client.get("/mp4/pending").status shouldBe HttpStatusCode.NotFound
+                client.get("/mp4/failed").status shouldBe HttpStatusCode.NotFound
             }
         }
 
         test("answers 404 for a recorded recording whose mp4 is missing") {
             http(mapOf("missing" to Recorded)) {
-                client.get("/demo/missing").status shouldBe HttpStatusCode.NotFound
+                client.get("/mp4/missing").status shouldBe HttpStatusCode.NotFound
             }
         }
 
         test("serves an outdated recording from disk while its mp4 exists") {
             http(mapOf("outdated" to Outdated), listOf("outdated")) {
-                client.get("/demo/outdated").bodyAsText() shouldBe "0123456789"
+                client.get("/mp4/outdated").bodyAsText() shouldBe "0123456789"
             }
         }
 
         test("answers 404 without redirecting for an outdated recording whose mp4 is gone") {
             http(mapOf("outdated" to Outdated)) {
-                val response = createClient { followRedirects = false }.get("/demo/outdated")
+                val response = createClient { followRedirects = false }.get("/mp4/outdated")
 
                 response.status shouldBe HttpStatusCode.NotFound
+            }
+        }
+
+        test("answers a view page with OpenGraph video tags at the forwarded origin, and counts no view") {
+            http(mapOf("local" to Recorded), listOf("local")) { repository ->
+                val response =
+                    client.get("/view/local") {
+                        header("X-Forwarded-Proto", "https")
+                        header("X-Forwarded-Host", "recorder.example.com")
+                    }
+                val body = response.bodyAsText()
+
+                response.status shouldBe HttpStatusCode.OK
+                response.contentType()?.withoutParameters() shouldBe ContentType.Text.Html
+                body shouldContain "<title>CTF-BT-Maverick - 10.000 by klepto</title>"
+                body shouldContain "<meta property=\"og:title\" content=\"CTF-BT-Maverick - 10.000 by klepto\" />"
+                body shouldContain "<meta property=\"og:url\" content=\"https://recorder.example.com/view/local\" />"
+                body shouldContain "<meta property=\"og:video\" content=\"https://recorder.example.com/mp4/local\" />"
+                body shouldContain "<meta property=\"og:video:type\" content=\"video/mp4\" />"
+                body shouldContain "<meta property=\"og:video:width\" content=\"1280\" />"
+                body shouldContain "<meta property=\"og:video:height\" content=\"720\" />"
+                body shouldContain "<video src=\"https://recorder.example.com/mp4/local\""
+                repository["local"]?.views shouldBe 0
+            }
+        }
+
+        test("answers a view page for an archived recording without a local mp4") {
+            http(mapOf("evicted" to Archived)) {
+                client.get("/view/evicted").status shouldBe HttpStatusCode.OK
+            }
+        }
+
+        test("answers 404 for the view page wherever the mp4 answers 404") {
+            http(mapOf("pending" to Pending, "missing" to Recorded, "evicted" to Archived), archive = false) {
+                client.get("/view/unknown").status shouldBe HttpStatusCode.NotFound
+                client.get("/view/pending").status shouldBe HttpStatusCode.NotFound
+                client.get("/view/missing").status shouldBe HttpStatusCode.NotFound
+                client.get("/view/evicted").status shouldBe HttpStatusCode.NotFound
             }
         }
 

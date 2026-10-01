@@ -27,7 +27,7 @@ describe("RecordingList", () => {
 
     expect(await screen.findAllByRole("button")).toHaveLength(10);
     expect(screen.getAllByText("Shadow").length).toBeGreaterThan(0);
-    expect(screen.getByText("0:40.00")).toBeInTheDocument();
+    expect(screen.getByText("40.000")).toBeInTheDocument();
     expect(document.querySelector("video")).toBeNull();
   });
 
@@ -37,11 +37,11 @@ describe("RecordingList", () => {
     const buttons = await screen.findAllByRole("button");
     fireEvent.click(buttons[0]);
     const video = await waitForVideo();
-    expect(video).toHaveAttribute("src", "/demo/1098");
+    expect(video).toHaveAttribute("src", "/mp4/1098");
     expect(video).toHaveAttribute("preload", "metadata");
 
     fireEvent.click(buttons[1]);
-    await waitForVideo("/demo/1097");
+    await waitForVideo("/mp4/1097");
     expect(document.querySelectorAll("video")).toHaveLength(1);
 
     fireEvent.click(buttons[1]);
@@ -55,7 +55,7 @@ describe("RecordingList", () => {
     fireEvent.keyDown(button, { key: "Enter" });
 
     expect(button).toHaveAttribute("aria-expanded", "true");
-    await waitForVideo("/demo/1098");
+    await waitForVideo("/mp4/1098");
   });
 
   test("links the player to their utbt.net profile without expanding", async () => {
@@ -71,7 +71,7 @@ describe("RecordingList", () => {
   test("shows the player unlinked when the cap list leaves out the user", () => {
     render(wrap(<RecordingList query={{ data: [recordings[0]], isPending: false, isError: false }} />));
 
-    expect(screen.getByText("0:40.00").parentElement).toHaveTextContent("0:40.00 by Shadow");
+    expect(screen.getByText("40.000").parentElement).toHaveTextContent("40.000 by Shadow");
     expect(screen.queryByRole("link")).toBeNull();
   });
 

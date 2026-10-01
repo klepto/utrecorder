@@ -53,8 +53,8 @@ describe("JobList", () => {
 
     expect(await screen.findByText("CTF-BT-Maverick")).toBeInTheDocument();
     expect(screen.getByText("CTF-BT-Skyfall")).toBeInTheDocument();
-    expect(screen.getByText("1:02.34")).toBeInTheDocument();
-    expect(screen.getByText("0:48.12")).toBeInTheDocument();
+    expect(screen.getByText("1:02.345")).toBeInTheDocument();
+    expect(screen.getByText("48.120")).toBeInTheDocument();
     expect(screen.getAllByText(/^2[89] Sept 2026$/)).toHaveLength(2);
     expect(screen.getByText("Starting")).toBeInTheDocument();
     expect(screen.getByText(/^Capturing - \d+%$/)).toBeInTheDocument();

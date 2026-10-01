@@ -10,7 +10,7 @@ const demo = (capId: string, map: string, player: string, capTime: string, times
     capTime,
     timestamp,
     demoUrl: `https://example.com/demos/${capId}.dem`,
-    ...(Number(capId) % 8 === 7 ? {} : { medal: Number(capId) % 8 }),
+    medal: Number(capId) % 8 === 7 ? null : Number(capId) % 8,
   };
 };
 

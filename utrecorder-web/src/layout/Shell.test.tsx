@@ -52,7 +52,7 @@ describe("Shell", () => {
       "href",
       "https://utbt.net/players/424992398657978370",
     );
-    expect(screen.getByText("utrecorder version dev")).toBeInTheDocument();
+    expect(screen.getByText("version dev")).toBeInTheDocument();
   });
 
   test("sets the favicon to the camera in the anchor color of the theme", () => {

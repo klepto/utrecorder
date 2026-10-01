@@ -52,7 +52,7 @@ describe("QueueList", () => {
     expect(rows[0]).toHaveTextContent("up next in ~1 minute");
     expect(rows[0]).toHaveTextContent("CTF-BT-Andromeda");
     expect(rows[0]).toHaveTextContent("Vex");
-    expect(rows[0]).toHaveTextContent("2:10.50");
+    expect(rows[0]).toHaveTextContent("2:10.500");
     expect(rows[0]).toHaveTextContent(/2[89] Sept 2026/);
     expect(rows[4]).toHaveTextContent("Nyx");
     expect(screen.getAllByText(/up next/)).toHaveLength(1);

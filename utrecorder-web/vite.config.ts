@@ -17,7 +17,7 @@ const removeMockServiceWorker = (): Plugin => {
   };
 };
 
-/** The server `npm run dev:server` proxies `/api` and `/demo` to. */
+/** The server `npm run dev:server` proxies `/api`, `/mp4` and `/view` to. */
 const serverUrl = "http://localhost:8080";
 
 export default defineConfig(({ mode }) => ({
@@ -28,7 +28,7 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     port: 5173,
-    proxy: mode === "server" ? { "/api": serverUrl, "/demo": serverUrl } : undefined,
+    proxy: mode === "server" ? { "/api": serverUrl, "/mp4": serverUrl, "/view": serverUrl } : undefined,
   },
   build: {
     outDir,

@@ -57,7 +57,7 @@ const QueueRow = ({ demo, next, deadline }: { demo: Demo; next: boolean; deadlin
           <RecordTime demo={demo} />
         </Text>
       </Table.Td>
-      <Table.Td>
+      <Table.Td ta="right">
         <Timestamp value={demo.timestamp} />
       </Table.Td>
     </Table.Tr>
@@ -88,10 +88,10 @@ export const QueueList = ({ query, jobs }: QueueListProps) => {
           className={classes.table}
         >
           <colgroup>
-            <col />
-            <col style={{ width: "30%" }} />
-            <col style={{ width: "6.5rem" }} />
-            <col style={{ width: "6.5rem" }} />
+            <col style={{ width: "40%" }} />
+            <col style={{ width: "20%" }} />
+            <col style={{ width: "20%" }} />
+            <col style={{ width: "20%" }} />
           </colgroup>
           <Table.Tbody>
             {demos.map((demo, index) => (

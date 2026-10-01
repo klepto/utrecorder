@@ -6,4 +6,5 @@
 
 .heart {
   vertical-align: middle;
+  fill: var(--mantine-color-anchor);
 }

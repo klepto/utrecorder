@@ -33,6 +33,7 @@ const ExternalLinks = () => {
       href={link.href}
       {...NEW_TAB}
       variant="subtle"
+      color="var(--mantine-color-anchor)"
       size="lg"
       aria-label={link.label}
     >

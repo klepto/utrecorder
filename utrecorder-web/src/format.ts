@@ -11,14 +11,16 @@ const splitDuration = (value: string): { whole: number; fraction: string } => {
 };
 
 /**
- * Formats the ISO-8601 duration `value` as `m:ss.cc`, like the in-game timer. The seconds are truncated to two
- * decimals, never rounded, so `PT59.999S` reads `0:59.99` and a cap time never reads slower than the timer's.
+ * Formats the ISO-8601 duration `value` as `m:ss.ccc`, or as `s.ccc` under a minute. The seconds are truncated to three
+ * decimals, never rounded, so `PT59.9999S` reads `59.999` and a cap time never reads slower than the timer's.
  */
 export const formatCapTime = (value: string): string => {
   const { whole, fraction } = splitDuration(value);
+  const decimals = `${fraction}000`.slice(0, 3);
+  if (whole < 60) return `${whole}.${decimals}`;
   const minutes = Math.floor(whole / 60);
   const seconds = String(whole % 60).padStart(2, "0");
-  return `${minutes}:${seconds}.${`${fraction}00`.slice(0, 2)}`;
+  return `${minutes}:${seconds}.${decimals}`;
 };
 
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

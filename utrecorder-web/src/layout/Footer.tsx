@@ -10,13 +10,12 @@ export const Footer = () => {
       <Container size="lg">
         <Group justify="space-between" py="md">
           <Text size="sm" c="dimmed">
-            utrecorder version {__APP_VERSION__}
+            version {__APP_VERSION__}
           </Text>
           <Text size="sm" c="dimmed">
             made with{" "}
             <IconHeartFilled
               size={14}
-              color="var(--mantine-color-anchor)"
               aria-label="love"
               className={classes.heart}
             />{" "}

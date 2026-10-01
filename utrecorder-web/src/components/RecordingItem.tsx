@@ -1,4 +1,4 @@
-import { Alert, Box, Card, Collapse, Group } from "@mantine/core";
+import { Alert, Badge, Box, Card, Collapse, Group, Stack } from "@mantine/core";
 import { IconChevronDown } from "@tabler/icons-react";
 import { type KeyboardEvent, useState } from "react";
 import type { Recording } from "../api/types";
@@ -26,7 +26,7 @@ const Player = ({ capId }: { capId: string }) => {
     <video
       controls
       preload="metadata"
-      src={`/demo/${capId}`}
+      src={`/mp4/${capId}`}
       onError={() => setFailed(true)}
       style={{ width: "100%" }}
     />
@@ -41,7 +41,8 @@ const toggleOnKey = (event: KeyboardEvent<HTMLElement>, onToggle: () => void) =>
 };
 
 /**
- * One recording as a card whose header expands it to its video. The video mounts only while `open`, because `Collapse`
+ * One recording as a card whose header expands it to its video. Beaten by a faster run, the header carries an
+ * "outdated" label under the timestamp, level with the player. The video mounts only while `open`, because `Collapse`
  * keeps its children mounted, and a mounted video downloads.
  */
 export const RecordingItem = ({
@@ -66,13 +67,20 @@ export const RecordingItem = ({
         onKeyDown={(event) => toggleOnKey(event, onToggle)}
       >
         <DemoSummary demo={demo} />
-        <Group gap={4} wrap="nowrap" style={{ flexShrink: 0, alignSelf: "flex-start" }}>
-          <Timestamp value={recordedTime(recording)} relative />
-          <IconChevronDown
-            size={16}
-            style={{ transform: open ? "rotate(180deg)" : undefined, transition: "transform 200ms ease" }}
-          />
-        </Group>
+        <Stack gap={0} justify="space-between" align="flex-end" style={{ flexShrink: 0, alignSelf: "stretch" }}>
+          <Group gap={4} wrap="nowrap">
+            <Timestamp value={recordedTime(recording)} relative />
+            <IconChevronDown
+              size={16}
+              style={{ transform: open ? "rotate(180deg)" : undefined, transition: "transform 200ms ease" }}
+            />
+          </Group>
+          {recording.status === "Outdated" && (
+            <Badge color="gray" size="sm">
+              outdated
+            </Badge>
+          )}
+        </Stack>
       </Group>
       <Collapse in={open}>
         <Box pt="sm">{open && <Player capId={demo.capId} />}</Box>

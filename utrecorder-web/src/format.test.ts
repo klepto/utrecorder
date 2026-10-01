@@ -2,13 +2,17 @@ import { describe, expect, test } from "vitest";
 import { formatCapTime, formatDate, formatExactTime, formatRelativeTime, formatRemaining, formatStage } from "./format";
 
 describe("format", () => {
-  test("formatCapTime truncates to two decimals", () => {
-    expect(formatCapTime("PT1M2.345S")).toBe("1:02.34");
-    expect(formatCapTime("PT59.999S")).toBe("0:59.99");
-    expect(formatCapTime("PT48.12S")).toBe("0:48.12");
-    expect(formatCapTime("PT3M0.01S")).toBe("3:00.01");
-    expect(formatCapTime("PT1M30S")).toBe("1:30.00");
-    expect(formatCapTime("PT41.7S")).toBe("0:41.70");
+  test("formatCapTime truncates to three decimals", () => {
+    expect(formatCapTime("PT1M2.3456S")).toBe("1:02.345");
+    expect(formatCapTime("PT3M0.01S")).toBe("3:00.010");
+    expect(formatCapTime("PT1M30S")).toBe("1:30.000");
+  });
+
+  test("formatCapTime omits the minutes under a minute", () => {
+    expect(formatCapTime("PT59.9999S")).toBe("59.999");
+    expect(formatCapTime("PT48.12S")).toBe("48.120");
+    expect(formatCapTime("PT5.5S")).toBe("5.500");
+    expect(formatCapTime("PT1M")).toBe("1:00.000");
   });
 
   test("formatCapTime rejects a string that is not a duration", () => {
