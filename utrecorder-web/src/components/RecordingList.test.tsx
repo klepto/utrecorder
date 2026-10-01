@@ -1,6 +1,6 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
 import { useRecordings } from "../api/queries";
@@ -65,6 +65,18 @@ describe("RecordingList", () => {
     expect(link).toHaveAttribute("href", "https://utbt.net/players/u1097");
 
     fireEvent.click(link);
+    expect(document.querySelector("video")).toBeNull();
+  });
+
+  test("follows the player link on Enter without expanding", async () => {
+    render(wrap(<Connected />));
+
+    const link = (await screen.findAllByRole("link", { name: "Nyx" }))[0];
+    const event = createEvent.keyDown(link, { key: "Enter" });
+    fireEvent(link, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getAllByRole("button")[0]).toHaveAttribute("aria-expanded", "false");
     expect(document.querySelector("video")).toBeNull();
   });
 

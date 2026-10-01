@@ -67,7 +67,15 @@ abstract class CompileUscriptTask : DefaultTask() {
     abstract val javaLauncher: Property<JavaLauncher>
 
     /**
-     * The recorder home directory the compiler provisions its installation into.
+     * The recorder home directory set through `utrecorder.home` or `UTRECORDER_HOME`, or absent to use
+     * [homeDirectory].
+     */
+    @get:Input
+    @get:Optional
+    abstract val home: Property<String>
+
+    /**
+     * The recorder home directory the compiler provisions its installation into when [home] is absent.
      */
     @get:Internal
     abstract val homeDirectory: DirectoryProperty
@@ -117,7 +125,7 @@ abstract class CompileUscriptTask : DefaultTask() {
             classpath = compilerClasspath
             mainClass.set(MAIN_CLASS)
 
-            environment("UTRECORDER_HOME", homeDirectory.get().asFile.absolutePath)
+            environment("UTRECORDER_HOME", home.orNull ?: homeDirectory.get().asFile.absolutePath)
             patchVersion.orNull?.let { environment("UTRECORDER_PATCH_VERSION", it) }
 
             args = compilerArguments()

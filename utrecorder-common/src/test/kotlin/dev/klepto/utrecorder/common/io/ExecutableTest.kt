@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
 import java.io.File
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -163,6 +164,63 @@ class ExecutableTest :
                     }
 
                     collected shouldBe listOf("line1", "line2", "line3")
+                }
+            }
+
+            test("destroys the descendants of the process when it closes") {
+                val (program, programArguments) =
+                    when (OperatingSystem.current()) {
+                        WINDOWS -> {
+                            Path.of(System.getenv("ComSpec") ?: """C:\Windows\System32\cmd.exe""") to
+                                listOf("/c", "PING.EXE -n 30 127.0.0.1 >NUL 2>&1")
+                        }
+
+                        else -> {
+                            Path.of("/bin/sh") to listOf("-c", "/bin/sleep 30 >/dev/null 2>&1; :")
+                        }
+                    }
+                val executable = Executable.build(program) { arguments += programArguments }
+                val existingChildren =
+                    ProcessHandle
+                        .current()
+                        .children()
+                        .toList()
+                        .toSet()
+
+                /**
+                 * Returns the sleeping child of [parent], or `null` while the shell has not started it yet. A console
+                 * host the shell may own is not it.
+                 */
+                fun sleeper(parent: ProcessHandle): ProcessHandle? =
+                    parent
+                        .children()
+                        .toList()
+                        .firstOrNull { child ->
+                            val command =
+                                child
+                                    .info()
+                                    .command()
+                                    .orElse("")
+                                    .lowercase()
+                            "ping" in command || "sleep" in command
+                        }
+
+                executable.execute {
+                    val parent =
+                        ProcessHandle
+                            .current()
+                            .children()
+                            .toList()
+                            .single { it !in existingChildren }
+                    var child = sleeper(parent)
+                    while (child == null) {
+                        delay(10.milliseconds)
+                        child = sleeper(parent)
+                    }
+
+                    close()
+
+                    child.onExit().get(5, TimeUnit.SECONDS).isAlive shouldBe false
                 }
             }
 

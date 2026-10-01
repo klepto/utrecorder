@@ -26,7 +26,7 @@ class DemoPlaybackConfigTest :
                 )
         }
 
-        test("recorderIni auto-exits, stops the demo first and truncates the run values to whole seconds") {
+        test("gameIniValues installs the recorder console, auto-exits and truncates the run values to whole seconds") {
             val description =
                 DemoPlaybackConfig(
                     demoFileName = "ut-2026-09-13-1030-05",
@@ -42,16 +42,18 @@ class DemoPlaybackConfigTest :
                     timeout = 630.seconds,
                 )
 
-            description.recorderIni().toString() shouldBe
-                """
-                [UTRecorder.UTRecorderConsole]
-                bAutoExit=True
-                bStopDemoFirst=True
-                ExitDelay=7
-                StartupTimeout=11
-                MaxRunSeconds=613
-
-                """.trimIndent()
+            description.gameIniValues() shouldBe
+                mapOf(
+                    "Engine.Engine" to mapOf("Console" to "UTRecorder.UTRecorderConsole"),
+                    "UTRecorder.UTRecorderConsole" to
+                        mapOf(
+                            "bAutoExit" to "True",
+                            "bStopDemoFirst" to "True",
+                            "ExitDelay" to "7",
+                            "StartupTimeout" to "11",
+                            "MaxRunSeconds" to "613",
+                        ),
+                )
         }
 
         test("runDuration spans the run from its start to its stop") {

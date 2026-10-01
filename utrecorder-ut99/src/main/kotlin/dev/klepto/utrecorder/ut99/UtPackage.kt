@@ -4,10 +4,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.channels.SeekableByteChannel
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Objects
 import kotlin.io.path.extension
-import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.listDirectoryEntries
@@ -31,10 +32,10 @@ class UtPackage private constructor(
     guid: () -> String,
 ) {
     /**
-     * The GUID of this package version, read from the file header on first access. Empty for a file that is not a
-     * package, and for a package whose demo recorded no GUID.
+     * The GUID of this package version, read from the file on first access. Empty for a file that is not a package, for
+     * a file that ends before its GUID, and for a package whose demo recorded no GUID.
      *
-     * @throws java.io.IOException if the header of the file cannot be read.
+     * @throws java.io.IOException if the file cannot be read.
      */
     val guid: String by lazy(guid)
 
@@ -94,11 +95,6 @@ class UtPackage private constructor(
         private const val WORD_BYTES = 4
 
         /**
-         * The number of bytes read off a package to find its GUID.
-         */
-        private const val HEADER_BYTES = 1024
-
-        /**
          * The number of GUID characters [toString] names a package version by.
          */
         private const val SHORT_GUID_LENGTH = 8
@@ -140,41 +136,46 @@ class UtPackage private constructor(
         private fun Path.hasExtension(extensions: Set<String>): Boolean = extensions.any { it.equals(extension, ignoreCase = true) }
 
         /**
-         * Returns the GUID the header of the file at [path] holds. If the file is not a package, returns an empty string
-         * instead.
+         * Returns the GUID the file at [path] holds. If the file is not a package, or ends before its GUID, returns an
+         * empty string instead.
          */
-        private fun readGuid(path: Path): String {
-            val header = readHeader(path) ?: return ""
-            val offset = guidOffset(header) ?: return ""
-            if (offset + GUID_BYTES > header.limit()) return ""
-            return (0 until GUID_WORDS).joinToString("") { "%08X".format(header.getInt(offset + it * WORD_BYTES)) }
-        }
+        private fun readGuid(path: Path): String =
+            Files.newByteChannel(path).use { channel ->
+                val header = channel.readAt(0, GUID_OFFSET + GUID_BYTES) ?: return ""
+                val offset = guidOffset(header) ?: return ""
+                val guid = channel.readAt(offset, GUID_BYTES) ?: return ""
+                (0 until GUID_WORDS).joinToString("") { "%08X".format(guid.getInt(it * WORD_BYTES)) }
+            }
 
         /**
-         * Returns the offset [header] holds its GUID at. A version before [HERITAGE_VERSION] holds the GUIDs of every
-         * version the package was saved as in a heritage table, and the last of them is the current one. If [header]
-         * is not a package header, returns `null` instead.
+         * Returns the offset of the file [header] opens that holds its GUID. A version before [HERITAGE_VERSION] holds
+         * the GUIDs of every version the package was saved as in a heritage table, and the last of them is the current
+         * one. If [header] is not a package header, returns `null` instead.
          */
-        private fun guidOffset(header: ByteBuffer): Int? {
+        private fun guidOffset(header: ByteBuffer): Long? {
             if (header.getInt(0) != PACKAGE_TAG) return null
-            if ((header.getShort(VERSION_OFFSET).toInt() and VERSION_BITMASK) >= HERITAGE_VERSION) return GUID_OFFSET
+            if ((header.getShort(VERSION_OFFSET).toInt() and VERSION_BITMASK) >= HERITAGE_VERSION) return GUID_OFFSET.toLong()
 
             val count = header.getInt(GUID_OFFSET)
             val heritage = header.getInt(GUID_OFFSET + Int.SIZE_BYTES)
-            val offset = heritage + maxOf(0, count - 1) * GUID_BYTES
+            val offset = heritage + maxOf(0, count - 1).toLong() * GUID_BYTES
             return offset.takeIf { it >= 0 }
         }
 
         /**
-         * Returns the opening bytes of the file at [path], in little-endian order. If the file is too short to hold a
-         * GUID, returns `null` instead.
+         * Returns the [size] bytes this channel holds at [position], in little-endian order. If the channel ends before
+         * them, returns `null` instead.
          */
-        private fun readHeader(path: Path): ByteBuffer? {
-            val bytes = path.inputStream().use { it.readNBytes(HEADER_BYTES) }
-            return when {
-                bytes.size < GUID_OFFSET + GUID_BYTES -> null
-                else -> ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        private fun SeekableByteChannel.readAt(
+            position: Long,
+            size: Int,
+        ): ByteBuffer? {
+            val buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
+            position(position)
+            while (buffer.hasRemaining()) {
+                if (read(buffer) < 0) return null
             }
+            return buffer.flip()
         }
     }
 }

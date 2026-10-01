@@ -52,9 +52,11 @@ class CacheServiceTest :
             }
 
         val requests = AtomicInteger()
+        val path = AtomicReference<String>()
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server.createContext("/") { exchange ->
             requests.incrementAndGet()
+            path.set(exchange.requestURI.path)
             val content = "archived".toByteArray()
             exchange.sendResponseHeaders(200, content.size.toLong())
             exchange.responseBody.use { it.write(content) }
@@ -65,6 +67,7 @@ class CacheServiceTest :
         beforeTest {
             now.set(Instant.parse("2026-09-27T08:00:00Z"))
             requests.set(0)
+            path.set(null)
         }
 
         fun demo(capId: String): Demo =
@@ -129,7 +132,9 @@ class CacheServiceTest :
                 repository += statuses.keys.map { demo(it) }
                 // MD5 of "archived".
                 statuses.forEach { (capId, status) ->
-                    repository.update(capId) { it.copy(status = status, md5 = "0d111f56964985f562aaaaf9d2980787") }
+                    repository.update(capId) {
+                        it.copy(status = status, md5 = "0d111f56964985f562aaaaf9d2980787", itemId = "1234-3e92a055-ctf-bt-maverick")
+                    }
                 }
                 block(CacheService(repository, uploader, config, clock), repository, recordings)
             }
@@ -269,13 +274,29 @@ class CacheServiceTest :
             }
         }
 
-        test("counts a view of a recording") {
+        test("counts the views of a recording in memory until they are flushed") {
             cache(mapOf("viewed" to Recorded), listOf("viewed")) { service, repository, _ ->
                 service.view("viewed")
+                now.set(now.get() + 1.days)
                 service.view("viewed")
+                service.view("viewed", counted = false)
 
+                repository["viewed"]?.views shouldBe 0
+                service.flushViews()
                 repository["viewed"]?.views shouldBe 2
-                repository["viewed"]?.lastView shouldBe Instant.parse("2026-09-27T08:00:00Z")
+                repository["viewed"]?.lastView shouldBe Instant.parse("2026-09-28T08:00:00Z")
+            }
+        }
+
+        test("flushes the counted views when stopped") {
+            cache(mapOf("viewed" to Recorded), listOf("viewed")) { service, repository, _ ->
+                coroutineScope {
+                    val job = launch { service.start() }
+                    service.view("viewed")
+                    job.cancelAndJoin()
+                }
+
+                repository["viewed"]?.views shouldBe 1
             }
         }
 
@@ -296,6 +317,23 @@ class CacheServiceTest :
                 }
 
                 requests.get() shouldBe 1
+                path.get() shouldBe "/1234-3e92a055-ctf-bt-maverick/evicted.mp4"
+            }
+        }
+
+        test("does not download the mp4 of a viewed archived recording without an item id") {
+            cache(mapOf("evicted" to Archived), emptyList()) { service, repository, recordings ->
+                repository.update("evicted") { it.copy(itemId = null) }
+                coroutineScope {
+                    val job = launch { service.start() }
+                    service.view("evicted")
+                    delay(100.milliseconds)
+                    job.cancelAndJoin()
+                }
+
+                recordings.resolve("evicted.mp4").shouldNotExist()
+                requests.get() shouldBe 0
+                service.downloadUrl(repository["evicted"]!!).shouldBeNull()
             }
         }
 

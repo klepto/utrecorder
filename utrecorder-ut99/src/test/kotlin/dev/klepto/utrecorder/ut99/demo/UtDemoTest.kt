@@ -352,6 +352,31 @@ class UtDemoTest :
                     )
                 demo.duration shouldBe 5.25.seconds
             }
+
+            test("read skips a record whose bunch runs past the end of its packet and keeps the records after it") {
+                val truncatedBunch =
+                    packet {
+                        this += 0
+                        this += 0
+                        this += 0
+                        int(1, 1023)
+                        int(64, 512 * Byte.SIZE_BITS)
+                    }
+                val bytes =
+                    demo(
+                        controlRecord(1.5f, welcome),
+                        record(3f, truncatedBunch),
+                        controlRecord(
+                            5.25f,
+                            "USES GUID=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB PKG=Second FLAGS=1 SIZE=100 GEN=1 FNAME=Second.u",
+                        ),
+                    )
+
+                val demo = UtDemo.read(bytes)
+
+                demo.packages shouldBe listOf(UtPackage.named("Second", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"))
+                demo.duration shouldBe 5.25.seconds
+            }
         }
 
         context("package rules") {
@@ -378,6 +403,23 @@ class UtDemoTest :
 
                 packages shouldBe listOf(UtPackage.named("Weapon", ""))
                 packages.single().guid shouldBe ""
+            }
+
+            test("read skips a package whose name is not a plain file name and keeps the others") {
+                val bytes =
+                    controlRecord(
+                        1f,
+                        welcome,
+                        "USES GUID=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA FLAGS=1 SIZE=100 GEN=1",
+                        "USES PKG= FLAGS=1 SIZE=100 GEN=1",
+                        "USES PKG=../Escape FLAGS=1 SIZE=100 GEN=1",
+                        "USES PKG=..\\Escape FLAGS=1 SIZE=100 GEN=1",
+                        "USES PKG=C:Escape FLAGS=1 SIZE=100 GEN=1",
+                        "USES PKG=.. FLAGS=1 SIZE=100 GEN=1",
+                        "USES PKG=DM-Deck16][ FLAGS=1 SIZE=100 GEN=1",
+                    )
+
+                UtDemo.read(bytes).packages shouldBe listOf(UtPackage.named("DM-Deck16][", ""))
             }
 
             test("read ignores USES lines outside the control channel") {

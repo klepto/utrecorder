@@ -121,6 +121,16 @@ describe("QueueList", () => {
     open.mockRestore();
   });
 
+  test("follows only the player link on Enter, without opening the cap", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderList();
+
+    fireEvent.keyDown(await screen.findByRole("link", { name: "Kite" }), { key: "Enter" });
+
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
+
   test("shows skeleton rows while loading", () => {
     server.use(http.get("/api/queue", () => new Promise(() => {})));
     renderList();

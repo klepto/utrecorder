@@ -13,13 +13,7 @@ export const Footer = () => {
             version {__APP_VERSION__}
           </Text>
           <Text size="sm" c="dimmed">
-            made with{" "}
-            <IconHeartFilled
-              size={14}
-              aria-label="love"
-              className={classes.heart}
-            />{" "}
-            by{" "}
+            made with <IconHeartFilled size={14} aria-label="love" className={classes.heart} /> by{" "}
             <Anchor size="sm" href={playerUrl(AUTHOR_USER_ID)} {...NEW_TAB}>
               {AUTHOR_NAME}
             </Anchor>

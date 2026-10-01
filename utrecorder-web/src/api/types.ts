@@ -75,4 +75,9 @@ export interface Recording {
   recordedAt: string | null;
   /** The time the last attempt took to produce the mp4, as an ISO-8601 duration, or `null` if the server did not record it. */
   processingTime: string | null;
+  /**
+   * The Internet Archive item the mp4 was uploaded into, or `null` if the mp4 is not in the Archive, or its file there
+   * has been deleted.
+   */
+  itemId: string | null;
 }

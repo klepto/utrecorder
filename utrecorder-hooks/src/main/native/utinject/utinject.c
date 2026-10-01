@@ -74,7 +74,8 @@ static wchar_t *buildCommandLine(int count, wchar_t **arguments) {
 
 /*
  * Loads library into process by running LoadLibraryW on a remote thread, and waits for that thread to finish. Returns
- * 1 when the library loaded, 0 otherwise.
+ * 1 when the library loaded, and -1 when LoadLibraryW failed in process. Returns 0 instead when a step in this process
+ * failed, with the error in GetLastError.
  */
 static int inject(HANDLE process, const wchar_t *library) {
     HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
@@ -101,7 +102,7 @@ static int inject(HANDLE process, const wchar_t *library) {
     GetExitCodeThread(thread, &loaded);
     CloseHandle(thread);
     VirtualFreeEx(process, remote, 0, MEM_RELEASE);
-    return loaded != 0;
+    return loaded ? 1 : -1;
 }
 
 /*
@@ -113,13 +114,16 @@ int wmain(int argc, wchar_t **argv) {
     PROCESS_INFORMATION started;
     wchar_t library[MAX_PATH];
     wchar_t *commandLine;
+    DWORD resolved;
     DWORD exitCode = 1;
+    int injected;
     if (argc < 3) {
         fwprintf(stderr, L"usage: utinject <library> <executable> [arguments...]\n");
         return 2;
     }
-    if (!GetFullPathNameW(argv[1], MAX_PATH, library, 0)) {
-        fwprintf(stderr, L"cannot resolve %ls\n", argv[1]);
+    resolved = GetFullPathNameW(argv[1], MAX_PATH, library, 0);
+    if (!resolved || resolved >= MAX_PATH) {
+        fwprintf(stderr, L"cannot resolve %ls to a path shorter than %d characters\n", argv[1], MAX_PATH);
         return 2;
     }
     if (GetFileAttributesW(library) == INVALID_FILE_ATTRIBUTES) {
@@ -137,8 +141,10 @@ int wmain(int argc, wchar_t **argv) {
         return 2;
     }
     free(commandLine);
-    if (!inject(started.hProcess, library)) {
-        fwprintf(stderr, L"cannot inject %ls, error %lu\n", library, GetLastError());
+    injected = inject(started.hProcess, library);
+    if (injected != 1) {
+        if (injected < 0) fwprintf(stderr, L"LoadLibraryW failed in the game process for %ls\n", library);
+        else fwprintf(stderr, L"cannot inject %ls, error %lu\n", library, GetLastError());
         TerminateProcess(started.hProcess, 1);
         CloseHandle(started.hThread);
         CloseHandle(started.hProcess);

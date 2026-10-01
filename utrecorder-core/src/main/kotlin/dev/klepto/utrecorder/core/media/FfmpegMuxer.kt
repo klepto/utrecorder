@@ -5,6 +5,8 @@ import dev.klepto.utrecorder.common.ProgressListener
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.util.Locale
+import kotlin.io.path.absolutePathString
 import kotlin.time.DurationUnit.SECONDS
 
 /**
@@ -39,8 +41,8 @@ class FfmpegMuxer(
     }
 
     /**
-     * Returns the ffmpeg arguments that merge [video] with [audio] into [target]. The video stream is copied, and the
-     * audio is trimmed to the part that [offset] and [length] select.
+     * Returns the ffmpeg arguments that merge [video] with [audio] into [target], each named by its absolute path. The
+     * video stream is copied, and the audio is trimmed to the part that [offset] and [length] select.
      */
     fun arguments(
         video: Path,
@@ -51,10 +53,10 @@ class FfmpegMuxer(
     ): List<String> =
         buildList {
             this += "-y"
-            this += listOf("-i", video.toString())
+            this += listOf("-i", video.absolutePathString())
             this += listOf("-ss", seconds(offset))
             this += listOf("-t", seconds(length))
-            this += listOf("-i", audio.toString())
+            this += listOf("-i", audio.absolutePathString())
             this += listOf("-map", "0:v:0")
             this += listOf("-map", "1:a:0")
             this += listOf("-c:v", "copy")
@@ -64,10 +66,10 @@ class FfmpegMuxer(
             this += listOf("-ac", "2")
             this += "-shortest"
             this += listOf("-movflags", "+faststart")
-            this += target.toString()
+            this += target.absolutePathString()
         }
 
     private companion object {
-        fun seconds(value: Double): String = "%.3f".format(value)
+        fun seconds(value: Double): String = "%.3f".format(Locale.ROOT, value)
     }
 }

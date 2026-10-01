@@ -32,13 +32,13 @@ abstract class UnrealScriptPackage : Named {
  */
 abstract class UnrealScriptExtension {
     /**
-     * Directory holding one source directory for every package. Defaults to `src/main/uscript`.
+     * Directory holding one source directory for every package. Always `src/main/uscript`; a module cannot change it.
      */
     abstract val sourceDirectory: DirectoryProperty
 
     /**
      * Recorder home directory the compiler provisions its Unreal Tournament installation into. Defaults to
-     * `.utrecorder` in the repository.
+     * `.utrecorder` in the repository. A home set through `utrecorder.home` or `UTRECORDER_HOME` is used instead.
      */
     abstract val homeDirectory: DirectoryProperty
 

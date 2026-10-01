@@ -80,6 +80,18 @@ class RecordingRepositoryTest :
             stored shouldBe (listOf(demo("cap", 0)) to demo("cap", 0))
         }
 
+        test("reads every stored recording when a demo is added first after reopening") {
+            val file = file()
+            repository(file) { it += listOf(demo("stored", 0)) }
+
+            val capIds =
+                repository(file) { repository ->
+                    repository += listOf(demo("added", 1))
+                    repository.all().map { it.demo.capId }
+                }
+            capIds shouldBe listOf("stored", "added")
+        }
+
         test("sets a recorded recording with the time it was recorded and the time it took") {
             val entry =
                 repository {

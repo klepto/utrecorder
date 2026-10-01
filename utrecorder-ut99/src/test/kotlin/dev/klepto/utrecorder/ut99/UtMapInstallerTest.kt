@@ -192,5 +192,56 @@ class UtMapInstallerTest :
                 (mapsDirectory / "CTF-BT-Test.unr.uz").exists() shouldBe true
                 installer.compressed().map { it.name } shouldBe listOf("CTF-BT-Test.unr.uz")
             }
+
+            test("decompresses an archive whose .uz suffix is upper case") {
+                val installation = installation("install-upper-case")
+                val mapsDirectory = installation.directory / Maps.name
+                archive(mapsDirectory / "CTF-BT-Upper.UNR.UZ")
+                val installer = UtMapInstaller(installation)
+
+                installer.install()
+
+                (mapsDirectory / "CTF-BT-Upper.UNR").exists() shouldBe true
+                installer.compressed() shouldBe emptyList()
+            }
+        }
+
+        context("uninstall") {
+            test("deletes the maps install wrote") {
+                val installation = installation("uninstall-installed")
+                val mapsDirectory = installation.directory / Maps.name
+                archive(mapsDirectory / "CTF-BT-Test.unr.uz")
+                val installer = UtMapInstaller(installation)
+                installer.install()
+
+                installer.uninstall()
+
+                (mapsDirectory / "CTF-BT-Test.unr").exists() shouldBe false
+            }
+
+            test("leaves a map that existed before install, and its archive") {
+                val installation = installation("uninstall-map-exists")
+                val mapsDirectory = installation.directory / Maps.name
+                archive(mapsDirectory / "CTF-BT-Test.unr.uz")
+                emptyFile(mapsDirectory / "CTF-BT-Test.unr")
+                val installer = UtMapInstaller(installation)
+                installer.install()
+
+                installer.uninstall()
+
+                (mapsDirectory / "CTF-BT-Test.unr").exists() shouldBe true
+                (mapsDirectory / "CTF-BT-Test.unr.uz").exists() shouldBe true
+            }
+
+            test("leaves an archive whose .uz suffix is upper case") {
+                val installation = installation("uninstall-upper-case")
+                val mapsDirectory = installation.directory / Maps.name
+                archive(mapsDirectory / "CTF-BT-Upper.UNR.UZ")
+                val installer = UtMapInstaller(installation)
+
+                installer.uninstall()
+
+                (mapsDirectory / "CTF-BT-Upper.UNR.UZ").exists() shouldBe true
+            }
         }
     })

@@ -37,7 +37,7 @@ abstract class NativeBinary : Named {
  */
 abstract class NativeExtension {
     /**
-     * Directory holding one source directory for every binary. Defaults to `src/main/native`.
+     * Directory holding one source directory for every binary. Always `src/main/native`; a module cannot change it.
      */
     abstract val sourceDirectory: DirectoryProperty
 

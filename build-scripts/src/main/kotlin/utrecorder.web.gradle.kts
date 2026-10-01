@@ -12,13 +12,19 @@ plugins {
 val embeddedArtifacts = extensions.getByType<EmbeddedArtifactsExtension>()
 embeddedArtifacts.namespace.convention("web")
 
+val nodeVersionFile = layout.projectDirectory.file(".nvmrc")
+
 node {
     download = true
     distBaseUrl = null
-    version = providers.fileContents(layout.projectDirectory.file(".nvmrc")).asText.map(String::trim)
+    version = providers.fileContents(nodeVersionFile).asText.map(String::trim)
     workDir = rootProject.layout.projectDirectory.dir(".gradle/nodejs")
     npmWorkDir = rootProject.layout.projectDirectory.dir(".gradle/npm")
     npmInstallCommand = "ci"
+}
+
+tasks.npmInstall {
+    inputs.file(nodeVersionFile).withPathSensitivity(PathSensitivity.NONE)
 }
 
 val gitCommit =
@@ -49,6 +55,7 @@ val webBuild =
         environment.put("UTRECORDER_COMMIT", gitCommit)
 
         inputs.files(webSources).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.file(nodeVersionFile).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("version", project.version.toString())
         inputs.property("commit", gitCommit)
         outputs.dir(layout.buildDirectory.dir("web"))
@@ -64,6 +71,7 @@ val webCheck =
 
         val marker = layout.buildDirectory.file("web-check/passed")
         inputs.files(webSources, "biome.json").withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.file(nodeVersionFile).withPathSensitivity(PathSensitivity.NONE)
         outputs.file(marker)
         doLast { marker.get().asFile.writeText("") }
     }

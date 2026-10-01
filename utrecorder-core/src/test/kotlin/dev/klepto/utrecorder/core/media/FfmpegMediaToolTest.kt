@@ -76,6 +76,30 @@ class FfmpegMediaToolTest :
 
                 reports.last().frames shouldBe 7
             }
+
+            test("encodes the raw frames written to its standard input") {
+                val file = createTempDirectory("utrecorder-ffmpeg-input") / "black.mp4"
+                val reports = mutableListOf<MediaProgress>()
+
+                FfmpegMediaTool().run(
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "bgra",
+                    "-s",
+                    "16x16",
+                    "-framerate",
+                    "10",
+                    "-i",
+                    "pipe:0",
+                    "-c:v",
+                    "mpeg4",
+                    "${file.toAbsolutePath()}",
+                    input = { it.write(ByteArray(16 * 16 * 4 * 3)) },
+                ) { reports += it } shouldBe true
+
+                reports.last().frames shouldBe 3
+            }
         }
 
         context("duration") {

@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.name
@@ -193,8 +194,13 @@ class UtProcess(
     private val systemDirectory: Path = installation.systemDirectory.toAbsolutePath()
 
     /**
-     * The started process, completed by [launch] once the process runs. [drain] awaits it, and [launch] refuses to run
-     * once it is complete.
+     * `true` once [launch] has been called, so that a second call fails.
+     */
+    private val launched = AtomicBoolean(false)
+
+    /**
+     * The started process, completed by [launch] once the process runs, or with the failure of a launch that ended
+     * before. [drain] awaits it.
      */
     private val startedProcess = CompletableDeferred<ExecutableProcess>()
 
@@ -210,7 +216,8 @@ class UtProcess(
      *
      * The flow can be collected before [launch] starts the run. It suspends until the process runs, replays the lines
      * the process already emitted and emits every line still to come. It completes once the output stream of the
-     * process closes. See [ExecutableProcess.drain].
+     * process closes. If [launch] fails before the process runs, the flow fails with the same exception. See
+     * [ExecutableProcess.drain].
      */
     fun drain(): Flow<String> = flow { emitAll(startedProcess.await().drain()) }
 
@@ -227,13 +234,21 @@ class UtProcess(
      * @throws IOException if staging the files, or moving them into the workspace afterwards, fails.
      */
     suspend fun launch(timeout: Duration = Duration.INFINITE): UtProcessResult {
-        check(!startedProcess.isCompleted) { "Process $name has already been launched" }
-        return workspace(name, systemDirectory, installation.config.directoriesConfig) { workspace ->
+        check(launched.compareAndSet(false, true)) { "Process $name has already been launched" }
+        return runCatching { run(timeout) }
+            .onFailure(startedProcess::completeExceptionally)
+            .getOrThrow()
+    }
+
+    /**
+     * Returns the result of this run once the process exits, staged and started in the workspace of the run.
+     */
+    private suspend fun run(timeout: Duration): UtProcessResult =
+        workspace(name, systemDirectory, installation.config.directoriesConfig) { workspace ->
             val files = files(workspace)
             stage(files)
             result(files, exitCode(files, timeout))
         }
-    }
 
     /**
      * Returns the files a run in [workspace] reads, each named after the file of the installation it copies.
@@ -304,7 +319,10 @@ class UtProcess(
         val failureMessage = { "UT executable not found at $executable" }
         withContext(Dispatchers.IO) { systemDirectory[RUNNING_INI].deleteIfExists() }
         when (installation.platform) {
-            UtPlatform.LINUX -> executable.link(files.executable, failureMessage)
+            UtPlatform.LINUX -> {
+                executable.link(files.executable, failureMessage)
+            }
+
             UtPlatform.WINDOWS -> {
                 executable.copy(files.executable, failureMessage = failureMessage)
                 withContext(Dispatchers.IO) { files.executable.toFile().setExecutable(true) }

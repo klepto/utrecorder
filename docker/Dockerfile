@@ -140,20 +140,31 @@ ENV UTRECORDER_PACKAGES=/opt/utrecorder/packages
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint
 RUN sed -i 's/\r$//' /usr/local/bin/entrypoint && chmod +x /usr/local/bin/entrypoint
 
+# The recorder, Xvfb and the game run as an unprivileged user with a fixed id, so a volume keeps its owner across
+# rebuilds. Both volume paths are created owned by that user before they are declared, and Docker copies that owner into
+# a new named volume. Xvfb without root cannot create its socket directory as root expects, so it exists already.
+RUN groupadd --gid 10001 utrecorder \
+    && useradd --uid 10001 --gid utrecorder --create-home --shell /usr/sbin/nologin utrecorder \
+    && install -d -o utrecorder -g utrecorder /var/lib/utrecorder /var/cache/utrecorder \
+    && install -d -m 1777 /tmp/.X11-unix
+
 # The cache is a volume of its own, outside the home, so that containers sharing nothing else can share downloads.
 VOLUME /var/lib/utrecorder /var/cache/utrecorder
+
+USER utrecorder
 
 ENTRYPOINT ["entrypoint"]
 
 FROM runtime AS cli
 
-COPY --from=builder /utrecorder/utrecorder-cli/build/install/utrecorder-cli /opt/utrecorder-cli
+# The builder leaves the jars of a distribution readable by root alone, so each is copied readable by the runtime user.
+COPY --from=builder --chmod=a+rX /utrecorder/utrecorder-cli/build/install/utrecorder-cli /opt/utrecorder-cli
 
 ENTRYPOINT ["entrypoint", "/opt/utrecorder-cli/bin/utrecorder-cli"]
 
 FROM runtime AS server
 
-COPY --from=builder /utrecorder/utrecorder-server/build/install/utrecorder-server /opt/utrecorder-server
+COPY --from=builder --chmod=a+rX /utrecorder/utrecorder-server/build/install/utrecorder-server /opt/utrecorder-server
 
 EXPOSE 8080
 

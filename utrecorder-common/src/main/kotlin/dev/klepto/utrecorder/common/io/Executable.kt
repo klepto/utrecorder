@@ -17,11 +17,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
-import kotlin.time.toJavaDuration
 
 /**
  * A mutable description of an executable, built into the immutable value by [Executable.build].
@@ -146,8 +148,8 @@ data class Executable(
  * running. Nothing reads the process output until [pump] runs, so [drain] and [await] on a process [start]ed
  * directly, without going through [Executable.execute], hang forever: nothing ever completes [streamClosed].
  *
- * Closing destroys the process and destroys it forcibly if it is still running after [Executable.closeTimeout].
- * Closing also ends the output stream [pump] reads.
+ * Closing destroys the process and every process it started, and destroys forcibly any of them still running after
+ * [Executable.closeTimeout]. Closing also ends the output stream [pump] reads.
  *
  * @property executable The configuration the process was started from.
  * @property process The process this one reads and waits on.
@@ -161,6 +163,12 @@ class ExecutableProcess(
      */
     val isRunning: Boolean
         get() = process.isAlive
+
+    /**
+     * The standard input of the process. The process reads end of input once this stream is closed.
+     */
+    val standardInput: OutputStream
+        get() = process.outputStream
 
     /**
      * The process output, followed by [EndOfStream] once the output stream closes. A late collector of [drain] gets
@@ -231,9 +239,16 @@ class ExecutableProcess(
 
     override fun close() {
         closing = true
-        process.destroy()
-        process.waitFor(executable.closeTimeout.toJavaDuration())
-        if (isRunning) process.destroyForcibly()
+        val processes = listOf(process.toHandle()) + process.descendants().toList()
+        processes.forEach { it.destroy() }
+        val exits = processes.map { it.onExit() }
+        CompletableFuture
+            .allOf(*exits.toTypedArray())
+            .completeOnTimeout(null, executable.closeTimeout.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+            .join()
+        processes
+            .filter { it.isAlive }
+            .forEach { it.destroyForcibly() }
     }
 
     private companion object {

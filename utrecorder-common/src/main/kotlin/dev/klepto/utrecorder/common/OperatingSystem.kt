@@ -18,24 +18,24 @@ enum class OperatingSystem(
     val libraryPathVariable: String?,
 ) {
     WINDOWS(executableSuffix = ".exe", libraryPathVariable = null) {
-        override val dataDirectory: Path
-            get() = System.getenv("LOCALAPPDATA")?.toAbsolutePath() ?: homeDirectory()["AppData"]["Local"]
+        override fun dataDirectory(reader: SystemConfigReader): Path =
+            reader.environmentVariable("LOCALAPPDATA")?.toAbsolutePath() ?: homeDirectory(reader)["AppData"]["Local"]
     },
     LINUX(executableSuffix = "", libraryPathVariable = "LD_LIBRARY_PATH") {
-        override val dataDirectory: Path
-            get() = System.getenv("XDG_DATA_HOME")?.toAbsolutePath() ?: homeDirectory()[".local"]["share"]
+        override fun dataDirectory(reader: SystemConfigReader): Path =
+            reader.environmentVariable("XDG_DATA_HOME")?.toAbsolutePath() ?: homeDirectory(reader)[".local"]["share"]
     },
     ;
 
     /**
-     * The directory this operating system holds per-application data under.
+     * Returns the directory this operating system holds per-application data under, read through [reader].
      *
      * On Windows, this is `%LOCALAPPDATA%`, else `AppData\Local` under the home directory. On Linux, this is
-     * `$XDG_DATA_HOME`, else `.local/share` under the home directory. The value is read again on every access.
+     * `$XDG_DATA_HOME`, else `.local/share` under the home directory. An empty environment variable counts as not set.
      *
      * @throws IllegalStateException if the environment variable is not set and no `user.home` is set either.
      */
-    abstract val dataDirectory: Path
+    abstract fun dataDirectory(reader: SystemConfigReader = SystemConfigReader()): Path
 
     companion object {
         /**
@@ -53,11 +53,11 @@ enum class OperatingSystem(
         }
 
         /**
-         * Returns the home directory of the user, read from the `user.home` system property.
+         * Returns the home directory of the user, read from the `user.home` system property through [reader].
          *
          * @throws IllegalStateException if no `user.home` is set.
          */
-        private fun homeDirectory(): Path =
-            checkNotNull(System.getProperty("user.home")) { "No user.home system property" }.toAbsolutePath()
+        private fun homeDirectory(reader: SystemConfigReader): Path =
+            checkNotNull(reader.systemProperty("user.home")) { "No user.home system property" }.toAbsolutePath()
     }
 }

@@ -68,9 +68,15 @@ class FfmpegVideoCaptureTest :
             }
         }
 
-        test("environment holds the port and the fps, and nothing else on Windows") {
+        test("environment holds the port, the fps and the frame size, and nothing else on Windows") {
             val environment = capture().environment(100)
-            val expected = mapOf("UTRECORDER_PORT" to "100", "UTRECORDER_FPS" to "120")
+            val expected =
+                mapOf(
+                    "UTRECORDER_PORT" to "100",
+                    "UTRECORDER_FPS" to "120",
+                    "UTRECORDER_WIDTH" to "1280",
+                    "UTRECORDER_HEIGHT" to "720",
+                )
 
             when (UtPlatform.current()) {
                 UtPlatform.WINDOWS -> environment shouldBe expected
@@ -172,6 +178,16 @@ class FfmpegVideoCaptureTest :
 
         test("process leaves the HUD of a demo that loads Bunny Track mod version 18 alone") {
             hideHud("UTBT_BTMod_v18") shouldBe emptyList()
+        }
+
+        test("stopReason returns the reason of a line that reports the frame capture stopped") {
+            val line = "uthooks: viewport 800x600 does not match the frame size 1280x720, capture stopped"
+
+            capture().stopReason(line) shouldBe "viewport 800x600 does not match the frame size 1280x720, capture stopped"
+        }
+
+        test("stopReason returns null for a line that reports no stop") {
+            capture().stopReason("uthooks: demo ended after 120 frames, kept 118") shouldBe null
         }
 
         test("execScript seeks to the run start, trims the demo to the configured fps, hides messages and smooths the recorder") {

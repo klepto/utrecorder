@@ -29,6 +29,8 @@ import kotlin.time.Duration.Companion.seconds
  * @property port The loopback port the capture listens on, or `0` to take a free one.
  * @property idleTimeout How long the video capture may go without encoding a new frame before it is killed. The
  * window covers the startup of the game before its first frame, so it outlasts the startup timeout of a playback.
+ * @property finishTimeout How long the video capture waits for ffmpeg to finalise the capture once the game has exited,
+ * before ffmpeg is killed.
  * @property arguments Extra arguments appended to the capture command line, split on spaces.
  * @property smoothRecorder Whether the capture smooths the movement and view of the player who recorded the demo.
  * @property motionBlur Whether the capture renders [motionBlurSamples] frames for every encoded frame and blends them
@@ -55,6 +57,7 @@ class VideoCaptureConfig(
     val queue: Int = reader.get("record.frame_queue", 32, String::toInt),
     val port: Int = reader.get("record.frame_port", 0, String::toInt),
     val idleTimeout: Duration = reader.duration("record.frame_idle_timeout", 300.seconds),
+    val finishTimeout: Duration = reader.duration("record.frame_finish_timeout", 120.seconds),
     val arguments: String = reader.get("record.arguments", ""),
     val smoothRecorder: Boolean = reader.get("record.smooth_recorder", true, String::toBoolean),
     val motionBlur: Boolean = reader.get("record.motion_blur", true, String::toBoolean),

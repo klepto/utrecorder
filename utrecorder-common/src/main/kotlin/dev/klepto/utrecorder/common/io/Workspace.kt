@@ -112,19 +112,31 @@ class Workspace private constructor(
      * Runs [block] in this workspace, then moves the tracked files into the output directory.
      *
      * Before [block] runs, removes expired entries. A failure to remove them is logged and does not stop [block].
+     * If [block] throws, rethrows its exception with a failure to move the tracked files added as suppressed.
      */
     private suspend fun <T> enter(block: suspend Workspace.(Workspace) -> T): T {
         directory.createDirectories()
         suspendCatching { prune() }.onFailure { log.warn(it) { "Failed to prune expired workspace entries" } }
-        try {
-            return block(this)
-        } finally {
-            withContext(NonCancellable) {
+        val outcome = runCatching { block(this) }
+        val exit = exitCatching()
+        return outcome
+            .onFailure { failure -> exit.exceptionOrNull()?.let(failure::addSuppressed) }
+            .getOrThrow()
+            .also { exit.getOrThrow() }
+    }
+
+    /**
+     * Returns the outcome of moving the tracked files into the output directory and removing it when left empty.
+     *
+     * Runs even when the calling coroutine is cancelled.
+     */
+    private suspend fun exitCatching(): Result<Unit> =
+        withContext(NonCancellable) {
+            runCatching {
                 persist()
                 deleteIfEmpty()
             }
         }
-    }
 
     /**
      * Moves the tracked files into [target], each by its location relative to [directory].

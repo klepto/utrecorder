@@ -101,7 +101,8 @@ private fun Path.markExecutable() {
  * Only the entries that [filter] accepts are extracted. Entry names are passed through [filter] without leading or
  * trailing path separators, using `/` between segments.
  *
- * @throws IllegalStateException if the archive extension matches none of the supported formats.
+ * @throws IllegalStateException if the archive extension matches none of the supported formats, or if [filter] accepts
+ * a tar hard link but rejects the file it links to.
  */
 suspend fun Path.extract(
     target: Path = toAbsolutePath().parent,
@@ -199,6 +200,7 @@ private fun Path.extractTarBzip2(
  * of the file it links to. If the entry is the archive root, or [filter] rejects it, returns `null` instead.
  *
  * @throws IllegalArgumentException if the entry, or the file its hard link links to, resolves outside [target].
+ * @throws IllegalStateException if the file a hard link links to was not extracted.
  */
 private fun TarArchiveInputStream.extractEntry(
     entry: TarArchiveEntry,
@@ -217,7 +219,7 @@ private fun TarArchiveInputStream.extractEntry(
         }
 
         entry.isLink -> {
-            target.resolveEntry(entry.linkName).copyTo(file.createParentDirectories(), overwrite = true)
+            target.copyHardLinked(file, entry.linkName)
             file.markExecutable(entry.mode)
         }
 
@@ -227,6 +229,21 @@ private fun TarArchiveInputStream.extractEntry(
         }
     }
     return file
+}
+
+/**
+ * Copies the file that the hard link [linkName] links to in this directory to [file].
+ *
+ * @throws IllegalArgumentException if the linked file resolves outside this directory.
+ * @throws IllegalStateException if the linked file was not extracted.
+ */
+private fun Path.copyHardLinked(
+    file: Path,
+    linkName: String,
+) {
+    val source = resolveEntry(linkName)
+    check(source.exists()) { "Cannot link $file to $linkName: the linked file was not extracted" }
+    source.copyTo(file.createParentDirectories(), overwrite = true)
 }
 
 /**

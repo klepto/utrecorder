@@ -2,7 +2,7 @@
 // UTRecorderConsole - console that drives unattended demo playback and quits
 // the game once the demo ends.
 //
-// Configured through System/UTRecorder.ini and installed as the
+// Configured through its section of the game ini and installed as the
 // [Engine.Engine] Console. It does nothing until bAutoExit is on. While it
 // is on, the console logs a start and an end mark around the demo, then
 // stops playback and exits the process once the demo passes the end TimerStop
@@ -22,7 +22,9 @@
 //   TimerReset <demo time>
 //                     make DemoFrames signal the spawn instead once the demo
 //                     reaches the demo time the Bunny Track timer of the run
-//                     resets at,
+//                     resets at, or at once when that demo time is 0 or
+//                     earlier, since the run is then already under way at
+//                     the demo's first frame,
 //   TimerStop <demo time>
 //                     end the run TIMER_END_DELAY seconds of demo time after
 //                     the demo time the Bunny Track timer of the run stops at,
@@ -30,7 +32,7 @@
 //                     UTRecorderSmooth.
 //=============================================================================
 class UTRecorderConsole extends UTConsole
-	config(UTRecorder);
+	config;
 
 const SHOW_PLAYERCTRL = 0x00000800;
 const SHOW_REALTIME = 0x00004000;
@@ -83,7 +85,8 @@ var bool bSpawnPending;   // the spawn mark is due at the start of the next tick
 var bool bSeenPlayer;     // a followed player has existed at some point
 var bool bSeenDead;       // the first followed player seen was dead
 var float SincePlayback;  // seconds of playback the spawn check has seen
-var float RunStart;       // demo time TimerReset set, 0 when unknown
+var bool bRunStart;       // TimerReset was run, so RunStart is known
+var float RunStart;       // demo time TimerReset set, 0 or earlier when the run began before the demo
 var float LastStreamTime; // demo time of the last tick that had a driver
 var int RenderedFrames;   // ticks counted while bAutoExit is on
 var bool bMarkedStart;    // the start mark has been logged
@@ -288,15 +291,22 @@ function ClearHUDMessages()
 }
 
 // Replaces the HUD of Linked with a UTRecorderHUD that forwards to Spec.
+// Keeps the HUD of Linked when the spawn fails, so the next tick tries again.
 function MuteHUD(DemoPlaybackSpec Spec, PlayerPawn Linked)
 {
 	local UTRecorderHUD HUD;
 
 	HUD = Spec.Spawn(class'UTRecorderHUD', Linked);
+	if (HUD == None)
+		return;
+
 	HUD.Real = Spec;
 	Linked.myHUD.Destroy();
 	Linked.myHUD = HUD;
-	Log("UTRecorder: muted the HUD of" @ Linked.PlayerReplicationInfo.PlayerName, 'UTRecorder');
+	if (Linked.PlayerReplicationInfo != None)
+		Log("UTRecorder: muted the HUD of" @ Linked.PlayerReplicationInfo.PlayerName, 'UTRecorder');
+	else
+		Log("UTRecorder: muted the HUD of" @ Linked, 'UTRecorder');
 }
 
 // Seeks to SEEK_PREROLL seconds before the run start, or to the demo start
@@ -399,9 +409,11 @@ exec function DemoFrames(float Rate)
 }
 
 // Sets RunStart to Start, which makes the spawn check wait for the demo to
-// reach the timer reset at that demo time.
+// reach the timer reset at that demo time. A Start of 0 or earlier means the
+// run is already under way at the demo's first frame.
 exec function TimerReset(float Start)
 {
+	bRunStart = True;
 	RunStart = Start;
 	Log("UTRecorder: waiting for the timer reset at demo time" @ Start, 'UTRecorder');
 }
@@ -415,7 +427,8 @@ exec function TimerStop(float Stop)
 	Log("UTRecorder: ending the run at demo time" @ TimerEnd @ "after the timer stop at demo time" @ Stop, 'UTRecorder');
 }
 
-// Signals the spawn once the demo reaches RunStart when TimerReset set it.
+// Signals the spawn once the demo reaches RunStart when TimerReset set it,
+// at once when RunStart is 0 or earlier.
 // Otherwise signals it once the followed player is alive: at once if the
 // first player seen is alive, else when a dead one reaches SpawnHealth.
 // Signals it anyway when no player is followed or SpawnTimeout runs out.
@@ -438,7 +451,7 @@ function CheckSpawn(float Delta)
 	SincePlayback += Delta;
 	Linked = Spec.PlayerLinked;
 
-	if (RunStart > 0.0)
+	if (bRunStart)
 	{
 		if (Spec.Driver.GetCurrentTime() >= RunStart)
 			SignalSpawn("timer reset at demo time" @ Spec.Driver.GetCurrentTime());

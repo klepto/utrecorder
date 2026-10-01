@@ -13,6 +13,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.upload.MediaUploader
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -27,6 +28,7 @@ import kotlin.io.path.name
 import kotlin.io.path.nameWithoutExtension
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Instant
 
 /**
  * [Service] that keeps in [ServerConfig.recordings] only the mp4 files worth holding locally.
@@ -37,8 +39,10 @@ import kotlin.time.Duration.Companion.minutes
  * [ServerConfig.cacheMaxBytes], it deletes more of them until they take at most [ServerConfig.cacheTargetBytes]: first
  * [Archived], then [Outdated]. The mp4 of a `Recorded`, `Uploaded` or `Recording` recording is never deleted.
  *
- * [view] counts one view of a recording. If the recording is [Archived] and its mp4 is not in
- * [ServerConfig.recordings], the mp4 is downloaded again from [uploader] in the background, one recording at a time.
+ * [view] counts one view of a recording. The views are counted in memory, and [flushViews] writes them to [repository]:
+ * once every [ServerConfig.viewFlushInterval], and once more when the service stops. If the recording is [Archived]
+ * and its mp4 is not in [ServerConfig.recordings], the mp4 is downloaded again from [uploader] in the background, one
+ * recording at a time.
  *
  * A delete or a download that fails is logged, and tried again on the next pass or the next view.
  *
@@ -55,29 +59,57 @@ class CacheService(
 ) : Service {
     private val downloads = Channel<Recording>(Channel.UNLIMITED)
     private val downloading: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val views = ConcurrentHashMap<String, View>()
 
     override suspend fun start() {
-        coroutineScope {
-            launch { downloadLoop() }
-            evictLoop()
+        try {
+            coroutineScope {
+                launch { downloadLoop() }
+                launch { flushLoop() }
+                evictLoop()
+            }
+        } finally {
+            withContext(NonCancellable) { flushViews() }
         }
     }
 
     /**
-     * Returns the recording stored under [capId], after counting one view of it. If the recording is [Archived] and its
-     * mp4 is not in [ServerConfig.recordings], queues a download of the mp4, unless one is queued already. If there is
-     * no recording, returns `null` instead.
+     * Returns the recording stored under [capId], with every view counted so far, after counting one more view of it.
+     * If the recording is [Archived] and its mp4 is not in [ServerConfig.recordings], queues a download of the mp4,
+     * unless one is queued already. If there is no recording, returns `null` instead.
+     *
+     * If [counted] is `false`, counts no view.
      */
-    suspend fun view(capId: String): Recording? {
-        repository.update(capId) { viewed(it) }
-        return repository[capId]?.also { queueDownload(it) }
+    suspend fun view(
+        capId: String,
+        counted: Boolean = true,
+    ): Recording? {
+        val recording = repository[capId] ?: return null
+        if (counted) views.merge(capId, View(1, clock.now()), View::plus)
+        return withViews(recording).also { queueDownload(it) }
     }
 
     /**
-     * Returns the URL the mp4 of the recording [capId] downloads from [uploader]. If there is no [uploader], returns
-     * `null` instead.
+     * Writes every view counted in memory to [repository], as one transaction.
      */
-    fun downloadUrl(capId: String): String? = uploader?.downloadUrl(capId, config.mp4(capId).name)
+    suspend fun flushViews() {
+        val flushed =
+            views.keys
+                .toList()
+                .mapNotNull { capId -> views.remove(capId)?.let { capId to it } }
+                .toMap()
+        if (flushed.isEmpty()) return
+        repository.updateAll { recording -> flushed[recording.demo.capId]?.let { viewed(recording, it) } ?: recording }
+    }
+
+    /**
+     * Returns the URL the mp4 of [recording] downloads from [uploader]: the file `<capId>.mp4` of the item
+     * [Recording.itemId]. If there is no [uploader], or [recording] has no [Recording.itemId], returns `null` instead.
+     */
+    fun downloadUrl(recording: Recording): String? {
+        val itemId = recording.itemId ?: return null
+        return uploader?.downloadUrl(itemId, config.mp4(recording.demo.capId).name)
+    }
 
     /**
      * Deletes from [ServerConfig.recordings] the mp4 of every [Archived] recording last viewed more than
@@ -93,7 +125,11 @@ class CacheService(
      * logs a warning and stops.
      */
     suspend fun evict() {
-        val recordings = repository.all().associateBy { it.demo.capId }
+        val recordings =
+            repository
+                .all()
+                .map { withViews(it) }
+                .associateBy { it.demo.capId }
         mp4s()
             .filter { isExpired(recordings[it.nameWithoutExtension]) }
             .forEach { delete(it) }
@@ -111,10 +147,19 @@ class CacheService(
     }
 
     /**
-     * Returns [recording] with one more view, viewed now.
+     * Runs [flushViews] once every [ServerConfig.viewFlushInterval].
      */
-    private fun viewed(recording: Recording): Recording =
-        recording.copy(views = recording.views + 1, lastView = clock.now())
+    private suspend fun flushLoop() {
+        while (isRunning()) {
+            delay(config.viewFlushInterval)
+            flushViews()
+        }
+    }
+
+    /**
+     * Returns [recording] with the views counted in memory and not flushed yet.
+     */
+    private fun withViews(recording: Recording): Recording = views[recording.demo.capId]?.let { viewed(recording, it) } ?: recording
 
     /**
      * Deletes the mp4 files of [recordings] in trim order, if they take more than [ServerConfig.cacheMaxBytes], until
@@ -152,12 +197,12 @@ class CacheService(
     }
 
     /**
-     * Queues a download of the mp4 of [recording] if there is an [uploader], [recording] is [Archived], its mp4 is
+     * Queues a download of the mp4 of [recording] if it has a [downloadUrl], [recording] is [Archived], its mp4 is
      * missing, and no download of it is queued already.
      */
     private suspend fun queueDownload(recording: Recording) {
         val capId = recording.demo.capId
-        if (uploader == null || recording.status != Archived || config.mp4(capId).fileExists()) return
+        if (downloadUrl(recording) == null || recording.status != Archived || config.mp4(capId).fileExists()) return
         if (downloading.add(capId)) downloads.send(recording)
     }
 
@@ -168,8 +213,8 @@ class CacheService(
     private suspend fun download(recording: Recording) {
         val capId = recording.demo.capId
         val mp4 = config.mp4(capId)
-        val url = downloadUrl(capId) ?: return
         try {
+            val url = downloadUrl(recording) ?: return
             suspendCatching { Downloader(url, recording.md5, directories = config.directories).download(mp4) }
                 .onSuccess { log.info { "Downloaded again: ${recording.demo} ($url)" } }
                 .onFailure { log.warn(it) { "Could not download recording $capId from $url" } }
@@ -220,6 +265,19 @@ class CacheService(
             mp4s().associate { it.nameWithoutExtension to it.fileSize() }
         }
 
+    /**
+     * Views of one recording counted in memory.
+     *
+     * @property count The number of views.
+     * @property lastView The time of the last view.
+     */
+    private data class View(
+        val count: Int,
+        val lastView: Instant,
+    ) {
+        operator fun plus(other: View): View = View(count + other.count, maxOf(lastView, other.lastView))
+    }
+
     private companion object {
         val TRIM_ORDER = listOf(Archived, Outdated)
 
@@ -238,5 +296,13 @@ class CacheService(
             }
 
         val log = logger<CacheService>()
+
+        /**
+         * Returns [recording] with the views of [view] added to it.
+         */
+        fun viewed(
+            recording: Recording,
+            view: View,
+        ): Recording = recording.copy(views = recording.views + view.count, lastView = view.lastView)
     }
 }

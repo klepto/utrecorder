@@ -59,6 +59,30 @@ class UtPackageTest :
             UtPackage.read(path).guid shouldBe guid
         }
 
+        test("read returns the last GUID of the heritage table for a version before 68, even past the first 1024 bytes") {
+            val path = (root / "read-heritage" / "Engine.u").createParentDirectories()
+            val bytes = ByteArray(2080)
+            val header = listOf(0xC1, 0x83, 0x2A, 0x9E, 0x3D, 0x00, 0x00, 0x00)
+            header.forEachIndexed { index, value -> bytes[index] = value.toByte() }
+            listOf(0x02, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00).forEachIndexed { index, value -> bytes[36 + index] = value.toByte() }
+            otherGuidHeaderBytes.forEachIndexed { index, value -> bytes[2048 + index] = value.toByte() }
+            guidHeaderBytes.forEachIndexed { index, value -> bytes[2064 + index] = value.toByte() }
+            path.writeBytes(bytes)
+
+            UtPackage.read(path).guid shouldBe guid
+        }
+
+        test("read returns an empty GUID for a package whose heritage table lies past the end of the file") {
+            val path = (root / "read-heritage-truncated" / "Engine.u").createParentDirectories()
+            val bytes = ByteArray(2056)
+            val header = listOf(0xC1, 0x83, 0x2A, 0x9E, 0x3D, 0x00, 0x00, 0x00)
+            header.forEachIndexed { index, value -> bytes[index] = value.toByte() }
+            listOf(0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00).forEachIndexed { index, value -> bytes[36 + index] = value.toByte() }
+            path.writeBytes(bytes)
+
+            UtPackage.read(path).guid shouldBe ""
+        }
+
         test("read returns an empty GUID for a file that is not a package") {
             val path = root / "read-not-a-package" / "Engine.u"
             path.createParentDirectories()

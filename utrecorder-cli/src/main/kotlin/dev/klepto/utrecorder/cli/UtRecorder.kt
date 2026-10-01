@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.net.URLDecoder
@@ -39,14 +40,21 @@ object UtRecorder {
      */
     private const val FALLBACK_NAME = "demo"
 
+    /**
+     * The extension of a demo file, lowercased.
+     */
+    private const val DEMO_EXTENSION = ".dem"
+
     private val log = logger<UtRecorder>()
 
     /**
-     * Returns the name of the mp4 recorded from the demo that [url] names.
+     * Returns the name of the mp4 recorded from the demo that [url] names, without its extension.
      *
-     * The name is the file name of [url] without its query string, decoded, lowercased and stripped of every
-     * character other than a letter, a digit, a dot, a hyphen or an underscore. If nothing is left, returns `demo`
-     * instead.
+     * The name joins every segment of the path of [url] after the first, without the query string. It is decoded,
+     * lowercased, stripped of a `.dem` extension and stripped of every character other than a letter, a digit, a dot,
+     * a hyphen or an underscore. If nothing is left, returns `demo` instead.
+     *
+     * @throws IllegalArgumentException If [url] holds a malformed percent escape.
      */
     fun outputName(url: String): String =
         url
@@ -54,10 +62,23 @@ object UtRecorder {
             .substringAfter("://")
             .substringAfter('/', missingDelimiterValue = "")
             .substringAfter('/')
-            .let { URLDecoder.decode(it, StandardCharsets.UTF_8) }
+            .let { decode(url, it) }
             .lowercase()
+            .removeSuffix(DEMO_EXTENSION)
             .filter { it.isLetter() || it.isDigit() || it == '.' || it == '-' || it == '_' }
             .ifEmpty { FALLBACK_NAME }
+
+    /**
+     * Returns [path], a part of [url], URL-decoded.
+     *
+     * @throws IllegalArgumentException If [path] holds a malformed percent escape.
+     */
+    private fun decode(
+        url: String,
+        path: String,
+    ): String =
+        runCatching { URLDecoder.decode(path, StandardCharsets.UTF_8) }
+            .getOrElse { throw IllegalArgumentException("Demo URL $url holds a malformed percent escape", it) }
 
     /**
      * Returns the line that logs [progress]: the stage followed by how much of it is done, in whole percent.
@@ -70,8 +91,9 @@ object UtRecorder {
      *
      * The demo is downloaded into the demo cache of [directories] if the cache does not hold it. The progress of the
      * recording is logged when a stage starts, every 5 seconds while the stage runs, and once more when the stage
-     * finishes.
+     * finishes. Each stage and whole percent is logged once.
      *
+     * @throws IllegalArgumentException If [url] holds a malformed percent escape.
      * @throws IllegalStateException If the demo cannot be fetched, resolved or recorded.
      */
     suspend fun main(
@@ -79,42 +101,47 @@ object UtRecorder {
         directories: DirectoriesConfig = DirectoriesConfig(),
     ) {
         val progress = MutableStateFlow<Progress<RecorderStage>?>(null)
+        val progressLog = ProgressLog<RecorderStage> { log.info { progressLine(it) } }
         val mp4 =
             coroutineScope {
-                val progressLogger = launch { logProgress(progress) }
+                val progressLogger = launch { logProgress(progress, progressLog) }
                 Recorder(directories = directories)
-                    .record(url, outputName(url)) { report(progress, it) }
+                    .record(url, outputName(url)) { report(progress, progressLog, it) }
                     .also { progressLogger.cancel() }
             }
-        progress.value?.let { log.info { progressLine(it) } }
+        progress.value?.let { progressLog.log(it) }
         println(mp4)
     }
 
     /**
-     * Stores [next] in [progress]. If [next] starts a new stage, first logs the last progress of the stage that
-     * finished.
+     * Stores [next] in [progress]. If [next] starts a new stage, logs the last progress of the stage that finished to
+     * [progressLog].
      */
     private fun report(
         progress: MutableStateFlow<Progress<RecorderStage>?>,
+        progressLog: ProgressLog<RecorderStage>,
         next: Progress<RecorderStage>,
     ) {
-        progress.value
+        progress
+            .getAndUpdate { next }
             ?.takeIf { it.state != next.state }
-            ?.let { log.info { progressLine(it) } }
-        progress.value = next
+            ?.let { progressLog.log(it) }
     }
 
     /**
-     * Logs the latest value of [progress] when its stage changes, and every 5 seconds after that
+     * Logs the latest value of [progress] to [progressLog] when its stage changes, and every 5 seconds after that
      * until the stage changes again. Never returns; cancel it to stop logging.
      */
-    private suspend fun logProgress(progress: StateFlow<Progress<RecorderStage>?>) {
+    private suspend fun logProgress(
+        progress: StateFlow<Progress<RecorderStage>?>,
+        progressLog: ProgressLog<RecorderStage>,
+    ) {
         progress
             .filterNotNull()
             .distinctUntilChangedBy { it.state }
             .collectLatest {
                 while (true) {
-                    progress.value?.let { log.info { progressLine(it) } }
+                    progress.value?.let { progressLog.log(it) }
                     delay(5.seconds)
                 }
             }
@@ -123,14 +150,19 @@ object UtRecorder {
     /**
      * Records the demo that the first of [arguments] names and prints the path of the mp4 on standard out.
      *
-     * If [arguments] is empty, prints the usage on standard error and exits with status 1 instead. When the JVM shuts
-     * down during a recording, the recording is cancelled, the shutdown waits for it to finish, and the cancellation is
+     * If [arguments] is empty, prints the usage on standard error and exits with status 1 instead. If the URL holds a
+     * malformed percent escape, prints that on standard error and exits with status 1 instead. When the JVM shuts down
+     * during a recording, the recording is cancelled, the shutdown waits for it to finish, and the cancellation is
      * logged.
      */
     @JvmStatic
     fun main(arguments: Array<String>) {
         if (arguments.isEmpty()) {
             System.err.println("Usage: utrecorder-cli <demo-url>")
+            exitProcess(EXIT_FAILURE)
+        }
+        runCatching { outputName(arguments.first()) }.onFailure {
+            System.err.println(it.message)
             exitProcess(EXIT_FAILURE)
         }
         val job = Job()

@@ -4,20 +4,39 @@ import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
-import java.net.ServerSocket
+import kotlinx.coroutines.withTimeout
+import java.io.OutputStream
+import java.net.InetSocketAddress
+import java.net.StandardSocketOptions
+import java.nio.channels.Channels
+import java.nio.channels.ServerSocketChannel
+import java.nio.channels.SocketChannel
 import java.nio.file.Path
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The loopback host the capture listens on.
  */
 private const val STREAM_HOST = "127.0.0.1"
+
+/**
+ * How long the capture waits between two looks for the connection of the hook library.
+ */
+private val ACCEPT_INTERVAL = 50.milliseconds
 
 /**
  * The logger of the frame capture.
@@ -26,10 +45,12 @@ private val log = logger<FrameEncoder>()
 
 /**
  * An ffmpeg capture that encodes the raw frames the hook library streams over loopback TCP into the final codec.
- * Run it through [encode].
+ * The capture listens for the hook library itself and relays its frames to the standard input of ffmpeg. Run it
+ * through [encode].
  *
- * @property config The video capture configuration, carrying the codec, the frame size and the backpressure bound.
- * @property listenTimeout How long ffmpeg waits for the hook library to connect.
+ * @property config The video capture configuration, carrying the codec, the frame size, the backpressure bound, the
+ * port and the finish timeout.
+ * @property listenTimeout How long the capture waits for the hook library to connect.
  * @property target The file the capture encodes into, already in the final codec.
  * @property ffmpeg The ffmpeg the capture process is started from.
  * @property onProgress Receives the progress ffmpeg reports while it encodes. It is called from any thread.
@@ -42,16 +63,96 @@ class FrameEncoder(
     private val onProgress: (MediaProgress) -> Unit = {},
 ) {
     /**
-     * The loopback port ffmpeg listens on for frames. Uses [VideoCaptureConfig.port] if it is positive, otherwise a
-     * free port.
+     * Returns a non-blocking loopback listener for the hook library, bound to [VideoCaptureConfig.port], or to a free
+     * port if it is `0`. Use [encode] instead of calling this function directly.
      */
-    val port: Int = config.port.takeIf { it > 0 } ?: freePort()
+    suspend fun listen(): ServerSocketChannel =
+        withContext(Dispatchers.IO) {
+            ServerSocketChannel
+                .open()
+                .setOption(StandardSocketOptions.SO_RCVBUF, frameSize())
+                .bind(InetSocketAddress(STREAM_HOST, config.port))
+                .apply { configureBlocking(false) }
+        }
 
     /**
-     * Runs ffmpeg listening on [port] until the capture ends, and returns whether ffmpeg exited with code `0`.
-     * Use [encode] instead of calling this function directly.
+     * Runs ffmpeg until the capture ends, relaying the frames of the first connection [listener] accepts, and returns
+     * whether ffmpeg exited with code `0`. Once [ended] completes, no connection is waited for any more. Use [encode]
+     * instead of calling this function directly.
+     *
+     * @throws TimeoutException if the hook library does not connect within [listenTimeout].
+     * @throws IllegalStateException if the hook library has not connected when [ended] completes, or closes the
+     * connection inside a frame.
      */
-    suspend fun capture(): Boolean = ffmpeg.run(*captureArguments().toTypedArray(), onProgress = onProgress)
+    suspend fun capture(
+        listener: ServerSocketChannel,
+        ended: Job,
+    ): Boolean = ffmpeg.run(*captureArguments().toTypedArray(), input = { relay(listener, ended, it) }, onProgress = onProgress)
+
+    /**
+     * Copies every byte of the first connection [listener] accepts to [input], until the hook library closes it.
+     *
+     * @throws IllegalStateException if no connection has arrived when [ended] completes, or the connection ends inside
+     * a frame.
+     */
+    private suspend fun relay(
+        listener: ServerSocketChannel,
+        ended: Job,
+        input: OutputStream,
+    ) {
+        val stream = accept(listener, ended)
+        val bytes = runInterruptible(Dispatchers.IO) { stream.use { Channels.newInputStream(it).copyTo(input, frameSize()) } }
+        val partial = bytes % frameSize()
+        check(partial == 0L) { "Frame capture ended inside a frame, $partial bytes past the last whole frame" }
+    }
+
+    /**
+     * Returns the first connection [listener] accepts.
+     *
+     * @throws TimeoutException if no connection arrives within [listenTimeout].
+     * @throws IllegalStateException if no connection has arrived when [ended] completes.
+     */
+    private suspend fun accept(
+        listener: ServerSocketChannel,
+        ended: Job,
+    ): SocketChannel =
+        try {
+            withTimeout(listenTimeout) { awaitConnection(listener, ended) }
+        } catch (timedOut: TimeoutCancellationException) {
+            throw TimeoutException("Hook library did not connect within $listenTimeout").apply { initCause(timedOut) }
+        }
+
+    /**
+     * Returns the first connection [listener] accepts, looking for one every [ACCEPT_INTERVAL]. A connection that
+     * arrived before [ended] completed is still returned.
+     *
+     * @throws IllegalStateException if no connection has arrived when [ended] completes.
+     */
+    private suspend fun awaitConnection(
+        listener: ServerSocketChannel,
+        ended: Job,
+    ): SocketChannel {
+        while (true) {
+            val endedBefore = ended.isCompleted
+            withContext(Dispatchers.IO) { listener.accept() }?.let { return it }
+            check(!endedBefore) { "Hook library did not connect before the capture ended" }
+            delay(ACCEPT_INTERVAL)
+        }
+    }
+
+    /**
+     * Returns the result of [worker], the running [capture], once it finishes. Use [encode] instead of calling this
+     * function directly.
+     *
+     * @throws TimeoutException if [worker] does not finish within [VideoCaptureConfig.finishTimeout].
+     */
+    suspend fun finish(worker: Deferred<Boolean>): Boolean =
+        try {
+            withTimeout(config.finishTimeout) { worker.await() }
+        } catch (timedOut: TimeoutCancellationException) {
+            throw TimeoutException("Frame capture was not finalised by ffmpeg within ${config.finishTimeout}")
+                .apply { initCause(timedOut) }
+        }
 
     /**
      * Checks that [target] holds a finished capture. Use [encode] instead of calling this function directly.
@@ -64,7 +165,8 @@ class FrameEncoder(
     }
 
     /**
-     * Returns the arguments [capture] runs ffmpeg with, reading raw frames from [port] and encoding them into [target].
+     * Returns the arguments [capture] runs ffmpeg with, reading raw frames from standard input and encoding them into
+     * [target].
      */
     fun captureArguments(): List<String> =
         buildList {
@@ -72,7 +174,7 @@ class FrameEncoder(
             this += listOf("-s", "${config.width}x${config.height}")
             this += listOf("-framerate", config.renderFps().toString())
             this += listOf("-thread_queue_size", config.queue.toString())
-            this += listOf("-i", streamUrl())
+            this += listOf("-i", "pipe:0")
             this += listOf("-vf", videoFilter())
             this += listOf("-map", "0:v:0")
             this += listOf("-c:v", config.codec)
@@ -109,11 +211,9 @@ class FrameEncoder(
     }
 
     /**
-     * Returns the ffmpeg input URL that listens on [port], with a receive buffer the size of one BGRA frame.
+     * Returns the size in bytes of one BGRA frame.
      */
-    private fun streamUrl(): String =
-        "tcp://$STREAM_HOST:$port?listen=1&listen_timeout=${listenTimeout.inWholeMilliseconds}" +
-            "&recv_buffer_size=${config.width * config.height * 4}"
+    private fun frameSize(): Int = config.width * config.height * 4
 
     /**
      * Returns the flag the bitrate is passed under: the ceiling of a constant rate factor encode, the average of one
@@ -136,18 +236,13 @@ class FrameEncoder(
     /**
      * The receiver of the [encode] block.
      *
-     * @property port The loopback port ffmpeg listens on for the frames of the hook library.
+     * @property port The loopback port the capture listens on for the frames of the hook library.
      */
     class Connection(
         val port: Int,
     )
 
     private companion object {
-        /**
-         * Returns a port that is free on this machine.
-         */
-        fun freePort(): Int = ServerSocket(0).use { it.localPort }
-
         /**
          * Returns [name] followed by [value], or no arguments if [value] is blank.
          */
@@ -163,20 +258,29 @@ class FrameEncoder(
 }
 
 /**
- * Returns the result of [block] paired with the path of the finished capture. ffmpeg listens on the loopback for the
- * whole duration of [block], and the capture is finalised and checked after [block] returns.
+ * Returns the result of [block] paired with the path of the finished capture. The capture listens on the loopback for
+ * the whole duration of [block], and the capture is finalised and checked after [block] returns. The hook library has to
+ * connect before [block] returns.
  *
  * Cancelling the coroutine running this function cancels the capture along with [block], and leaves no ffmpeg process
  * running.
  *
- * @throws IllegalStateException if ffmpeg fails the capture, or the capture does not exist or holds no frames.
+ * @throws IllegalStateException if the hook library does not connect before [block] returns or closes the connection
+ * inside a frame, if ffmpeg fails the capture, or if the capture does not exist or holds no frames.
+ * @throws TimeoutException if ffmpeg does not finish within [VideoCaptureConfig.finishTimeout] after [block] returns.
+ * ffmpeg is killed first.
  */
 suspend fun <T> FrameEncoder.encode(block: suspend FrameEncoder.Connection.() -> T): Pair<T, Path> =
-    coroutineScope {
-        val worker = async { capture() }
-        log.debug { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
-        val value = FrameEncoder.Connection(port).block()
-        check(worker.await()) { "Frame capture was not finalised by ffmpeg" }
-        checkCapture()
-        value to target
+    listen().use { listener ->
+        coroutineScope {
+            val port = (listener.localAddress as InetSocketAddress).port
+            val ended = CompletableDeferred<Unit>()
+            val worker = async { capture(listener, ended) }
+            log.debug { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
+            val value = FrameEncoder.Connection(port).block()
+            ended.complete(Unit)
+            check(finish(worker)) { "Frame capture was not finalised by ffmpeg" }
+            checkCapture()
+            value to target
+        }
     }

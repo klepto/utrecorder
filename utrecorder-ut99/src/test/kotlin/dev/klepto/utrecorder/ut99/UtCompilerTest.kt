@@ -10,6 +10,9 @@ import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import java.nio.file.Path
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
@@ -26,7 +29,8 @@ import kotlin.io.path.writeText
  * The fake UCC is a shell script on Linux and a C# program built with the .NET Framework compiler on Windows. It writes
  * the package named by `-packages=`, writes the file named by the header of a `.uz` archive, and fails when its
  * directory holds `ucc.fail`. While its directory holds `ucc.abort`, a decompression takes one from the count the file
- * holds and exits with code 134 instead, as a UCC aborted by an assertion does.
+ * holds and exits with code 134 instead, as a UCC aborted by an assertion does. While its directory holds
+ * `ucc.exclusive`, it holds `ucc.running` for a second and fails when another run holds it already.
  */
 class UtCompilerTest :
     FunSpec({
@@ -45,6 +49,14 @@ class UtCompilerTest :
             #!/bin/sh
             DIRECTORY=${'$'}(cd "${'$'}(dirname "${'$'}0")" && pwd)
             echo "FAKE UCC: compiling"
+            if [ -f "${'$'}DIRECTORY/ucc.exclusive" ]; then
+                if ! (set -C; : > "${'$'}DIRECTORY/ucc.running") 2>/dev/null; then
+                    echo "FAKE UCC: another run is running"
+                    exit 5
+                fi
+                sleep 1
+                rm -f "${'$'}DIRECTORY/ucc.running"
+            fi
             if [ -f "${'$'}DIRECTORY/ucc.fail" ]; then
                 echo "FAKE UCC: simulated failure"
                 exit 3
@@ -82,6 +94,22 @@ class UtCompilerTest :
                 {
                     string directory = AppDomain.CurrentDomain.BaseDirectory;
                     Console.WriteLine("FAKE UCC: compiling");
+                    if (File.Exists(Path.Combine(directory, "ucc.exclusive")))
+                    {
+                        string runningPath = Path.Combine(directory, "ucc.running");
+                        try
+                        {
+                            File.Open(runningPath, FileMode.CreateNew).Close();
+                        }
+                        catch (IOException)
+                        {
+                            Console.WriteLine("FAKE UCC: another run is running");
+                            return 5;
+                        }
+                        System.Threading.Thread.Sleep(1000);
+                        File.Delete(runningPath);
+                    }
+
                     if (File.Exists(Path.Combine(directory, "ucc.fail")))
                     {
                         Console.WriteLine("FAKE UCC: simulated failure");
@@ -156,6 +184,7 @@ class UtCompilerTest :
             compiler: Boolean = true,
             fails: Boolean = false,
             aborts: Int = 0,
+            exclusive: Boolean = false,
         ): UtInstallation {
             val systemDirectory = root / name / "System"
             systemDirectory.createDirectories()
@@ -170,6 +199,9 @@ class UtCompilerTest :
             }
             if (aborts > 0) {
                 (systemDirectory / "ucc.abort").writeText("$aborts")
+            }
+            if (exclusive) {
+                (systemDirectory / "ucc.exclusive").writeText("")
             }
             return UtInstallation(
                 root / name,
@@ -250,6 +282,23 @@ class UtCompilerTest :
                 (workspace / "PackageFive.u").exists() shouldBe false
                 (root / "failure" / "PackageFive").exists() shouldBe false
             }
+
+            test("runs one compiler at a time across the compilers of one installation") {
+                val first = installation("make-concurrent", exclusive = true).compiler
+                val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root / "make-concurrent-home")
+                val second = UtInstallation(root / "make-concurrent", UtConfig(ConfigReader.EMPTY, directories)).compiler
+                val sourcesPath = sources("PackageSeven")
+
+                val results =
+                    coroutineScope {
+                        listOf(
+                            async { first.make(sourcesPath, root / "out" / "PackageSeven-1.u") },
+                            async { second.make(sourcesPath, root / "out" / "PackageSeven-2.u") },
+                        ).awaitAll()
+                    }
+
+                results shouldBe listOf(root / "out" / "PackageSeven-1.u", root / "out" / "PackageSeven-2.u")
+            }
         }
 
         context("extract") {
@@ -265,6 +314,31 @@ class UtCompilerTest :
                 result shouldBe outputPath
                 outputPath.exists() shouldBe true
                 (root / "extract" / "System" / "Map.unr").exists() shouldBe false
+            }
+
+            test("names the file after the archive without its .uz suffix in any case when outputPath is not provided") {
+                val compiler = installation("extract-upper-case").compiler
+                val archive = root / "archives" / "Upper.UNR.UZ"
+                archive.parent.createDirectories()
+                archive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 10) + "Upper.unr".toByteArray() + byteArrayOf(0))
+
+                val result = compiler.extract(archive)
+
+                result shouldBe root / "archives" / "Upper.UNR"
+                archive.exists() shouldBe true
+            }
+
+            test("throws without running UCC when the archive header names a file outside the System directory") {
+                val compiler = installation("extract-traversal").compiler
+                val archive = root / "archives" / "Escape.unr.uz"
+                archive.parent.createDirectories()
+                archive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 14) + "../Escape.unr".toByteArray() + byteArrayOf(0))
+
+                val exception = shouldThrow<IllegalStateException> { compiler.extract(archive, root / "out" / "Escape.unr") }
+
+                exception.message shouldContain "../Escape.unr"
+                (root / "extract-traversal" / "Escape.unr").exists() shouldBe false
+                (root / "out" / "Escape.unr").exists() shouldBe false
             }
 
             test("runs the decompression again when UCC aborts, up to three runs") {
@@ -288,6 +362,27 @@ class UtCompilerTest :
                 val exception = shouldThrow<IllegalStateException> { compiler.extract(archive, root / "out" / "Aborts.unr") }
 
                 exception.message shouldContain "134"
+            }
+
+            test("runs one compiler at a time, so two archives holding one file name both extract") {
+                val compiler = installation("extract-concurrent", exclusive = true).compiler
+                val firstArchive = root / "archives" / "Same-V1.unr.uz"
+                val secondArchive = root / "archives" / "Same-V2.unr.uz"
+                firstArchive.parent.createDirectories()
+                firstArchive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 9) + "Same.unr".toByteArray() + byteArrayOf(0))
+                secondArchive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 9) + "Same.unr".toByteArray() + byteArrayOf(0))
+
+                val results =
+                    coroutineScope {
+                        listOf(
+                            async { compiler.extract(firstArchive, root / "out" / "Same-V1.unr") },
+                            async { compiler.extract(secondArchive, root / "out" / "Same-V2.unr") },
+                        ).awaitAll()
+                    }
+
+                results shouldBe listOf(root / "out" / "Same-V1.unr", root / "out" / "Same-V2.unr")
+                (root / "out" / "Same-V1.unr").exists() shouldBe true
+                (root / "out" / "Same-V2.unr").exists() shouldBe true
             }
         }
     })

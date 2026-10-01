@@ -106,17 +106,22 @@ static int pixelHeight;
 /* Set once capture cannot go on. No frame is read or sent after that. */
 static int captureDisabled;
 
+/* The loopback port of the frame socket in UTRECORDER_PORT, read on the first frame of the armed capture. */
+static int streamPort;
+
 /* The connection to the frame socket. */
 #ifdef _WIN32
 static SOCKET stream = INVALID_SOCKET;
 #define STREAM_CLOSED INVALID_SOCKET
 #define closeStream(handle) closesocket(handle)
 #define sleepMillis(millis) Sleep(millis)
+#define sendInterrupted() 0
 #else
 static int stream = -1;
 #define STREAM_CLOSED (-1)
 #define closeStream(handle) close(handle)
 #define sleepMillis(millis) usleep((millis) * 1000)
+#define sendInterrupted() (errno == EINTR)
 #endif
 
 /* Returns the environment variable name as a number from 1 to maximum, or 0 when it is unset or out of that range. */
@@ -139,19 +144,18 @@ static int startSockets(void) {
 #endif
 }
 
-/* Connects stream to the frame socket on the loopback port in UTRECORDER_PORT. Disables capture when that fails. */
+/* Connects stream to the frame socket on streamPort. Disables capture when that fails. */
 static void openStream(void) {
     struct sockaddr_in address;
     int attempt;
-    int port = environmentNumber("UTRECORDER_PORT", 65535);
     int nodelay = 1;
-    if (!port || !startSockets()) {
+    if (!startSockets()) {
         captureDisabled = 1;
         return;
     }
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
-    address.sin_port = htons((unsigned short) port);
+    address.sin_port = htons((unsigned short) streamPort);
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     for (attempt = 0; attempt < CONNECT_ATTEMPTS; attempt++) {
         stream = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -167,11 +171,12 @@ static void openStream(void) {
     captureDisabled = 1;
 }
 
-/* Sends size bytes of data to stream. Returns whether every byte was sent. */
+/* Sends size bytes of data to stream, retrying a send a signal interrupted. Returns whether every byte was sent. */
 static int sendAll(const unsigned char *data, size_t size) {
     while (size > 0) {
         int chunk = size > 0x100000 ? 0x100000 : (int) size;
         int written = send(stream, (const char *) data, chunk, 0);
+        if (written < 0 && sendInterrupted()) continue;
         if (written <= 0) return 0;
         data += written;
         size -= (size_t) written;
@@ -227,6 +232,30 @@ static void resizeFrames(int width, int height) {
     if (!pixels || !pending) captureDisabled = 1;
 }
 
+/*
+ * Returns whether a width by height viewport differs from the frame size in UTRECORDER_WIDTH and UTRECORDER_HEIGHT.
+ * Returns 0 when either variable is unset.
+ */
+static int wrongFrameSize(int width, int height) {
+    int expectedWidth = environmentNumber("UTRECORDER_WIDTH", 65535);
+    int expectedHeight = environmentNumber("UTRECORDER_HEIGHT", 65535);
+    if (!expectedWidth || !expectedHeight) return 0;
+    return width != expectedWidth || height != expectedHeight;
+}
+
+/* Reports a width by height viewport that does not match the expected frame size, closes stream and disables capture. */
+static void rejectFrameSize(int width, int height) {
+    fprintf(stderr, "uthooks: viewport %dx%d does not match the frame size %sx%s, capture stopped\n", width, height,
+            getenv("UTRECORDER_WIDTH"), getenv("UTRECORDER_HEIGHT"));
+    fflush(stderr);
+    pendingSize = 0;
+    if (stream != STREAM_CLOSED) {
+        closeStream(stream);
+        stream = STREAM_CLOSED;
+    }
+    captureDisabled = 1;
+}
+
 /* Reads the current viewport into pixels, sends the pending frame, then makes the frame just read the pending one. */
 static void captureFrame(void) {
     int viewport[4];
@@ -234,7 +263,13 @@ static void captureFrame(void) {
     unsigned char *sent;
     readViewport(GL_VIEWPORT, viewport);
     if (viewport[2] <= 0 || viewport[3] <= 0) return;
-    if (viewport[2] != pixelWidth || viewport[3] != pixelHeight) resizeFrames(viewport[2], viewport[3]);
+    if (viewport[2] != pixelWidth || viewport[3] != pixelHeight) {
+        if (wrongFrameSize(viewport[2], viewport[3])) {
+            rejectFrameSize(viewport[2], viewport[3]);
+            return;
+        }
+        resizeFrames(viewport[2], viewport[3]);
+    }
     if (captureDisabled) return;
     size = (size_t) pixelWidth * pixelHeight * 4;
     readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
@@ -264,8 +299,12 @@ static long long clockFrame;
 static long long audioRate;
 static long long audioPeriod;
 
-/* Whether both variables were read. */
-static int audioResolved;
+/* Runs readAudio exactly once, whichever thread asks first. */
+#ifdef _WIN32
+static INIT_ONCE audioOnce = INIT_ONCE_STATIC_INIT;
+#else
+static pthread_once_t audioOnce = PTHREAD_ONCE_INIT;
+#endif
 
 /* Clock state: installation tried, clocks patched and stepping, demo started, demo ended. */
 static int clockInstalled;
@@ -301,13 +340,30 @@ static int demoResolved;
 static int captureArmed;
 static int speedHooked;
 
-/* Reads audioRate and audioPeriod on the first call. Leaves both 0 unless both variables are set and in range. */
+/* Reads audioRate and audioPeriod. Leaves both 0 unless both variables are set and in range. */
+static void readAudio(void) {
+    long long rate = environmentNumber("UTRECORDER_AUDIO_RATE", AUDIO_MAX_RATE);
+    long long period = environmentNumber("UTRECORDER_AUDIO_PERIOD", AUDIO_MAX_PERIOD);
+    if (!rate || !period) return;
+    audioPeriod = period;
+    audioRate = rate;
+}
+
+#ifdef _WIN32
+/* Runs readAudio as the INIT_ONCE callback of audioOnce. */
+static BOOL CALLBACK readAudioOnce(PINIT_ONCE once, PVOID parameter, PVOID *context) {
+    readAudio();
+    return TRUE;
+}
+#endif
+
+/* Reads audioRate and audioPeriod on the first call. Every call returns only once they are read. */
 static void resolveAudio(void) {
-    if (audioResolved) return;
-    audioResolved = 1;
-    audioRate = environmentNumber("UTRECORDER_AUDIO_RATE", AUDIO_MAX_RATE);
-    audioPeriod = environmentNumber("UTRECORDER_AUDIO_PERIOD", AUDIO_MAX_PERIOD);
-    if (!audioRate || !audioPeriod) audioRate = audioPeriod = 0;
+#ifdef _WIN32
+    InitOnceExecuteOnce(&audioOnce, readAudioOnce, NULL, NULL);
+#else
+    pthread_once(&audioOnce, readAudio);
+#endif
 }
 
 /* Returns the clock steps in one second. */
@@ -1006,18 +1062,20 @@ static void releaseMixer(const char *reason) {
 
 /*
  * Advances the clocks by one mixer period and, while the mixer is locked, waits until the mixer has rendered it.
- * Releases the mixer when it does not go idle within MIXER_STALL_MS.
+ * Releases the mixer when it does not go idle within MIXER_STALL_MS of real time, however often a wake ends a wait.
  */
 static void stepMixer(void) {
-    int waited = 0;
+    double deadline = readRealSeconds() + MIXER_STALL_MS / 1000.0;
+    int stalled = 0;
     lockMixer();
     clockFrame += audioPeriod;
     wakeMixer();
-    while (mixerLocked && mixerStarted && !mixerReleased && mixerIdle != clockFrame && waited < MIXER_STALL_MS) {
-        if (!waitMixer(MIXER_WAIT_MS)) waited += MIXER_WAIT_MS;
+    while (mixerLocked && mixerStarted && !mixerReleased && mixerIdle != clockFrame && !stalled) {
+        waitMixer(MIXER_WAIT_MS);
+        stalled = readRealSeconds() >= deadline;
     }
     unlockMixer();
-    if (waited >= MIXER_STALL_MS) releaseMixer("the mixer stalled");
+    if (stalled) releaseMixer("the mixer stalled");
 }
 
 /* Returns the days in month, counted from 0, of year. */
@@ -1233,9 +1291,19 @@ static void advanceClock(void) {
     scaleCycles();
 }
 
-/* Counts a frame of the armed capture, and captures it from the second frame on while capture is enabled. */
+/* Reads streamPort, and disables capture when UTRECORDER_PORT is unset or out of range. */
+static void resolvePort(void) {
+    streamPort = environmentNumber("UTRECORDER_PORT", 65535);
+    if (!streamPort) captureDisabled = 1;
+}
+
+/*
+ * Counts a frame of the armed capture, and captures it from the second frame on while capture is enabled. Decides on
+ * the first frame whether there is a frame socket to capture to.
+ */
 static void captureDemoFrame(void) {
     demoFrames++;
+    if (demoFrames == 1) resolvePort();
     if (demoFrames <= 1 || captureDisabled) return;
     if (!readPixels) resolveGl();
     if (!captureDisabled) captureFrame();

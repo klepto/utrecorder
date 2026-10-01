@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.ut99.demo
 
+import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.ut99.UtPackage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +18,8 @@ import kotlin.time.Duration.Companion.seconds
  *
  * @property map The map the demo opens, such as `CTF-BT-II-CoZyliciouS`.
  * @property packages The packages the demo loads, in the order the demo names them, with the level package first. A
- * package named more than once appears once, as its first entry, with names compared ignoring case.
+ * package named more than once appears once, as its first entry, with names compared ignoring case. An entry that names
+ * no package, or a name that is not a plain file name, is left out.
  * @property duration The demo time of the last record. It can overshoot the played length by a fraction of a second.
  * @property frameInterval The median demo time between two demo frames. If the demo holds no two frames less than
  * 0.1 seconds apart, it is `null` instead.
@@ -33,12 +35,14 @@ data class UtDemo(
     companion object {
         private val TOLERANCE = 50.milliseconds
         private val MAX_FRAME_INTERVAL = 100.milliseconds
+        private const val UNSAFE_NAME_CHARACTERS = "/\\:\u0000"
 
         private val SPAWN_MARKER = Regex("""BTPOG_SPAWN_MARKER:(\S+)""")
         private val CAP_MARKER = Regex("""BTPOG_CAP_MARKER:(\S+)""")
         private val CAPPED = Regex("""(.+) capped! \S+ team scores!""")
         private val FINISHED = Regex("""\[UTBT] (.+) finished in (\S+) \(.*\)""")
         private val REPORTED_TIME = Regex("""(?:(\d{1,3}):)?(\d{1,3})\.(\d{3})""")
+        private val log = logger<UtDemo>()
 
         /**
          * Returns the demo read from the file at [path].
@@ -46,8 +50,8 @@ data class UtDemo(
         suspend fun read(path: Path): UtDemo = read(withContext(Dispatchers.IO) { path.readBytes() })
 
         /**
-         * Returns the demo read from [bytes]. Reading stops at the first record that does not decode and keeps the
-         * records before it.
+         * Returns the demo read from [bytes]. A record whose packet does not decode is logged and skipped. Reading stops
+         * at a record cut off at the end of [bytes] and keeps the records before it.
          *
          * @throws IllegalStateException If no record names the map.
          */
@@ -96,15 +100,24 @@ data class UtDemo(
         private fun levelOf(line: String): String? = fieldsOf(line, "WELCOME")?.get("LEVEL")
 
         /**
-         * Returns the package a `USES` [line] names. If the line is not a `USES` line, returns `null` instead.
+         * Returns the package a `USES` [line] names. If the line is not a `USES` line, returns `null` instead. If it
+         * names no package or a name that is not a plain file name, logs it and returns `null`.
          */
         private fun packageOf(line: String): UtPackage? {
             val fields = fieldsOf(line, "USES") ?: return null
-            return UtPackage.named(
-                name = fields["PKG"].orEmpty(),
-                guid = fields["GUID"].orEmpty(),
-            )
+            val name = fields["PKG"].orEmpty()
+            if (!isPlainFileName(name)) {
+                log.warn { "Skipping package \"$name\", which is not a plain file name" }
+                return null
+            }
+            return UtPackage.named(name, fields["GUID"].orEmpty())
         }
+
+        /**
+         * Returns whether [name] names a file in the directory it is resolved against, and no other location.
+         */
+        private fun isPlainFileName(name: String): Boolean =
+            name.isNotBlank() && name != "." && name != ".." && name.none { it in UNSAFE_NAME_CHARACTERS }
 
         /**
          * Returns the `KEY=VALUE` fields of a [line] opening with [command]. If the line opens with another command,

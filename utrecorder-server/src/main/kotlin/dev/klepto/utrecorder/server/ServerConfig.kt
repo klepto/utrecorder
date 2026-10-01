@@ -33,7 +33,11 @@ import kotlin.time.Duration.Companion.seconds
  * [cacheTargetBytes]. Configured in gigabytes.
  * @property cacheTargetBytes The size in bytes the mp4 files in [recordings] are deleted down to once they take
  * more than [cacheMaxBytes]. Configured in gigabytes.
+ * @property viewFlushInterval How long the views of the recordings are counted in memory before they are written to the
+ * store.
  * @property port The port the HTTP server listens on.
+ * @property trustForwardedHeaders Whether the HTTP server takes the origin of a request from its `X-Forwarded-*`
+ * headers. Enable it only when a proxy in front of the server sets those headers.
  * @property recordingMaxAttempts How many times a demo is recorded before the server gives up on it.
  * @property recordingCooldown How long a recorder waits after each recording.
  * @property recordingRecentAge The age up to which a demo is recent. An older demo is a backlog demo.
@@ -58,7 +62,9 @@ class ServerConfig(
     val cacheTtl: Duration = reader.duration("server.cache_ttl", 14.days),
     val cacheMaxBytes: Long = reader.get("server.cache_max_gigabytes", 100L, String::toLong) * BYTES_PER_GIGABYTE,
     val cacheTargetBytes: Long = reader.get("server.cache_target_gigabytes", 50L, String::toLong) * BYTES_PER_GIGABYTE,
+    val viewFlushInterval: Duration = reader.duration("server.view_flush_interval", 5.minutes),
     val port: Int = reader.get("server.port", 8080, String::toInt),
+    val trustForwardedHeaders: Boolean = reader.get("server.trust_forwarded_headers", false, String::toBoolean),
     val recordingMaxAttempts: Int = reader.get("server.recording.max_attempts", 3, String::toInt),
     val recordingCooldown: Duration = reader.duration("server.recording.cooldown", 10.seconds),
     val recordingRecentAge: Duration = reader.duration("server.recording.recent_age", 7.days),

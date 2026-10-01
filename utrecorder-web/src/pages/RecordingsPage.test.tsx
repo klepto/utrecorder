@@ -40,6 +40,14 @@ describe("RecordingsPage", () => {
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
   });
 
+  test("hides the button when the first page holds the last recordings", async () => {
+    server.use(http.get("/api/recordings", () => HttpResponse.json(recordings.slice(0, 20))));
+    renderPage();
+
+    await waitFor(() => expect(items()).toHaveLength(20));
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  });
+
   test("skips a recording whose capId is already shown", async () => {
     renderPage();
     await waitFor(() => expect(items()).toHaveLength(20));

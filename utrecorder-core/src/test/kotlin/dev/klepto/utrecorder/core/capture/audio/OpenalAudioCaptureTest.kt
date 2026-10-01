@@ -138,14 +138,16 @@ class OpenalAudioCaptureTest :
 
         test("execScript disables rendering when the config turns the audio capture's rendering off") {
             capture(AudioCaptureConfig(ConfigReader.EMPTY, render = false))
-                .execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe listOf("SeekStart", "DemoFrames 86.132813", "DisableRendering")
+                .execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe
+                listOf("SeekStart", "DemoFrames 86.132813", "DisableRendering")
         }
 
         test("execScript passes the demo times the run starts and stops at") {
             val description =
                 DemoPlaybackConfig.of("staged-demo", Duration.ZERO, runStart = 10.120962.seconds, runStop = 64.572962.seconds)
 
-            capture().execScript(description) shouldBe listOf("SeekStart", "DemoFrames 86.132813", "TimerReset 10.120962", "TimerStop 64.572962")
+            capture().execScript(description) shouldBe
+                listOf("SeekStart", "DemoFrames 86.132813", "TimerReset 10.120962", "TimerStop 64.572962")
         }
 
         test("track starts 6 seconds into the wav at the spawn mark and runs for the 5 minutes 40 seconds to the end mark") {

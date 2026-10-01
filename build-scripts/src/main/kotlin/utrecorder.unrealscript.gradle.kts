@@ -19,7 +19,8 @@ val embeddedArtifacts = extensions.getByType<EmbeddedArtifactsExtension>()
 embeddedArtifacts.namespace.convention("unrealscript")
 
 val unrealScript = extensions.create<UnrealScriptExtension>("unrealscript")
-unrealScript.sourceDirectory.convention(layout.projectDirectory.dir("src/main/uscript"))
+unrealScript.sourceDirectory.set(layout.projectDirectory.dir("src/main/uscript"))
+unrealScript.sourceDirectory.disallowChanges()
 unrealScript.homeDirectory.convention(layout.settingsDirectory.dir(".utrecorder"))
 
 val uccService =
@@ -54,6 +55,13 @@ val patchVersionOverride =
         .systemProperty("utrecorder.patch_version")
         .orElse(providers.environmentVariable("UTRECORDER_PATCH_VERSION"))
 
+val homeOverride =
+    providers
+        .systemProperty("utrecorder.home")
+        .filter(String::isNotEmpty)
+        .orElse(providers.environmentVariable("UTRECORDER_HOME").filter(String::isNotEmpty))
+        .map { layout.settingsDirectory.dir(it).asFile.absolutePath }
+
 registerLayoutTasks(
     elements = unrealScript.packages,
     sourceDirectory = unrealScript.sourceDirectory.get(),
@@ -72,6 +80,7 @@ registerLayoutTasks(
     usesService(uccService)
     compilerClasspath.from(unrealScriptCompilerClasspath)
     javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    home = homeOverride
     homeDirectory = unrealScript.homeDirectory
 
     outputDirectory = layout.buildDirectory.dir("uscript/${uscriptPackage.name}")

@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.server.recording
 
+import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.logger
@@ -8,7 +9,13 @@ import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
-import dev.klepto.utrecorder.server.recording.RecordingStatus.*
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
@@ -188,9 +195,9 @@ class RecordingService(
         recordingPath: Path,
     ) {
         recordingPath.move(config.mp4(demo.capId))
-//        recordingPath.parent
-//            .deleteCatching()
-//            .onFailure { log.warn(it) { "Could not delete the workspace ${recordingPath.parent}" } }
+        recordingPath.parent
+            .deleteCatching()
+            .onFailure { log.warn(it) { "Could not delete the workspace ${recordingPath.parent}" } }
     }
 
     private companion object {

@@ -12,7 +12,8 @@ const LATEST_LIMIT = 6;
 export const HomePage = () => {
   const jobs = useJobs();
   const queue = useQueue();
-  const recordings = useRecordings({ limit: LATEST_LIMIT, offset: 0 });
+  const recordings = useRecordings({ limit: LATEST_LIMIT + 1, offset: 0 });
+  const latest = recordings.data?.slice(0, LATEST_LIMIT);
   return (
     <Container size="lg" py="xl">
       <SimpleGrid cols={{ base: 1, md: 2 }} spacing="xl">
@@ -25,8 +26,8 @@ export const HomePage = () => {
           </Section>
         </Stack>
         <Section title="Latest recordings">
-          <RecordingList query={recordings} />
-          {recordings.data?.length === LATEST_LIMIT && (
+          <RecordingList query={{ data: latest, isPending: recordings.isPending, isError: recordings.isError }} />
+          {recordings.data && recordings.data.length > LATEST_LIMIT && (
             <Anchor component={Link} to="/recordings" ta="center">
               Show more
             </Anchor>

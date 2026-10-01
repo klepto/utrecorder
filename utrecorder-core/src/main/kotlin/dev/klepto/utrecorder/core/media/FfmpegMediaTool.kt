@@ -2,15 +2,19 @@ package dev.klepto.utrecorder.core.media
 
 import dev.klepto.utrecorder.common.OperatingSystem
 import dev.klepto.utrecorder.common.io.Executable
+import dev.klepto.utrecorder.common.io.ExecutableProcess
 import dev.klepto.utrecorder.common.io.ExecutableResult
 import dev.klepto.utrecorder.common.io.execute
 import dev.klepto.utrecorder.common.io.startAndAwait
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.bytedeco.ffmpeg.ffmpeg
 import org.bytedeco.ffmpeg.ffprobe
 import org.bytedeco.javacpp.Loader
+import java.io.OutputStream
 import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.microseconds
@@ -34,11 +38,12 @@ class FfmpegMediaTool : MediaTool {
 
     override suspend fun run(
         vararg arguments: String,
+        input: (suspend (OutputStream) -> Unit)?,
         onProgress: ((MediaProgress) -> Unit)?,
     ): Boolean =
         when (onProgress) {
-            null -> execute(ffmpegPath, arguments.toList())
-            else -> execute(ffmpegPath, PROGRESS_ARGUMENTS + arguments, onProgress)
+            null -> execute(ffmpegPath, arguments.toList(), input) {}
+            else -> execute(ffmpegPath, PROGRESS_ARGUMENTS + arguments, input) { report(drain(), onProgress) }
         }.isSuccess
 
     /**
@@ -95,19 +100,29 @@ class FfmpegMediaTool : MediaTool {
 
     /**
      * Returns the result of running the program at [path] with [arguments] to completion, from the directory that
-     * holds it. Every progress block the program writes to its output is passed to [onProgress].
+     * holds it. [input] writes the standard input of the program, and [output] reads its output while it runs. If
+     * [input] is `null`, the standard input is left open and unwritten.
      */
     private suspend fun execute(
         path: Path,
         arguments: List<String>,
-        onProgress: (MediaProgress) -> Unit,
+        input: (suspend (OutputStream) -> Unit)?,
+        output: suspend ExecutableProcess.() -> Unit,
     ): ExecutableResult =
         executable(path, path.parent, arguments).execute {
             coroutineScope {
-                launch { report(drain(), onProgress) }
+                launch { output() }
+                input?.let { launch { write(it) } }
                 await()
             }
         }
+
+    /**
+     * Passes the standard input of this process to [input], and closes it once [input] returns.
+     */
+    private suspend fun ExecutableProcess.write(input: suspend (OutputStream) -> Unit) {
+        withContext(Dispatchers.IO) { standardInput.use { input(it) } }
+    }
 
     companion object {
         /**

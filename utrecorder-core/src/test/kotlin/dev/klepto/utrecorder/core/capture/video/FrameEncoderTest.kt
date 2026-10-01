@@ -12,11 +12,21 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+import java.net.BindException
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.nio.file.Path
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.writeBytes
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 class FrameEncoderTest :
@@ -32,10 +42,13 @@ class FrameEncoderTest :
             arguments: String = "",
             motionBlur: Boolean = true,
             motionBlurSamples: Int = 2,
+            finishTimeout: Duration = 2.minutes,
+            width: Int = 960,
+            height: Int = 540,
         ): VideoCaptureConfig =
             VideoCaptureConfig(
                 ConfigReader.EMPTY,
-                port = 12000,
+                port = 0,
                 fps = 60,
                 codec = "libsvtav1",
                 preset = preset,
@@ -43,12 +56,13 @@ class FrameEncoderTest :
                 bitrate = bitrate,
                 svtav1Params = svtav1Params,
                 gop = 300,
-                width = 960,
-                height = 540,
+                width = width,
+                height = height,
                 queue = 32,
                 arguments = arguments,
                 motionBlur = motionBlur,
                 motionBlurSamples = motionBlurSamples,
+                finishTimeout = finishTimeout,
             )
 
         val defaultConfig = videoConfig()
@@ -60,6 +74,7 @@ class FrameEncoderTest :
             object : MediaTool {
                 override suspend fun run(
                     vararg arguments: String,
+                    input: (suspend (OutputStream) -> Unit)?,
                     onProgress: ((MediaProgress) -> Unit)?,
                 ): Boolean = finalised
 
@@ -76,13 +91,11 @@ class FrameEncoderTest :
 
         fun arguments(config: VideoCaptureConfig = defaultConfig): List<String> = encoder(config).captureArguments()
 
-        test("captureArguments reads the frames from a loopback listener with the listen timeout and a one-frame receive buffer") {
+        test("captureArguments reads the frames from standard input") {
             val read = arguments()
             read.size shouldBe 41
             read[11] shouldBe "-i"
-            read[12] shouldBe
-                "tcp://127.0.0.1:12000?listen=1&listen_timeout=5000" +
-                "&recv_buffer_size=${960 * 540 * 4}"
+            read[12] shouldBe "pipe:0"
         }
 
         test("captureArguments describes the raw 8-bit BGRA input by the frame size, render fps and frame queue of the config") {
@@ -207,6 +220,76 @@ class FrameEncoderTest :
                 }.message shouldBe "Frame capture holds no frames"
             }
 
+            test("holds the port it hands to the block until the block returns") {
+                val finished = home / "finished.mp4"
+                finished.writeBytes(byteArrayOf(1))
+                val holding = encoder(captureTarget = finished, ffmpeg = standIn(frames = 1))
+
+                holding.encode {
+                    shouldThrow<BindException> {
+                        ServerSocket(port, 1, InetAddress.getLoopbackAddress()).close()
+                    }
+                }
+            }
+
+            fun relaying(
+                captureTarget: Path,
+                relayed: OutputStream,
+            ): FrameEncoder {
+                val ffmpeg =
+                    object : MediaTool {
+                        override suspend fun run(
+                            vararg arguments: String,
+                            input: (suspend (OutputStream) -> Unit)?,
+                            onProgress: ((MediaProgress) -> Unit)?,
+                        ): Boolean {
+                            input?.invoke(relayed)
+                            return true
+                        }
+
+                        override suspend fun frames(file: Path): Int = 1
+
+                        override suspend fun duration(file: Path): Double = 0.0
+                    }
+                return encoder(config = videoConfig(width = 1, height = 1), captureTarget = captureTarget, ffmpeg = ffmpeg)
+            }
+
+            test("relays the bytes the hook library sends to the standard input of ffmpeg") {
+                val relayed = ByteArrayOutputStream()
+                val finished = home / "relayed.mp4"
+                finished.writeBytes(byteArrayOf(1))
+
+                relaying(finished, relayed).encode {
+                    Socket(InetAddress.getLoopbackAddress(), port).use {
+                        it.getOutputStream().write(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8))
+                    }
+                }
+
+                relayed.toByteArray() shouldBe byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
+            }
+
+            test("fails when the hook library closes the connection inside a frame") {
+                val partial = home / "partial.mp4"
+                partial.writeBytes(byteArrayOf(1))
+
+                shouldThrow<IllegalStateException> {
+                    relaying(partial, ByteArrayOutputStream()).encode {
+                        Socket(InetAddress.getLoopbackAddress(), port).use {
+                            it.getOutputStream().write(byteArrayOf(1, 2, 3, 4, 5, 6))
+                        }
+                    }
+                }.message shouldBe "Frame capture ended inside a frame, 2 bytes past the last whole frame"
+            }
+
+            test("fails when the block returns before the hook library connects") {
+                val unconnected = home / "unconnected.mp4"
+                unconnected.writeBytes(byteArrayOf(1))
+
+                shouldThrow<IllegalStateException> {
+                    relaying(unconnected, ByteArrayOutputStream()).encode { }
+                }.message shouldBe "Hook library did not connect before the capture ended"
+            }
+
             test("cancels the capture when the coroutine running it is cancelled") {
                 val workerStarted = CompletableDeferred<Unit>()
                 val workerCancelled = CompletableDeferred<Unit>()
@@ -214,6 +297,7 @@ class FrameEncoderTest :
                     object : MediaTool {
                         override suspend fun run(
                             vararg arguments: String,
+                            input: (suspend (OutputStream) -> Unit)?,
                             onProgress: ((MediaProgress) -> Unit)?,
                         ): Boolean =
                             try {
@@ -235,6 +319,33 @@ class FrameEncoderTest :
                     job.cancelAndJoin()
                 }
 
+                workerCancelled.isCompleted shouldBe true
+            }
+
+            test("closes ffmpeg and fails when ffmpeg does not finish within the finish timeout after the block returns") {
+                val workerCancelled = CompletableDeferred<Unit>()
+                val ffmpeg =
+                    object : MediaTool {
+                        override suspend fun run(
+                            vararg arguments: String,
+                            input: (suspend (OutputStream) -> Unit)?,
+                            onProgress: ((MediaProgress) -> Unit)?,
+                        ): Boolean =
+                            try {
+                                awaitCancellation()
+                            } finally {
+                                workerCancelled.complete(Unit)
+                            }
+
+                        override suspend fun frames(file: Path): Int = 0
+
+                        override suspend fun duration(file: Path): Double = 0.0
+                    }
+                val hanging = encoder(config = videoConfig(finishTimeout = 100.milliseconds), ffmpeg = ffmpeg)
+
+                shouldThrow<TimeoutException> {
+                    hanging.encode { }
+                }.message shouldBe "Frame capture was not finalised by ffmpeg within 100ms"
                 workerCancelled.isCompleted shouldBe true
             }
         }

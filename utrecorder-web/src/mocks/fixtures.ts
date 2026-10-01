@@ -50,14 +50,16 @@ const recording = (index: number): Recording => {
   const capId = String(1098 - index);
   const recordedAt = new Date(Date.UTC(2026, 8, 28, 17, 30) - index * 3_600_000).toISOString();
   const status = statuses[index % statuses.length];
+  const sample = demo(
+    capId,
+    maps[index % maps.length],
+    players[index % players.length],
+    `PT${40 + index}.${String(index * 37).padStart(3, "0")}S`,
+    recordedAt,
+  );
+  const uploaded = status !== "Recorded" && sample.userId !== null;
   return {
-    demo: demo(
-      capId,
-      maps[index % maps.length],
-      players[index % players.length],
-      `PT${40 + index}.${String(index * 37).padStart(3, "0")}S`,
-      recordedAt,
-    ),
+    demo: sample,
     status,
     error: null,
     md5: status === "Recorded" ? null : `9e107d9d372bb6826bd81d3542a419${String(index).padStart(2, "0")}`,
@@ -66,6 +68,7 @@ const recording = (index: number): Recording => {
     lastView: index % 2 === 0 ? null : recordedAt,
     recordedAt,
     processingTime: `PT${90 + index}.5S`,
+    itemId: uploaded ? `${sample.userId}-${sample.map.toLowerCase()}` : null,
   };
 };
 
@@ -85,5 +88,6 @@ export const recordings: Recording[] = [
     lastView: "2026-09-27T21:14:00Z",
     recordedAt: null,
     processingTime: null,
+    itemId: "u1050-ctf-bt-citadel",
   },
 ];

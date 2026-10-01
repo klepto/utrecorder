@@ -9,8 +9,11 @@ import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.startAndAwait
 import dev.klepto.utrecorder.common.io.workspace
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.copyToRecursively
@@ -25,6 +28,8 @@ import kotlin.io.path.writeText
  * The UCC utility of an installation, compiling UnrealScript packages and decompressing `.uz` archives.
  *
  * Use [UtInstallation.compiler] for the compiler of an installation.
+ *
+ * Compilations and extractions in one `System` directory run one at a time, across every compiler of that directory.
  *
  * @property installation The installation the compiler belongs to.
  * @property config The configuration whose directories the workspaces of the compiler runs are opened under.
@@ -43,6 +48,11 @@ class UtCompiler(
      * The path of the compiler executable.
      */
     private val executablePath: Path = directory[installation.platform.compilerExecutable]
+
+    /**
+     * The lock a compilation or an extraction holds while the compiler writes into [directory].
+     */
+    private val lock: Mutex = locks.computeIfAbsent(directory.toAbsolutePath().normalize()) { Mutex() }
 
     init {
         check(executablePath.exists()) { "UT compiler executable not found at $executablePath" }
@@ -69,24 +79,27 @@ class UtCompiler(
      * Extracts the `.uz` archive at [uzPath] to [outputPath] and returns the path of the extracted file.
      *
      * If [outputPath] is not provided, uses the directory that holds the archive and the archive name without its
-     * `.uz` suffix instead.
+     * `.uz` suffix, matched in any case, instead.
      *
      * A run the compiler aborts, exiting with [ABORT_EXIT_CODE], is run again, up to [DECOMPRESS_ATTEMPTS] runs.
      *
-     * @throws IllegalStateException if the compiler fails, or aborts on every run.
+     * @throws IllegalStateException if the archive header holds no plain file name, if the compiler fails, or if it
+     * aborts on every run.
      */
     suspend fun extract(
         uzPath: Path,
         outputPath: Path? = null,
     ): Path {
-        val fileName = uzPath.fileName.toString().removeSuffix(".uz")
+        val fileName = uzPath.fileName.toString().replace(UZ_SUFFIX, "")
         val targetPath = outputPath ?: uzPath.toAbsolutePath().parent[fileName]
 
-        decompress(uzPath)
         val resultPath = directory[archivedName(uzPath)]
-        withContext(Dispatchers.IO) { check(resultPath.exists()) { "UCC failed to extract $uzPath" } }
-        if (resultPath != targetPath) {
-            resultPath.move(targetPath)
+        lock.withLock {
+            decompress(uzPath)
+            withContext(Dispatchers.IO) { check(resultPath.exists()) { "UCC failed to extract $uzPath" } }
+            if (resultPath != targetPath) {
+                resultPath.move(targetPath)
+            }
         }
         return targetPath
     }
@@ -113,7 +126,8 @@ class UtCompiler(
      * The header holds a signature, then the file name as a string. The string is a compact index giving its length,
      * then that many bytes ending in a null.
      *
-     * @throws IllegalStateException if the header holds no file name, or holds a UTF-16 file name.
+     * @throws IllegalStateException if the header holds no file name, holds a UTF-16 file name, or holds a name that
+     * is not a plain file name, such as one with a path separator, a drive or a `..`.
      */
     private suspend fun archivedName(uzPath: Path): String {
         val header =
@@ -134,7 +148,9 @@ class UtCompiler(
             bits += if (first) FIRST_VALUE_BITS else VALUE_BITS
         }
         check(length in 1..header.size - position) { "UT archive header of $uzPath holds no file name" }
-        return String(header, position, length - 1, UtPlatform.CHARSET)
+        val name = String(header, position, length - 1, UtPlatform.CHARSET)
+        check(isPlainFileName(name)) { "UT archive header of $uzPath holds $name, which is not a plain file name" }
+        return name
     }
 
     /**
@@ -165,19 +181,18 @@ class UtCompiler(
                     .apply { add(EDITOR_SECTION, EDIT_PACKAGES, packageName) }
                     .write(workspace["make.ini"])
 
-            val result = compile(sourcesPath, producedPath, iniPath)
             val makeLogPath = workspace["make.log"]
-            withContext(Dispatchers.IO) { makeLogPath.writeText(result.output.joinToString(System.lineSeparator())) }
-            result.orThrow()
-
-            withContext(Dispatchers.IO) {
-                check(producedPath.exists()) {
-                    "UCC failed to compile $packageName, see $makeLogPath"
-                }
-            }
-
             val packagePath = workspace[packageFileName]
-            producedPath.move(packagePath)
+            lock.withLock {
+                val result = compile(sourcesPath, producedPath, iniPath)
+                withContext(Dispatchers.IO) { makeLogPath.writeText(result.output.joinToString(System.lineSeparator())) }
+                result.orThrow()
+
+                withContext(Dispatchers.IO) {
+                    check(producedPath.exists()) { "UCC failed to compile $packageName, see $makeLogPath" }
+                }
+                producedPath.move(packagePath)
+            }
             packagePath.copy(outputPath, overwrite = true)
         }
     }
@@ -249,5 +264,18 @@ class UtCompiler(
         private const val CONTINUATION_BIT = 0x80
         private const val VALUE_MASK = 0x7F
         private const val VALUE_BITS = 7
+        private const val UNSAFE_NAME_CHARACTERS = "/\\:\u0000"
+        private val UZ_SUFFIX = Regex("""\.uz$""", RegexOption.IGNORE_CASE)
+
+        /**
+         * The lock of each `System` directory a compiler has run in.
+         */
+        private val locks = ConcurrentHashMap<Path, Mutex>()
+
+        /**
+         * Returns whether [name] names a file in the directory it is resolved against, and no other location.
+         */
+        private fun isPlainFileName(name: String): Boolean =
+            name.isNotBlank() && name != "." && name != ".." && name.none { it in UNSAFE_NAME_CHARACTERS }
     }
 }

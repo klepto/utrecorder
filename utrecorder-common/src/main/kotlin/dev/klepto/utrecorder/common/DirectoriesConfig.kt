@@ -64,6 +64,6 @@ class DirectoriesConfig(
         /**
          * Returns the home directory under the data directory of the current operating system.
          */
-        private fun systemHome(): Path = OperatingSystem.current().dataDirectory[APPLICATION_DIRECTORY]
+        private fun systemHome(): Path = OperatingSystem.current().dataDirectory()[APPLICATION_DIRECTORY]
     }
 }

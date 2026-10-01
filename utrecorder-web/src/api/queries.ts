@@ -62,7 +62,7 @@ export const useRecordings = ({ limit, offset }: RecordingsPage) => {
 export interface RecordingPages {
   /** The loaded recordings. `isError` holds only while no recording is loaded. */
   query: QueryState<Recording>;
-  /** Whether the last page loaded was full, so another page may follow. */
+  /** Whether another recording follows the loaded ones. */
   hasMore: boolean;
   /** Fetches the next page. */
   loadMore: () => void;
@@ -73,26 +73,29 @@ export interface RecordingPages {
 }
 
 /**
- * Pages through the finished recordings, `RECORDINGS_PAGE_SIZE` at a time. The next page starts at the number of
- * recordings fetched so far. `query.data` holds every fetched recording, skipping one whose `capId` is already
- * present, since a recording that lands meanwhile shifts every offset. It is `undefined` until the first page arrives.
+ * Pages through the finished recordings, `RECORDINGS_PAGE_SIZE` at a time. Each page asks for one recording more
+ * than it shows, and another page follows only when that recording came back. The next page starts at the number of
+ * recordings shown so far. `query.data` holds every shown recording, skipping one whose `capId` is already present,
+ * since a recording that lands meanwhile shifts every offset. It is `undefined` until the first page arrives.
  */
 export const useRecordingPages = (): RecordingPages => {
   const query = useInfiniteQuery({
     queryKey: QUERY_KEYS.recordingPages(),
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => fetchRecordings({ limit: RECORDINGS_PAGE_SIZE, offset: pageParam }),
+    queryFn: ({ pageParam }) => fetchRecordings({ limit: RECORDINGS_PAGE_SIZE + 1, offset: pageParam }),
     getNextPageParam: (last, all) =>
-      last.length < RECORDINGS_PAGE_SIZE ? undefined : all.reduce((count, page) => count + page.length, 0),
+      last.length > RECORDINGS_PAGE_SIZE ? all.length * RECORDINGS_PAGE_SIZE : undefined,
   });
   const recordings = useMemo(() => {
     if (!query.data) return undefined;
     const seen = new Set<string>();
-    return query.data.pages.flat().filter((recording) => {
-      if (seen.has(recording.demo.capId)) return false;
-      seen.add(recording.demo.capId);
-      return true;
-    });
+    return query.data.pages
+      .flatMap((page) => page.slice(0, RECORDINGS_PAGE_SIZE))
+      .filter((recording) => {
+        if (seen.has(recording.demo.capId)) return false;
+        seen.add(recording.demo.capId);
+        return true;
+      });
   }, [query.data]);
   return {
     query: { data: recordings, isPending: query.isPending, isError: query.isError && !recordings },

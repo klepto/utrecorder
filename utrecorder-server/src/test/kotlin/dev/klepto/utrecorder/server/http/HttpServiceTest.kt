@@ -57,6 +57,8 @@ class HttpServiceTest :
                 override fun now(): Instant = now.get()
             }
 
+        val cache = AtomicReference<CacheService>()
+
         beforeTest { now.set(Instant.parse("2026-09-27T08:00:00Z")) }
 
         fun demo(
@@ -116,6 +118,7 @@ class HttpServiceTest :
             mp4s: List<String> = emptyList(),
             archive: Boolean = true,
             jobs: RecordingJobs = RecordingJobs(),
+            trustForwardedHeaders: Boolean = false,
             block: suspend ApplicationTestBuilder.(RecordingRepository) -> Unit,
         ) {
             val directory = createTempDirectory(root, "http")
@@ -126,13 +129,14 @@ class HttpServiceTest :
                     ConfigReader.EMPTY,
                     directories = DirectoriesConfig(ConfigReader.EMPTY, home = directory.resolve("home")),
                     recordings = recordings,
+                    trustForwardedHeaders = trustForwardedHeaders,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
                 val repository = RecordingRepository(store, DemoRepository(store), config, clock)
                 repository += statuses.keys.map { demo(it) }
                 statuses.forEach { (capId, status) -> repository.finish(capId, status) }
-                val cache = CacheService(repository, uploader.takeIf { archive }, config, clock)
-                val service = HttpService(repository, jobs, cache, config, VideoCaptureConfig(ConfigReader.EMPTY))
+                cache.set(CacheService(repository, uploader.takeIf { archive }, config, clock))
+                val service = HttpService(repository, jobs, cache.get(), config, VideoCaptureConfig(ConfigReader.EMPTY))
                 testApplication {
                     application { service.module(this) }
                     block(repository)
@@ -191,13 +195,16 @@ class HttpServiceTest :
             }
         }
 
-        test("serves a local mp4 with range support, and counts a view") {
+        test("serves a local mp4 with range support, and counts a view only for a request from its start") {
             http(mapOf("local" to Recorded), listOf("local")) { repository ->
                 val response = client.get("/mp4/local") { header(HttpHeaders.Range, "bytes=2-4") }
+                client.get("/mp4/local")
+                client.get("/mp4/local") { header(HttpHeaders.Range, "bytes=0-") }
+                cache.get().flushViews()
 
                 response.status shouldBe HttpStatusCode.PartialContent
                 response.bodyAsText() shouldBe "234"
-                repository["local"]?.views shouldBe 1
+                repository["local"]?.views shouldBe 2
             }
         }
 
@@ -207,13 +214,23 @@ class HttpServiceTest :
             }
         }
 
-        test("redirects an archived recording without a local mp4 to its download URL, and counts a view") {
+        test("redirects an archived recording without a local mp4 to its file in its item, and counts a view") {
             http(mapOf("evicted" to Archived)) { repository ->
+                repository.update("evicted") { it.copy(itemId = "1234-3e92a055-ctf-bt-maverick") }
                 val response = createClient { followRedirects = false }.get("/mp4/evicted")
+                cache.get().flushViews()
 
                 response.status shouldBe HttpStatusCode.Found
-                response.headers[HttpHeaders.Location] shouldBe "https://archive.org/download/ut99-bt-evicted/evicted.mp4"
+                response.headers[HttpHeaders.Location] shouldBe
+                    "https://archive.org/download/ut99-bt-1234-3e92a055-ctf-bt-maverick/evicted.mp4"
                 repository["evicted"]?.views shouldBe 1
+            }
+        }
+
+        test("answers 404 for the mp4 and the view page of an archived recording without an item id") {
+            http(mapOf("evicted" to Archived)) {
+                client.get("/mp4/evicted").status shouldBe HttpStatusCode.NotFound
+                client.get("/view/evicted").status shouldBe HttpStatusCode.NotFound
             }
         }
 
@@ -252,13 +269,14 @@ class HttpServiceTest :
         }
 
         test("answers a view page with OpenGraph video tags at the forwarded origin, and counts no view") {
-            http(mapOf("local" to Recorded), listOf("local")) { repository ->
+            http(mapOf("local" to Recorded), listOf("local"), trustForwardedHeaders = true) { repository ->
                 val response =
                     client.get("/view/local") {
                         header("X-Forwarded-Proto", "https")
                         header("X-Forwarded-Host", "recorder.example.com")
                     }
                 val body = response.bodyAsText()
+                cache.get().flushViews()
 
                 response.status shouldBe HttpStatusCode.OK
                 response.contentType()?.withoutParameters() shouldBe ContentType.Text.Html
@@ -274,8 +292,23 @@ class HttpServiceTest :
             }
         }
 
+        test("ignores the forwarded headers unless they are trusted") {
+            http(mapOf("local" to Recorded), listOf("local")) {
+                val body =
+                    client
+                        .get("/view/local") {
+                            header("X-Forwarded-Proto", "https")
+                            header("X-Forwarded-Host", "attacker.example.com")
+                        }.bodyAsText()
+
+                body shouldContain "<meta property=\"og:url\" content=\"http://localhost/view/local\" />"
+                body shouldContain "<meta property=\"og:video\" content=\"http://localhost/mp4/local\" />"
+            }
+        }
+
         test("answers a view page for an archived recording without a local mp4") {
-            http(mapOf("evicted" to Archived)) {
+            http(mapOf("evicted" to Archived)) { repository ->
+                repository.update("evicted") { it.copy(itemId = "1234-3e92a055-ctf-bt-maverick") }
                 client.get("/view/evicted").status shouldBe HttpStatusCode.OK
             }
         }

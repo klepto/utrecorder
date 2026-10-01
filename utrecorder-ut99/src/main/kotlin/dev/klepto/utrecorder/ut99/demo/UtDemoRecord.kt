@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.ut99.demo
 
+import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.ut99.UtPlatform
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -230,6 +231,19 @@ class UtDemoRecord private constructor(
     }
 
     /**
+     * The undecoded packet of one record.
+     *
+     * @property frame The demo frame the packet was recorded in.
+     * @property time The demo time the packet was sent at.
+     * @property bytes The bytes of the packet.
+     */
+    private class Packet(
+        val frame: Int,
+        val time: Duration,
+        val bytes: ByteArray,
+    )
+
+    /**
      * A compact index read out of a payload.
      *
      * @property value The signed value the index holds.
@@ -258,31 +272,53 @@ class UtDemoRecord private constructor(
         private const val CONTINUATION_BIT = 0x80
         private const val VALUE_BITMASK = 0x7F
         private const val VALUE_BITS = 7
+        private val log = logger<UtDemoRecord>()
 
         /**
-         * Returns the records held in [bytes], in the order the demo holds them. Reading stops at the first record that
-         * does not decode.
+         * Returns the records held in [bytes], in the order the demo holds them. A record whose packet does not decode
+         * is logged and skipped. Reading stops at a record cut off at the end of [bytes], and logs it.
          */
         fun read(bytes: ByteArray): Sequence<UtDemoRecord> {
             val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
-            return generateSequence { readRecord(buffer) }
+            return generateSequence { readPacket(buffer) }
+                .mapNotNull(::decodePacket)
         }
 
         /**
-         * Returns the next record of [buffer] and moves past it. If the buffer holds no whole record, or the record
-         * does not decode, returns `null` instead.
+         * Returns the next packet of [buffer] and moves past it. If the buffer holds no whole record, returns `null`
+         * instead, and logs any bytes left over.
          */
-        private fun readRecord(buffer: ByteBuffer): UtDemoRecord? {
-            if (buffer.remaining() < HEADER_BYTES) return null
+        private fun readPacket(buffer: ByteBuffer): Packet? {
+            if (!buffer.hasRemaining()) return null
+            if (buffer.remaining() < HEADER_BYTES) return cutOff()
             val frame = buffer.int
             val low = buffer.int
             val high = buffer.int
             val count = buffer.int
-            if (count !in 0..buffer.remaining()) return null
+            if (count !in 0..buffer.remaining()) return cutOff()
 
-            val packet = ByteArray(count).also { buffer.get(it) }
-            val bunches = readBunches(packet) ?: return null
-            return UtDemoRecord(frame, decodeTime(low, high), bunches)
+            val bytes = ByteArray(count).also { buffer.get(it) }
+            return Packet(frame, decodeTime(low, high), bytes)
+        }
+
+        /**
+         * Logs a record cut off at the end of the demo, and returns `null`.
+         */
+        private fun cutOff(): Packet? {
+            log.warn { "Stopping at a demo record cut off at the end" }
+            return null
+        }
+
+        /**
+         * Returns the record [packet] holds. If one of its bunches does not decode, logs it and returns `null` instead.
+         */
+        private fun decodePacket(packet: Packet): UtDemoRecord? {
+            val bunches = readBunches(packet.bytes)
+            if (bunches == null) {
+                log.warn { "Skipping the demo record of frame ${packet.frame}, whose packet does not decode" }
+                return null
+            }
+            return UtDemoRecord(packet.frame, packet.time, bunches)
         }
 
         /**

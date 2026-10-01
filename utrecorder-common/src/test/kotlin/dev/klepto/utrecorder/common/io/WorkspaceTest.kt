@@ -12,12 +12,15 @@ import io.kotest.matchers.paths.shouldNotExist
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldMatch
+import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import java.io.FileOutputStream
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.time.Instant
@@ -40,6 +43,12 @@ class WorkspaceTest :
         val windowsOnly = { _: TestCase -> OperatingSystem.current() == WINDOWS }
 
         fun expire(path: Path) = path.setLastModifiedTime(FileTime.from(Instant.now().minus(8, ChronoUnit.DAYS)))
+
+        // Coroutine stack trace recovery can rethrow a copy of the failure, with the original as its cause.
+        fun suppressed(failure: Throwable): List<Throwable> =
+            generateSequence(failure, Throwable::cause)
+                .flatMap { it.suppressed.asSequence() }
+                .toList()
 
         context("a workspace with a directory of its own") {
             test("runs the block in an existing directory under the workspace directory, named after the workspace and its id") {
@@ -169,6 +178,40 @@ class WorkspaceTest :
                     .single()
                     .listDirectoryEntries()
                     .size shouldBe 1
+            }
+
+            test("rethrows the failure of the block with the failure to move its files suppressed") {
+                val shared = (root / "shared-move-failure").createDirectories()
+                val config = DirectoriesConfig(ConfigReader.EMPTY, home = root / "shared-move-failure-home")
+
+                val failure =
+                    shouldThrow<IllegalStateException> {
+                        workspace("ucc", shared, config) {
+                            val log = this["make.log"].apply { writeText("log") }
+                            (config.workspace / log.fileName.toString().removeSuffix("-make.log")).writeText("blocker")
+                            error("Boom")
+                        }
+                    }
+
+                failure.message shouldBe "Boom"
+                suppressed(failure).single().shouldBeInstanceOf<FileAlreadyExistsException>()
+            }
+
+            test("rethrows a cancellation of the block with the failure to move its files suppressed") {
+                val shared = (root / "shared-cancel-failure").createDirectories()
+                val config = DirectoriesConfig(ConfigReader.EMPTY, home = root / "shared-cancel-failure-home")
+
+                val failure =
+                    shouldThrow<CancellationException> {
+                        workspace("ucc", shared, config) {
+                            val log = this["make.log"].apply { writeText("log") }
+                            (config.workspace / log.fileName.toString().removeSuffix("-make.log")).writeText("blocker")
+                            throw CancellationException("Stop")
+                        }
+                    }
+
+                failure.message shouldBe "Stop"
+                suppressed(failure).single().shouldBeInstanceOf<FileAlreadyExistsException>()
             }
 
             test("removes its workspace directory when it named nothing in the root") {

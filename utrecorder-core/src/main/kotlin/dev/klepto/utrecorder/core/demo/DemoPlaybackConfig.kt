@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.core.demo
 
-import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtPackage
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -18,9 +17,9 @@ import kotlin.time.Duration.Companion.seconds
  * @property runStop The demo time the Bunny Track timer of the run stops at, or `null` if the demo does not show one.
  * @property execLine The exec script line playing the demo.
  * @property console The console class the run sets `[Engine.Engine] Console` to.
- * @property exitDelay The `ExitDelay` the run writes to `UTRecorder.ini`.
- * @property startupTimeout The `StartupTimeout` the run writes to `UTRecorder.ini`.
- * @property maxRunTime The `MaxRunSeconds` the run writes to `UTRecorder.ini`.
+ * @property exitDelay The `ExitDelay` the run sets for the recorder console.
+ * @property startupTimeout The `StartupTimeout` the run sets for the recorder console.
+ * @property maxRunTime The `MaxRunSeconds` the run sets for the recorder console.
  * @property timeout How long the run may take before the game is killed.
  */
 data class DemoPlaybackConfig(
@@ -43,16 +42,21 @@ data class DemoPlaybackConfig(
     fun runDuration(): Duration = (runStop ?: demoDuration) - (runStart ?: Duration.ZERO)
 
     /**
-     * Returns the `UTRecorder.ini` configuring this run, with every duration in whole seconds.
+     * Returns the game ini values of the run by section: [console] as the console of the engine, and the settings of
+     * the recorder console in its own section, with every duration in whole seconds.
      */
-    fun recorderIni(): UtIni =
-        UtIni("[$RECORDER_CONSOLE]\n").apply {
-            this[RECORDER_CONSOLE, "bAutoExit"] = "True"
-            this[RECORDER_CONSOLE, "bStopDemoFirst"] = "True"
-            this[RECORDER_CONSOLE, "ExitDelay"] = exitDelay.inWholeSeconds.toString()
-            this[RECORDER_CONSOLE, "StartupTimeout"] = startupTimeout.inWholeSeconds.toString()
-            this[RECORDER_CONSOLE, "MaxRunSeconds"] = maxRunTime.inWholeSeconds.toString()
-        }
+    fun gameIniValues(): Map<String, Map<String, String>> =
+        mapOf(
+            "Engine.Engine" to mapOf("Console" to console),
+            RECORDER_CONSOLE to
+                mapOf(
+                    "bAutoExit" to "True",
+                    "bStopDemoFirst" to "True",
+                    "ExitDelay" to exitDelay.inWholeSeconds.toString(),
+                    "StartupTimeout" to startupTimeout.inWholeSeconds.toString(),
+                    "MaxRunSeconds" to maxRunTime.inWholeSeconds.toString(),
+                ),
+        )
 
     companion object {
         private const val RECORDER_CONSOLE = "UTRecorder.UTRecorderConsole"

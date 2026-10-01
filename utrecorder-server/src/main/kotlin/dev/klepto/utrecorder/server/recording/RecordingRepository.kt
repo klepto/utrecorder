@@ -11,7 +11,9 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Clock
@@ -48,6 +50,7 @@ class RecordingRepository(
 ) {
     private val collection: CachedCollection<StoredRecording> = store.cachedCollection("recordings") { it.capId }
     private val demoIndex = ConcurrentHashMap<String, Demo>()
+    private val statusRevision = MutableStateFlow(0L)
 
     /**
      * Returns the recording stored under [capId]. If there is none, returns `null` instead.
@@ -78,7 +81,7 @@ class RecordingRepository(
      */
     suspend operator fun plusAssign(demos: List<Demo>) {
         this.demos += demos
-        demos.associateByTo(demoIndex) { it.capId }
+        demos.associateByTo(demoIndex()) { it.capId }
         transaction { recordings ->
             demos
                 .filter { it.capId !in recordings }
@@ -101,13 +104,14 @@ class RecordingRepository(
 
     /**
      * Returns the demo of the newest [Pending] recording that may be taken, and sets the recording to
-     * [RecordingStatus.Recording]. If there is none, suspends until a recording changes and one may be taken.
+     * [RecordingStatus.Recording]. If there is none, suspends until a recording is added, removed or changes its status,
+     * and one may be taken.
      */
     suspend fun take(): Demo {
         while (true) {
-            val seen = collection.revision.value
+            val seen = statusRevision.value
             claim()?.let { return it }
-            collection.revision.first { it != seen }
+            statusRevision.first { it != seen }
         }
     }
 
@@ -212,18 +216,24 @@ class RecordingRepository(
         }
 
     /**
-     * Returns the result of [block], run as one transaction on the collection.
+     * Returns the result of [block], run as one transaction on the collection. Raises [statusRevision] once the
+     * transaction is done, if it added, removed or changed the status of a recording.
      */
     private suspend fun <R> transaction(block: suspend (DocumentTransaction<Recording>) -> R): R {
         val index = demoIndex()
-        return collection.transaction { block(RecordingTransaction(it, index)) }
+        val (result, changed) =
+            collection.transaction { stored ->
+                RecordingTransaction(stored, index).let { block(it) to it.statusChanged }
+            }
+        if (changed) statusRevision.update { it + 1 }
+        return result
     }
 
     /**
      * Returns every demo of [demos], keyed by cap id. Reads [demos] only while no demo is known, since a demo never
      * changes and every demo added later is added to the index by [plusAssign].
      */
-    private suspend fun demoIndex(): Map<String, Demo> {
+    private suspend fun demoIndex(): MutableMap<String, Demo> {
         if (demoIndex.isEmpty()) demos.all().associateByTo(demoIndex) { it.capId }
         return demoIndex
     }
@@ -253,13 +263,25 @@ class RecordingRepository(
         private val stored: DocumentTransaction<StoredRecording>,
         private val demos: Map<String, Demo>,
     ) : DocumentTransaction<Recording> {
+        /**
+         * `true` once a recording is added, removed or put with another status.
+         */
+        var statusChanged = false
+            private set
+
         override suspend fun get(key: String): Recording? = stored[key]?.let { toRecording(it) }
 
         override suspend fun contains(key: String): Boolean = key in stored
 
-        override suspend fun put(document: Recording) = stored.put(toStored(document))
+        override suspend fun put(document: Recording) {
+            if (stored[document.demo.capId]?.status != document.status) statusChanged = true
+            stored.put(toStored(document))
+        }
 
-        override suspend fun remove(key: String) = stored.remove(key)
+        override suspend fun remove(key: String) {
+            stored.remove(key)
+            statusChanged = true
+        }
 
         override suspend fun all(): List<Recording> = stored.all().map { toRecording(it) }
 

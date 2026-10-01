@@ -29,6 +29,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import java.io.OutputStream
 import java.nio.file.Path
 import java.util.Queue
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -139,6 +140,7 @@ class RecorderPipelineTest :
         ) : MediaTool {
             override suspend fun run(
                 vararg arguments: String,
+                input: (suspend (OutputStream) -> Unit)?,
                 onProgress: ((MediaProgress) -> Unit)?,
             ): Boolean = true
 

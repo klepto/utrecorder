@@ -21,9 +21,11 @@ import dev.klepto.utrecorder.ut99.UtPackageException
 import dev.klepto.utrecorder.ut99.UtPackageInstaller
 import dev.klepto.utrecorder.ut99.demo.UtDemo
 import java.net.URI
+import java.net.URLDecoder
 import java.nio.file.Path
 import kotlin.io.path.div
 import kotlin.io.path.name
+import kotlin.text.Charsets.UTF_8
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 
@@ -44,8 +46,7 @@ class Recorder(
      * Returns the marks of one playback of the demo file at [demo], at normal speed with sound off.
      *
      * The demo is read before the game is launched. The recorder's console package is installed into the
-     * installation. The staged copy of the demo and `UTRecorder.ini` are removed afterwards, whichever way the run
-     * ends. The marks are returned even when the game exits with a nonzero exit code.
+     * installation. The staged copy of the demo is removed afterwards, whichever way the run ends. The marks are returned even when the game exits with a nonzero exit code.
      *
      * @param timeout How long the game may run before it is killed. If not provided, derives it from the length of the
      * demo.
@@ -65,7 +66,11 @@ class Recorder(
                     exec = listOf(description.execLine)
                     sound = false
                     windowed = true
-                    gameIni { this["Engine.Engine", "Console"] = description.console }
+                    gameIni {
+                        description.gameIniValues().forEach { (section, values) ->
+                            values.forEach { (key, value) -> this[section, key] = value }
+                        }
+                    }
                 }
             DemoPlaybackMarks.parse(process.launch(timeout ?: description.timeout))
         }
@@ -96,15 +101,18 @@ class Recorder(
         }
 
     /**
-     * Returns the demo at [url] downloaded into this workspace, named after the last segment of the path of [url].
+     * Returns the demo at [url] downloaded into this workspace, named after the last non-empty segment of the path of
+     * [url].
      *
      * [onProgress] receives how much of the demo is downloaded, and `1.0` once the download is done.
+     *
+     * @throws IllegalArgumentException If [url] names no demo file.
      */
     private suspend fun Workspace.downloadDemo(
         url: String,
         onProgress: ProgressListener<Unit>,
     ): Path {
-        val demo = directory / URI(url).path.substringAfterLast('/')
+        val demo = directory / demoFileName(url)
         Downloader(url, timeout = 10.minutes, directories = directories).download(demo, onProgress)
         onProgress(Progress(1.0))
         return demo
@@ -163,5 +171,31 @@ class Recorder(
          * The extension of a demo file.
          */
         private const val DEMO_EXTENSION = ".dem"
+
+        /**
+         * The characters a demo file name must not hold.
+         */
+        private const val UNSAFE_NAME_CHARACTERS = "/\\:\u0000"
+
+        /**
+         * Returns the last non-empty segment of the path of [url], URL-decoded. The query and fragment of [url] play no
+         * part.
+         *
+         * @throws IllegalArgumentException If the path of [url] has no non-empty segment, or if the decoded segment is
+         * `.` or `..` or holds a path separator, a `:` or a NUL character.
+         */
+        private fun demoFileName(url: String): String {
+            val name =
+                URI(url)
+                    .rawPath
+                    .orEmpty()
+                    .split('/')
+                    .lastOrNull(String::isNotEmpty)
+                    ?.let { URLDecoder.decode(it.replace("+", "%2B"), UTF_8) }
+            require(name != null && name != "." && name != ".." && name.none { it in UNSAFE_NAME_CHARACTERS }) {
+                "Demo URL $url names no file"
+            }
+            return name
+        }
     }
 }

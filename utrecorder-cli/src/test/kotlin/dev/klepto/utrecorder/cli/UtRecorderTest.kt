@@ -27,15 +27,23 @@ class UtRecorderTest :
         afterSpec { home.toFile().deleteRecursively() }
 
         test(
-            "outputName drops the host and the first path segment, then keeps only letters, digits, dots, " +
-                "hyphens and underscores, or falls back to demo",
+            "outputName drops the host, the first path segment and the .dem extension, then keeps only letters, " +
+                "digits, dots, hyphens and underscores, or falls back to demo",
         ) {
-            UtRecorder.outputName("http://api.utbt.net/demos/CAP fades 12.dem?id=1") shouldBe "capfades12.dem"
-            UtRecorder.outputName("http://api.utbt.net/a/b/x.dem") shouldBe "bx.dem"
+            UtRecorder.outputName("http://api.utbt.net/demos/CAP fades 12.dem?id=1") shouldBe "capfades12"
+            UtRecorder.outputName("http://api.utbt.net/demos/capfades12.DEM") shouldBe "capfades12"
+            UtRecorder.outputName("http://api.utbt.net/a/b/x.dem") shouldBe "bx"
+            UtRecorder.outputName("http://api.utbt.net/demos/x.dem.bak") shouldBe "x.dem.bak"
             UtRecorder.outputName("http://api.utbt.net") shouldBe "demo"
             UtRecorder.outputName(
                 "http://api.utbt.net/demos/90729d6a-ac84-45f6-bdc0-beacad976e55",
             ) shouldBe "90729d6a-ac84-45f6-bdc0-beacad976e55"
+        }
+
+        test("outputName throws when the URL holds a malformed percent escape") {
+            shouldThrow<IllegalArgumentException> {
+                UtRecorder.outputName("http://api.utbt.net/demos/cap%zz.dem")
+            }.message shouldBe "Demo URL http://api.utbt.net/demos/cap%zz.dem holds a malformed percent escape"
         }
 
         test("progressLine prints the stage and the whole percent done") {

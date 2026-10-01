@@ -4,12 +4,15 @@ import dev.klepto.utrecorder.common.mergeAndThrow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArraySet
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.createTempFile
 import kotlin.io.path.exists
 
 /**
  * Set of registered paths that are removed together by [delete].
+ *
+ * Safe to use from concurrent coroutines. Keeps the paths in the order they were registered.
  *
  * @property prefix the prefix of every file name this registry creates.
  * @property directory the directory this registry creates its files in.
@@ -18,7 +21,7 @@ class PathRegistry(
     private val prefix: String,
     val directory: Path,
 ) {
-    private val paths = mutableSetOf<Path>()
+    private val paths: MutableSet<Path> = CopyOnWriteArraySet()
 
     /**
      * Returns the registered paths that exist.

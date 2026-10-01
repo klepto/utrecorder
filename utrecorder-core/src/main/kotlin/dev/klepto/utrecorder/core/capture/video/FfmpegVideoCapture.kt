@@ -18,8 +18,11 @@ import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtProcess
 import dev.klepto.utrecorder.ut99.UtProcessResult
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import java.nio.file.Path
 import java.util.Locale
 import kotlin.time.DurationUnit
@@ -32,7 +35,8 @@ import kotlin.time.DurationUnit
  * demo windowed and without sound. The run is killed once ffmpeg has encoded no new frame for
  * [VideoCaptureConfig.idleTimeout], however long the whole run takes. The frames are encoded into a video file in a
  * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number the demo's duration makes at [VideoCaptureConfig.fps]. A run that logs no marks
- * fails with an [IllegalStateException] naming the missing mark and the exit code.
+ * fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
+ * that it stopped the frame capture fails with an [IllegalStateException] naming the reason it gave.
  *
  * @property config The video capture configuration, carrying the frame size, the fps, the idle timeout and the renderer
  * tuning.
@@ -87,6 +91,7 @@ class FfmpegVideoCapture(
      * killed once [frames], the frames encoded so far, has not grown for [VideoCaptureConfig.idleTimeout].
      *
      * @throws java.util.concurrent.TimeoutException if no new frame is encoded for [VideoCaptureConfig.idleTimeout].
+     * @throws IllegalStateException if the hook library reports that it stopped the frame capture, naming its reason.
      */
     private suspend fun play(
         description: DemoPlaybackConfig,
@@ -94,12 +99,60 @@ class FfmpegVideoCapture(
         encoder: FrameEncoder,
         frames: StateFlow<Long>,
     ): UtProcessResult {
+        val stop = MutableStateFlow<String?>(null)
         val (result, _) =
-            encoder.encode {
-                withProgressTimeout(frames, config.idleTimeout) { process(description, port, hooks).launch() }
+            try {
+                encoder.encode { launchWatched(process(description, port, hooks), frames, stop) }
+            } catch (failure: Exception) {
+                throw stopFailure(failure, stop.value)
             }
+        stop.value?.let { error("Frame capture was stopped by the hook library: $it") }
         return result
     }
+
+    /**
+     * Returns the result of [run], killed once [frames] has not grown for [VideoCaptureConfig.idleTimeout]. Records in
+     * [stop] the reason of a frame capture stop the hook library reports in the output of [run].
+     */
+    private suspend fun launchWatched(
+        run: UtProcess,
+        frames: StateFlow<Long>,
+        stop: MutableStateFlow<String?>,
+    ): UtProcessResult =
+        coroutineScope {
+            launch { watchStop(run, stop) }
+            withProgressTimeout(frames, config.idleTimeout) { run.launch() }
+        }
+
+    /**
+     * Returns the reason the hook library gives in [line], one line of the game output, for stopping the frame capture.
+     * If [line] does not report a stop, returns `null` instead.
+     */
+    fun stopReason(line: String): String? = HOOK_STOP.matchEntire(line.trim())?.groupValues?.get(1)
+
+    /**
+     * Records in [stop] the reason of the last line of the output of [run] that reports a frame capture stop, until the
+     * output ends.
+     */
+    private suspend fun watchStop(
+        run: UtProcess,
+        stop: MutableStateFlow<String?>,
+    ) {
+        run.drain().collect { line -> stopReason(line)?.let { stop.value = it } }
+    }
+
+    /**
+     * Returns [failure] with [reason], the stop the hook library reported, named in its message. If [reason] is `null`
+     * or [failure] is a cancellation, returns [failure] itself instead.
+     */
+    private fun stopFailure(
+        failure: Throwable,
+        reason: String?,
+    ): Throwable =
+        when {
+            reason == null || failure is CancellationException -> failure
+            else -> IllegalStateException("Frame capture was stopped by the hook library: $reason", failure)
+        }
 
     /**
      * Returns the video track in [videoFile], starting at the spawn mark of [marks].
@@ -121,13 +174,15 @@ class FfmpegVideoCapture(
     suspend fun extractHooks(system: Workspace): List<Path> = DemoPlaybackHooks.extract(system)
 
     /**
-     * Returns the environment the video capture runs under: the port and render fps the hook library reads, plus the Linux
-     * environment on Linux.
+     * Returns the environment the video capture runs under: the port, the render fps and the frame size the hook library
+     * reads, plus the Linux environment on Linux.
      */
     fun environment(port: Int): Map<String, String> =
         buildMap {
             this["UTRECORDER_PORT"] = port.toString()
             this["UTRECORDER_FPS"] = config.renderFps().toString()
+            this["UTRECORDER_WIDTH"] = config.width.toString()
+            this["UTRECORDER_HEIGHT"] = config.height.toString()
             if (installation.platform.operatingSystem != WINDOWS) putAll(linuxEnvironment())
         }
 
@@ -218,6 +273,11 @@ class FfmpegVideoCapture(
          * The name of a Bunny Track mod package, capturing its version.
          */
         private val BT_MOD = Regex("""UTBT_BTMod_v(\d+)""", RegexOption.IGNORE_CASE)
+
+        /**
+         * A line of the hook library that reports a frame capture stop, capturing its reason.
+         */
+        private val HOOK_STOP = Regex("""uthooks: (.*, capture stopped)""")
 
         /**
          * Returns whether the demo of [description] loads a Bunny Track mod older than [BT_MOD_HUD_VERSION].

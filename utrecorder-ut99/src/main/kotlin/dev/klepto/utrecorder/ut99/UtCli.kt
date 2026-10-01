@@ -74,7 +74,7 @@ class UtCli(
      */
     private suspend fun install(): UtInstallation {
         UtInstaller(config).install()
-        return UtInstallation(config.gameDirectory)
+        return UtInstallation(config.gameDirectory, config)
     }
 
     /**

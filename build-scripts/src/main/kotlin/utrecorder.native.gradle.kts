@@ -15,7 +15,8 @@ val embeddedArtifacts = extensions.getByType<EmbeddedArtifactsExtension>()
 embeddedArtifacts.namespace.convention("native")
 
 val nativeBinaries = extensions.create<NativeExtension>("nativeBinaries")
-nativeBinaries.sourceDirectory.convention(layout.projectDirectory.dir("src/main/native"))
+nativeBinaries.sourceDirectory.set(layout.projectDirectory.dir("src/main/native"))
+nativeBinaries.sourceDirectory.disallowChanges()
 
 val targetPlatform = NativePlatform.current
 

@@ -59,8 +59,9 @@ import kotlin.time.Instant
  *   instead, if [cache] names one. The mp4 of an [Outdated] recording is served the same way, but never redirected;
  *   once its mp4 is gone, the recording answers `404`. Every other request answers `404`.
  * - `GET /view/{capId}`: an HTML page that plays `/mp4/{capId}` and carries OpenGraph video tags for link previews: the
- *   title of the cap, the size of [video], and absolute URLs built from the origin of the request, which honours the
- *   `X-Forwarded-*` headers. Answers `404` wherever `/mp4/{capId}` answers `404`.
+ *   title of the cap, the size of [video], and absolute URLs built from the origin of the request. The origin honours
+ *   the `X-Forwarded-*` headers only if [ServerConfig.trustForwardedHeaders] is enabled. Answers `404` wherever
+ *   `/mp4/{capId}` answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
  * - `GET /api/queue`: the next 10 demos to be recorded, in the order they are taken.
  * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, plus every
@@ -76,13 +77,14 @@ import kotlin.time.Instant
  *
  * JavaScript, CSS, HTML and JSON responses are compressed.
  *
- * Every request of `/mp4/{capId}` for a stored recording counts one view of it through [cache]. A request of
- * `/view/{capId}` counts none.
+ * A request of `/mp4/{capId}` for a stored recording counts one view of it through [cache], unless it continues a
+ * playback: a request with a `Range` header other than `bytes=0-` counts none. A request of `/view/{capId}` counts
+ * none.
  *
  * @property repository The recordings to serve.
  * @property jobs The running recordings.
  * @property cache The cache that counts the views and names the download URL of an archived mp4.
- * @property config The recordings directory and the port.
+ * @property config The recordings directory, the port and whether the forwarded headers are trusted.
  * @property video The size of the recorded videos.
  */
 class HttpService(
@@ -108,7 +110,7 @@ class HttpService(
      */
     fun module(application: Application) {
         application.install(PartialContent)
-        application.install(XForwardedHeaders)
+        if (config.trustForwardedHeaders) application.install(XForwardedHeaders)
         application.install(ContentNegotiation) { json() }
         application.install(Compression) {
             gzip { matchContentType(*COMPRESSED) }
@@ -134,20 +136,29 @@ class HttpService(
      * is never redirected: once its mp4 is gone, it answers `404`.
      */
     private suspend fun RoutingContext.serveMp4(capId: String) {
-        val recording = cache.view(capId)
+        val recording = cache.view(capId, counted = isFromStart())
         if (recording == null || recording.status !in SERVABLE) {
             call.respond(HttpStatusCode.NotFound)
             return
         }
         val capId = recording.demo.capId
         val mp4 = config.mp4(capId)
-        val downloadUrl = cache.downloadUrl(capId)
+        val downloadUrl = cache.downloadUrl(recording)
         when {
             mp4.fileExists() -> call.respondFile(mp4.toFile())
             recording.status == Archived && downloadUrl != null -> call.respondRedirect(downloadUrl)
             else -> call.respond(HttpStatusCode.NotFound)
         }
     }
+
+    /**
+     * Returns `true` if the request asks for the mp4 from its start: it has no `Range` header, or the range `bytes=0-`.
+     */
+    private fun RoutingContext.isFromStart(): Boolean =
+        when (call.request.headers[HttpHeaders.Range]) {
+            null, "bytes=0-" -> true
+            else -> false
+        }
 
     /**
      * Answers with the page that plays the recording [capId] and describes it to link previews, or `404` wherever
@@ -177,7 +188,7 @@ class HttpService(
         return when {
             recording.status !in SERVABLE -> false
             config.mp4(capId).fileExists() -> true
-            else -> recording.status == Archived && cache.downloadUrl(capId) != null
+            else -> recording.status == Archived && cache.downloadUrl(recording) != null
         }
     }
 
