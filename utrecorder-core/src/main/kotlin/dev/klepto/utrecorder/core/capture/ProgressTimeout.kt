@@ -1,4 +1,4 @@
-package dev.klepto.utrecorder.core.capture.video
+package dev.klepto.utrecorder.core.capture
 
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay

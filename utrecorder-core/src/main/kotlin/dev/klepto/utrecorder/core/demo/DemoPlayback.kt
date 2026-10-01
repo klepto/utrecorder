@@ -87,9 +87,9 @@ class DemoPlayback(
     /**
      * Returns the unstarted run named [name] that plays [description] windowed at [viewport].
      *
-     * The run starts from the playback inis of [DemoPlaybackResources], and its exec script plays the demo on its own
-     * clock with `?timebased`. [configure] sets the rest of the run after that. Lines it adds to `exec` run after the
-     * line that plays the demo.
+     * The run starts from the playback inis of [DemoPlaybackResources] on the `Entry` map, and its exec script plays the
+     * demo on its own clock with `?timebased`. [configure] sets the rest of the run after that. Lines it adds to `exec`
+     * run after the line that plays the demo.
      */
     fun process(
         name: String,
@@ -98,6 +98,7 @@ class DemoPlayback(
         configure: UtProcessBuilder.() -> Unit,
     ): UtProcess =
         installation.process(name) {
+            map = "Entry"
             exec = listOf("${description.execLine}?timebased")
             windowed = true
             baseGameIni = DemoPlaybackResources.gameIni

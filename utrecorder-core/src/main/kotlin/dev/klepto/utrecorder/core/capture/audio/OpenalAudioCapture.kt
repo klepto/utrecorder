@@ -7,6 +7,7 @@ import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.core.capture.withProgressTimeout
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.core.demo.DemoPlaybackHooks
@@ -19,6 +20,7 @@ import dev.klepto.utrecorder.ut99.UtProcess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -39,13 +41,14 @@ import kotlin.time.DurationUnit
  * through the OpenAL wave output, its clock stepped one mixer period of the wav at a time.
  *
  * Use the constructor to create one. A capture stages the demo through a [DemoPlayback], extracts the hooks into a
- * workspace of its own, and plays the demo windowed and with sound. The run is killed once
- * [DemoPlaybackConfig.timeout] has passed. The wav is placed by the marks the run logged and moved into a workspace of
- * the capture's own. The progress of a capture is the seconds of audio in the wav out of the demo's duration, read once
+ * workspace of its own, and plays the demo windowed and with sound. The run is killed once its wav has not grown for
+ * [AudioCaptureConfig.idleTimeout], however long the whole run takes. The wav is placed by the marks the run logged and
+ * moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in the wav out of the demo's duration, read once
  * a second while the run plays. A run that produces no wav, no marks, or marks outside its wav fails with an
  * [IllegalStateException].
  *
- * @property config The audio capture configuration, carrying the sound viewport and its frame rate limit.
+ * @property config The audio capture configuration, carrying the sound viewport, its frame rate limit and the idle
+ * timeout.
  * @property installation The installation the capture runs in.
  * @property directories The directories the capture's workspace is kept under.
  * @property ffmpeg The ffmpeg that reads the length of the wav.
@@ -69,10 +72,11 @@ class OpenalAudioCapture(
             playback.play(demo, STAGED_DEMO_PREFIX, AUDIO_CAPTURE) { description, system ->
                 val wav = system[WAVE_NAME]
                 val run = process(description, openAl(system), DemoPlaybackHooks.extract(system))
+                val written = MutableStateFlow(0L)
                 val result =
                     coroutineScope {
-                        val progress = launch { reportProgress(wav, description, onProgress) }
-                        run.launch(description.timeout).also { progress.cancel() }
+                        val progress = launch { reportProgress(wav, description, written, onProgress) }
+                        withProgressTimeout(written, config.idleTimeout) { run.launch() }.also { progress.cancel() }
                     }
                 val track = track(wav, result.log, ffmpeg.duration(wav))
                 track.copy(file = wav.move(output[WAVE_NAME]))
@@ -80,18 +84,21 @@ class OpenalAudioCapture(
         }
 
     /**
-     * Reports the seconds of audio in [wav] out of the duration of [description]'s demo to [onProgress], once a second
-     * until cancelled. While [wav] does not exist, reports `0.0`.
+     * Reads the size of [wav] once a second until cancelled. Publishes the size to [written], and reports the seconds
+     * of audio in [wav] out of the duration of the run of [description] to [onProgress]. While [wav] does not exist, the
+     * size is `0`.
      */
     private suspend fun reportProgress(
         wav: Path,
         description: DemoPlaybackConfig,
+        written: MutableStateFlow<Long>,
         onProgress: ProgressListener<Unit>,
     ) {
-        val demoSeconds = description.demoDuration.toDouble(DurationUnit.SECONDS)
+        val runSeconds = description.runDuration().toDouble(DurationUnit.SECONDS)
         while (true) {
             val bytes = withContext(Dispatchers.IO) { wav.toFile().length() }
-            onProgress(Progress(bytes / WAVE_BYTES_PER_SECOND / demoSeconds))
+            written.value = bytes
+            onProgress(Progress(bytes / WAVE_BYTES_PER_SECOND / runSeconds))
             delay(1.seconds)
         }
     }
@@ -143,10 +150,11 @@ class OpenalAudioCapture(
      * Returns the audio track in [wavFile], placed by the marks the run logged in [log].
      *
      * The hook library reports the position of the wav output as the date of the game, counted from [WAVE_EPOCH], so
-     * the date of a mark is its position in the wav. The track starts at the start mark and runs to the end mark.
-     * [wavDuration] is the length of the wav in seconds.
+     * the date of a mark is its position in the wav once the hook library is armed, which it is from the spawn mark
+     * on. The track starts at the spawn mark and runs to the end mark. [wavDuration] is the length of the wav in
+     * seconds.
      *
-     * @throws IllegalStateException when [wavFile] does not exist, [log] holds no start mark or no end mark, or the
+     * @throws IllegalStateException when [wavFile] does not exist, [log] holds no start, spawn or end mark, or the
      * marks fall outside the wav.
      */
     suspend fun track(
@@ -157,9 +165,10 @@ class OpenalAudioCapture(
         check(withContext(Dispatchers.IO) { wavFile.exists() }) { "The audio capture produced no $WAVE_NAME" }
 
         val marks = DemoPlaybackMarks.parse(log)
-        val start = wavePosition(marks.start)
+        val spawn = checkNotNull(marks.spawn) { "Run log holds no spawn mark" }
+        val start = wavePosition(spawn)
         val end = wavePosition(marks.end)
-        val span = marks.end.demoTime - marks.start.demoTime
+        val span = marks.end.demoTime - spawn.demoTime
         check(start >= 0 && end <= wavDuration) { "The audio capture's marks fall outside $WAVE_NAME" }
         check(span > Duration.ZERO) { "The audio capture's marks fall outside $WAVE_NAME" }
 
@@ -167,20 +176,22 @@ class OpenalAudioCapture(
             file = wavFile,
             offset = start,
             length = end - start,
-            demoEnd = marks.end.demoTime.toDouble(DurationUnit.SECONDS),
+            demoStart = spawn.demoTime.toDouble(DurationUnit.SECONDS),
         )
     }
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo:
-     * `RewindStart`, which seeks back to the demo's start once the ticks settle, `TimerReset <run start>` and
-     * `TimerStop <run stop>`, which end the run where the video capture ends it, and `DisableRendering` when the
-     * config turns the audio capture's rendering off. If the demo shows no run start or no run stop, `TimerReset` or
-     * `TimerStop` is left out.
+     * `SeekStart`, which seeks to just before the run start, or back to the demo's start, once the ticks settle, `DemoFrames <mixer periods per
+     * second>`, which arms the hook library at the spawn and logs the spawn mark, `TimerReset <run start>`, which
+     * places the spawn where the video capture places it, `TimerStop <run stop>`, which ends the run where the video
+     * capture ends it, and `DisableRendering` when the config turns the audio capture's rendering off. If the demo
+     * shows no run start or no run stop, `TimerReset` or `TimerStop` is left out.
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
-            this += "RewindStart"
+            this += "SeekStart"
+            this += "DemoFrames %.6f".format(Locale.ROOT, WAVE_RATE.toDouble() / WAVE_PERIOD)
             description.runStart?.let {
                 this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
             }

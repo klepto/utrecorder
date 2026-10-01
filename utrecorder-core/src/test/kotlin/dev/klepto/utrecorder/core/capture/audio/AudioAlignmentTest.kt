@@ -11,7 +11,7 @@ class AudioAlignmentTest :
                 file = Path.of("sound.wav"),
                 offset = 2.0,
                 length = 10.0,
-                demoEnd = 300.75,
+                demoStart = 290.75,
             )
 
         test("place starts the audio where the wav plays the demo time the video starts at") {
@@ -26,7 +26,7 @@ class AudioAlignmentTest :
             placement shouldBe AudioAlignment.Placement(offset = 4.25, length = 8.0)
         }
 
-        test("place keeps the start of the audio on the video start when the video runs past the demo end of the track") {
+        test("place runs the placed audio for the length of the video when the video runs past the end of the track") {
             val placement =
                 AudioAlignment.place(
                     track = track,
@@ -44,18 +44,6 @@ class AudioAlignmentTest :
                     track = track,
                     videoLength = 8.0,
                     videoStart = null,
-                    audioOffset = 0.0,
-                )
-
-            placement shouldBe AudioAlignment.Placement(offset = 2.0, length = 10.0)
-        }
-
-        test("place keeps the track's own placement when the demo end of the track is not known") {
-            val placement =
-                AudioAlignment.place(
-                    track = track.copy(demoEnd = 0.0),
-                    videoLength = 8.0,
-                    videoStart = 292.75,
                     audioOffset = 0.0,
                 )
 

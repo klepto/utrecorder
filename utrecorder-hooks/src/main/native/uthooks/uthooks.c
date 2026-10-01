@@ -1,6 +1,6 @@
 /*
  * Hook library loaded into the Unreal Tournament process. It steps the engine clocks by a fixed amount per presented
- * frame, and sends every frame presented while the demo plays to the frame socket as raw 10-bit BGRA pixels. In audio
+ * frame, and sends every frame presented while the demo plays to the frame socket as raw 8-bit BGRA pixels. In audio
  * mode it steps the engine clocks by one mixer period of the OpenAL wave output per presented frame instead, and lets
  * the mixer render exactly that period before the next frame.
  */
@@ -41,7 +41,7 @@
 
 #define GL_VIEWPORT 0x0BA2
 #define GL_BGRA 0x80E1
-#define GL_UNSIGNED_INT_2_10_10_10_REV 0x8368
+#define GL_UNSIGNED_BYTE 0x1401
 
 /* Connection attempts to the frame socket, and the delay between two of them. */
 #define CONNECT_ATTEMPTS 200
@@ -96,7 +96,7 @@ typedef void(GL_ENTRY *ReadPixelsFunction)(int, int, int, int, unsigned int, uns
 static GetIntegervFunction readViewport;
 static ReadPixelsFunction readPixels;
 
-/* The frame read last, and the frame read before it that waits to be sent, each pixelWidth by pixelHeight 10-bit BGRA. */
+/* The frame read last, and the frame read before it that waits to be sent, each pixelWidth by pixelHeight 8-bit BGRA. */
 static unsigned char *pixels;
 static unsigned char *pending;
 static size_t pendingSize;
@@ -237,7 +237,7 @@ static void captureFrame(void) {
     if (viewport[2] != pixelWidth || viewport[3] != pixelHeight) resizeFrames(viewport[2], viewport[3]);
     if (captureDisabled) return;
     size = (size_t) pixelWidth * pixelHeight * 4;
-    readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_INT_2_10_10_10_REV, pixels);
+    readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
     sendPending();
     if (captureDisabled) return;
     sent = pending;
@@ -272,6 +272,10 @@ static int clockInstalled;
 static int clockRunning;
 static int clockArmed;
 static int clockFinished;
+
+/* Whether the clocks follow the real clock again, and the real seconds at which they started to. */
+static int clockReal;
+static double clockRealStart;
 
 /* GSecondsPerCycle and GSecondsPerCycleLong in Core. */
 static float *clockCycleScale;
@@ -321,14 +325,41 @@ static long long clockStepSize(void) {
     return clockArmed ? CLOCK_PREROLL_STEPS : 1;
 }
 
-/* Returns the seconds the clocks have stepped since they were patched. */
-static double clockElapsed(void) {
-    return (double) clockFrame / (double) clockSteps();
+/* Returns the seconds of a monotonic real clock. */
+static double readRealSeconds(void) {
+#ifdef _WIN32
+    LARGE_INTEGER count;
+    LARGE_INTEGER frequency;
+    QueryPerformanceCounter(&count);
+    QueryPerformanceFrequency(&frequency);
+    return (double) count.QuadPart / (double) frequency.QuadPart;
+#else
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double) now.tv_sec + (double) now.tv_nsec / 1e9;
+#endif
 }
 
-/* Returns the FTime ticks the clocks have stepped since they were patched. */
+/* Returns the real seconds since the clocks follow the real clock again, or 0 while they step. */
+static double clockRealElapsed(void) {
+    return clockReal ? readRealSeconds() - clockRealStart : 0.0;
+}
+
+/* Returns the seconds the clocks have stepped since they were patched, plus the real seconds since they stopped. */
+static double clockElapsed(void) {
+    return (double) clockFrame / (double) clockSteps() + clockRealElapsed();
+}
+
+/* Returns the FTime ticks the clocks have stepped since they were patched, plus the real ticks since they stopped. */
 static long long clockTicks(void) {
-    return (clockFrame * CLOCK_UNIT) / clockSteps();
+    return (clockFrame * CLOCK_UNIT) / clockSteps() + (long long) (clockRealElapsed() * (double) CLOCK_UNIT);
+}
+
+/* Makes the clocks follow the real clock from where they stepped to, so the engine runs in real time again. */
+static void releaseClock(void) {
+    if (clockReal) return;
+    clockRealStart = readRealSeconds();
+    clockReal = 1;
 }
 
 #ifdef _WIN32
@@ -458,12 +489,13 @@ static unsigned char *findUnique(HMODULE module, const unsigned char *pattern, s
     return duplicate ? 0 : found;
 }
 
-/* Hands every site back to the real counter, shifted to carry on from the virtual count instead of waiting for it. */
+/*
+ * Hands every site back to the real counter, shifted to carry on from the virtual count, whether the virtual count is
+ * ahead of the real counter or behind it. The shift wraps around when the virtual count is behind.
+ */
 static void releaseCycles(void) {
-    unsigned long long now;
     if (!clockCyclesArmed) return;
-    now = readCycles();
-    if (clockCycleCount > now) clockCycleOffset = clockCycleCount - now;
+    clockCycleOffset = clockCycleCount - readCycles();
     clockCyclesArmed = 0;
 }
 
@@ -582,6 +614,21 @@ static long long readRealMixer(void) {
     LARGE_INTEGER count;
     QueryPerformanceCounter(&count);
     return count.QuadPart;
+}
+
+/* The thread of the last mixer thread started, and the mixer thread being joined, which reads the real clock again. */
+static DWORD mixerThread;
+static DWORD mixerJoined;
+
+/* Records the calling thread as the last mixer thread started. */
+static void markMixerThread(void) {
+    mixerThread = GetCurrentThreadId();
+    if (mixerJoined == mixerThread) mixerJoined = 0;
+}
+
+/* Returns whether the calling thread is the mixer thread being joined. */
+static int mixerJoining(void) {
+    return mixerJoined && GetCurrentThreadId() == mixerJoined;
 }
 
 #else
@@ -743,6 +790,15 @@ static long long readRealMixer(void) {
     return readRealSteady().ticks;
 }
 
+/* Does nothing, since a mixer thread being joined leaves its sleep on its own. */
+static void markMixerThread(void) {
+}
+
+/* Returns 0, since a mixer thread being joined leaves its sleep on its own. */
+static int mixerJoining(void) {
+    return 0;
+}
+
 #endif
 
 /* The appSecondsNew hook. */
@@ -796,18 +852,26 @@ static void clearTimestampGates(void) {
     }
 }
 
-/* Mixer lock state: a mixer thread has read the mixer clock, and the mixer reads the real clock again. */
+/*
+ * Mixer lock state: a mixer thread has read the mixer clock, the mixer runs in lockstep with the presented frames, and
+ * the mixer reads the real clock again for good.
+ */
 static int mixerStarted;
+static int mixerLocked;
 static int mixerReleased;
 
-/* The real reading at the first mixer read, and the clock step then. The mixer clock counts on from both. */
+/* The reading at the first read of the current mixer thread, and the last reading it got, before the lock. */
+static long long mixerThreadStart;
+static long long mixerLastReading;
+
+/* The reading the mixer clock counts on from, and the clock step at which it was that reading. */
 static long long mixerBaseTicks;
 static long long mixerBaseFrame;
 
-/* The amount added to the real reading after the mixer is released. */
+/* The amount added to the real reading outside the lock. */
 static long long mixerOffset;
 
-/* The clock step at which the current mixer thread started, where its wav output begins. */
+/* The clock step at which the wav output begins. */
 static long long waveStart;
 
 /* The clock step of the last mixer read, and the clock step at which the mixer last went idle. */
@@ -818,8 +882,8 @@ static long long mixerIdle = -1;
 static THREAD_LOCAL long long mixerThreadReads;
 
 /*
- * Returns the mixer clock at clock step frame: the real reading at mixerBaseFrame, plus the samples since then. Unless
- * start is set, the reading falls half a sample later.
+ * Returns the mixer clock at clock step frame: mixerBaseTicks, plus the samples since mixerBaseFrame. Unless start is
+ * set, the reading falls half a sample later.
  */
 static long long mixerClock(long long frame, int start) {
     long long halfSamples = (frame - mixerBaseFrame) * 2 + (start ? 0 : 1);
@@ -827,32 +891,53 @@ static long long mixerClock(long long frame, int start) {
 }
 
 /*
- * Returns the clock the mixer thread reads in place of the real reading real. Until the release, that is the mixer clock
- * of the current clock step, which moves only when a presented frame advances the clocks. The first read of a mixer
- * thread is exactly on the step and starts its wav output. Every later read falls half a sample after the step, so the
- * mixer counts every period up to the step as due and none after it.
+ * Returns the reading a mixer thread gets outside the lock: the real reading real, shifted by mixerOffset. Remembers
+ * the first and the last reading of the current mixer thread, where start marks its first read.
+ */
+static long long readFreeMixer(long long real, int start) {
+    long long reading = real + mixerOffset;
+    if (mixerJoining()) return reading;
+    if (start) mixerThreadStart = reading;
+    mixerLastReading = reading;
+    return reading;
+}
+
+/*
+ * Returns the reading a mixer thread gets in the lock: the mixer clock of the current clock step, which moves only when
+ * a presented frame advances the clocks. The first read of a mixer thread is exactly on the step and starts its wav
+ * output. Every later read falls half a sample after the step, so the mixer counts every period up to the step as due
+ * and none after it.
+ */
+static long long readLockedMixer(long long real, int start) {
+    if (!mixerStarted) {
+        mixerBaseTicks = real;
+        mixerBaseFrame = clockFrame;
+    }
+    if (start) {
+        waveStart = clockFrame;
+        mixerIdle = -1;
+        fprintf(stderr, "uthooks: mixer started in the lock at clock sample %lld\n", clockFrame);
+        fflush(stderr);
+    }
+    mixerRead = clockFrame;
+    return mixerClock(clockFrame, start);
+}
+
+/*
+ * Returns the clock the mixer thread reads in place of the real reading real: the mixer clock while the mixer is locked,
+ * and the shifted real clock before the lock, after the release, and on a mixer thread being joined.
  */
 static long long readMixerClock(long long real) {
     long long reading;
     int start = mixerThreadReads++ == 0;
     lockMixer();
-    if (mixerReleased) {
-        reading = real + mixerOffset;
+    if (start) markMixerThread();
+    if (mixerLocked && !mixerReleased && !mixerJoining()) {
+        reading = readLockedMixer(real, start);
     } else {
-        if (!mixerStarted) {
-            mixerStarted = 1;
-            mixerBaseTicks = real;
-            mixerBaseFrame = clockFrame;
-        }
-        if (start) {
-            waveStart = clockFrame;
-            mixerIdle = -1;
-            fprintf(stderr, "uthooks: mixer started at clock sample %lld\n", clockFrame);
-            fflush(stderr);
-        }
-        mixerRead = clockFrame;
-        reading = mixerClock(clockFrame, start);
+        reading = readFreeMixer(real, start);
     }
+    mixerStarted = 1;
     unlockMixer();
     return reading;
 }
@@ -860,13 +945,14 @@ static long long readMixerClock(long long real) {
 /*
  * Holds a mixer thread in place of a sleep. Marks the mixer idle at its last read, since it sleeps only once it has
  * rendered every period due then, and waits until a presented frame advances the clocks past that read. Returns 0
- * without waiting when the calling thread is no mixer thread or the mixer is released, so the caller sleeps for real.
+ * without waiting when the calling thread is no mixer thread, is being joined, or the mixer is not locked, so the caller
+ * sleeps for real.
  */
 static int holdMixer(void) {
     int held;
-    if (!mixerThreadReads) return 0;
+    if (!mixerThreadReads || mixerJoining()) return 0;
     lockMixer();
-    held = !mixerReleased;
+    held = mixerLocked && !mixerReleased;
     if (held) {
         mixerIdle = mixerRead;
         wakeMixer();
@@ -876,13 +962,41 @@ static int holdMixer(void) {
     return held;
 }
 
+/*
+ * Locks the mixer to the presented frames in audio mode. The wav position at the current clock step is every whole
+ * period the current mixer thread has due on the real clock, so the lock carries on from what the mixer has rendered.
+ */
+static void engageMixer(void) {
+    long long reading;
+    long long due;
+    if (!audioRate) return;
+    lockMixer();
+    if (!mixerLocked && !mixerReleased) {
+        mixerLocked = 1;
+        if (mixerStarted) {
+            reading = readRealMixer() + mixerOffset;
+            if (reading < mixerLastReading) reading = mixerLastReading;
+            due = (reading - mixerThreadStart) * audioRate / mixerTicksPerSecond();
+            due -= due % audioPeriod;
+            mixerBaseTicks = mixerThreadStart;
+            mixerBaseFrame = clockFrame - due;
+            waveStart = mixerBaseFrame;
+            mixerIdle = -1;
+        }
+        wakeMixer();
+        fprintf(stderr, "uthooks: mixer locked at wave sample %lld\n", clockFrame - waveStart);
+        fflush(stderr);
+    }
+    unlockMixer();
+}
+
 /* Hands the mixer back to the real clock in audio mode, shifted to carry on from the mixer clock, and reports why. */
 static void releaseMixer(const char *reason) {
     if (!audioRate) return;
     lockMixer();
     if (!mixerReleased) {
         mixerReleased = 1;
-        if (mixerStarted) mixerOffset = mixerClock(clockFrame, 0) - readRealMixer();
+        if (mixerLocked && mixerStarted) mixerOffset = mixerClock(clockFrame, 0) - readRealMixer();
         wakeMixer();
         fprintf(stderr, "uthooks: mixer released at wave sample %lld, %s\n", clockFrame - waveStart, reason);
         fflush(stderr);
@@ -891,15 +1005,15 @@ static void releaseMixer(const char *reason) {
 }
 
 /*
- * Advances the clocks by one mixer period and waits until the mixer has rendered it. Releases the mixer when it does not
- * go idle within MIXER_STALL_MS.
+ * Advances the clocks by one mixer period and, while the mixer is locked, waits until the mixer has rendered it.
+ * Releases the mixer when it does not go idle within MIXER_STALL_MS.
  */
 static void stepMixer(void) {
     int waited = 0;
     lockMixer();
     clockFrame += audioPeriod;
     wakeMixer();
-    while (mixerStarted && !mixerReleased && mixerIdle != clockFrame && waited < MIXER_STALL_MS) {
+    while (mixerLocked && mixerStarted && !mixerReleased && mixerIdle != clockFrame && waited < MIXER_STALL_MS) {
         if (!waitMixer(MIXER_WAIT_MS)) waited += MIXER_WAIT_MS;
     }
     unlockMixer();
@@ -919,14 +1033,14 @@ static int yearDays(int year) {
 
 /*
  * The appSystemTime hook in audio mode. Reports the position of the wav output as a date, counted from 2000-01-01
- * 00:00:00.000, a Saturday.
+ * 00:00:00.000, a Saturday. Reports that date itself until the mixer is locked.
  */
 static void hookSystemTime(int *year, int *month, int *dayOfWeek, int *day, int *hour, int *minute, int *second,
                            int *millisecond) {
     long long millis;
     long long days;
     lockMixer();
-    millis = mixerStarted ? (clockFrame - waveStart) * 1000 / audioRate : 0;
+    millis = mixerLocked ? (clockFrame - waveStart) * 1000 / audioRate : 0;
     unlockMixer();
     days = millis / 86400000;
     *millisecond = (int) (millis % 1000);
@@ -977,11 +1091,13 @@ static int demoPlaying(void) {
 
 /*
  * Ends the capture: releases the cycle sites to the real counter when they have not released themselves already,
- * releases the mixer, drops the pending frame, closes stream and reports the frame count.
+ * releases the engine clocks and the mixer to the real clock, drops the pending frame, closes stream and reports the
+ * frame count.
  */
 static void finishCapture(void) {
     clockFinished = 1;
     releaseCycles();
+    releaseClock();
     releaseMixer("the demo ended");
     pendingSize = 0;
     if (stream != STREAM_CLOSED) {
@@ -994,9 +1110,9 @@ static void finishCapture(void) {
     fflush(stderr);
 }
 
-/* Arms the clock when the demo starts, and finishes the capture when it stops. */
+/* Arms the clock when the demo starts once the clock is installed, and finishes the capture when the demo stops. */
 static void trackDemo(void) {
-    if (clockFinished) return;
+    if (clockFinished || !clockInstalled) return;
     if (!clockArmed) {
         if (!demoPlaying()) return;
         clockArmed = 1;
@@ -1013,12 +1129,13 @@ typedef void(SET_SPEED_ABI *SetSpeedFunction)(SET_SPEED_ARGS);
 /* The native execSetSpeed that hookSetSpeed calls on. */
 static SetSpeedFunction realSetSpeed;
 
-/* The execSetSpeed hook. Arms the capture on the first call before the demo ends. */
+/* The execSetSpeed hook. Arms the capture on the first call before the demo ends, and locks the mixer in audio mode. */
 static void SET_SPEED_ABI hookSetSpeed(SET_SPEED_ARGS) {
     if (!captureArmed && !clockFinished) {
         captureArmed = 1;
         fprintf(stderr, "uthooks: capture armed at frame %lld\n", presentCount);
         fflush(stderr);
+        engageMixer();
     }
     if (realSetSpeed) realSetSpeed(SET_SPEED_PASS);
 }
@@ -1103,10 +1220,10 @@ static void installClock(void) {
 
 /*
  * Steps the clocks by one frame while the demo plays, and by one step before it. In audio mode, steps them by one mixer
- * period and waits for the mixer to render it.
+ * period and waits for the mixer to render it. Does nothing once the clocks follow the real clock again.
  */
 static void advanceClock(void) {
-    if (!clockRunning) return;
+    if (!clockRunning || clockReal) return;
     if (audioRate) {
         stepMixer();
     } else {
@@ -1124,9 +1241,15 @@ static void captureDemoFrame(void) {
     if (!captureDisabled) captureFrame();
 }
 
-/* Runs before every presented frame: installs the clock, tracks the demo and captures the frame. */
+/* Returns whether the clock is due to be installed: at once in frame mode, and once the capture is armed in audio mode. */
+static int clockDue(void) {
+    resolveAudio();
+    return !audioRate || captureArmed;
+}
+
+/* Runs before every presented frame: installs the clock when due, tracks the demo and captures the frame. */
 static void presentFrame(void) {
-    if (!clockInstalled) installClock();
+    if (!clockInstalled && clockDue()) installClock();
     presentCount++;
     trackDemo();
     if (captureArmed && !clockFinished) captureDemoFrame();
@@ -1208,7 +1331,41 @@ static VOID WINAPI hookSleep(DWORD millis) {
     if (!holdMixer()) Sleep(millis);
 }
 
-/* Points the QueryPerformanceCounter and Sleep imports of OpenAL32.dll at their hooks, once it is loaded. */
+/*
+ * Releases the last mixer thread started to the real clock, shifted to carry on from the mixer clock, when handle is that
+ * thread and the mixer is locked. Its wake keeps the mixer thread from being held, so it leaves its sleep and sees that
+ * it is being stopped.
+ */
+static void releaseJoinedMixer(HANDLE handle) {
+    DWORD thread = GetThreadId(handle);
+    if (!thread) return;
+    lockMixer();
+    if (thread == mixerThread && mixerLocked && !mixerReleased) {
+        mixerJoined = thread;
+        mixerOffset = mixerClock(clockFrame, 0) - readRealMixer();
+        wakeMixer();
+        fprintf(stderr, "uthooks: mixer joined at wave sample %lld\n", clockFrame - waveStart);
+        fflush(stderr);
+    }
+    unlockMixer();
+}
+
+/* The WaitForSingleObject hook of OpenAL32.dll. Releases the mixer thread it waits for. */
+static DWORD WINAPI hookWait(HANDLE handle, DWORD millis) {
+    releaseJoinedMixer(handle);
+    return WaitForSingleObject(handle, millis);
+}
+
+/* The WaitForSingleObjectEx hook of OpenAL32.dll. Releases the mixer thread it waits for. */
+static DWORD WINAPI hookWaitEx(HANDLE handle, DWORD millis, BOOL alertable) {
+    releaseJoinedMixer(handle);
+    return WaitForSingleObjectEx(handle, millis, alertable);
+}
+
+/*
+ * Points the QueryPerformanceCounter, Sleep, WaitForSingleObject and WaitForSingleObjectEx imports of OpenAL32.dll at
+ * their hooks, once it is loaded.
+ */
 static void patchMixer(void) {
     HMODULE openAl;
     if (mixerHooked) return;
@@ -1217,6 +1374,8 @@ static void patchMixer(void) {
     mixerHooked = 1;
     patchImport(openAl, "kernel32.dll", "QueryPerformanceCounter", (void *) hookPerformanceCounter);
     patchImport(openAl, "kernel32.dll", "Sleep", (void *) hookSleep);
+    patchImport(openAl, "kernel32.dll", "WaitForSingleObject", (void *) hookWait);
+    patchImport(openAl, "kernel32.dll", "WaitForSingleObjectEx", (void *) hookWaitEx);
 }
 
 /*

@@ -174,18 +174,18 @@ class FfmpegVideoCaptureTest :
             hideHud("UTBT_BTMod_v18") shouldBe emptyList()
         }
 
-        test("execScript trims the demo to the configured fps, hides messages and smooths the recorder") {
+        test("execScript seeks to the run start, trims the demo to the configured fps, hides messages and smooths the recorder") {
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30)).execScript(description) shouldBe
-                listOf("DemoFrames 60.000000", "HideMessages", "SmoothRecorder")
+                listOf("SeekStart", "DemoFrames 60.000000", "HideMessages", "SmoothRecorder")
         }
 
         test("execScript leaves the recorder unsmoothed when the config turns smoothing off") {
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 30, smoothRecorder = false)).execScript(description) shouldBe
-                listOf("DemoFrames 60.000000", "HideMessages")
+                listOf("SeekStart", "DemoFrames 60.000000", "HideMessages")
         }
 
         test("execScript waits for the timer reset and the timer stop at the demo times the run starts and stops at") {
@@ -193,6 +193,6 @@ class FfmpegVideoCaptureTest :
                 DemoPlaybackConfig.of("staged-demo", Duration.ZERO, runStart = 10.120962.seconds, runStop = 64.572962.seconds)
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 60, smoothRecorder = false)).execScript(description) shouldBe
-                listOf("DemoFrames 120.000000", "TimerReset 10.120962", "TimerStop 64.572962", "HideMessages")
+                listOf("SeekStart", "DemoFrames 120.000000", "TimerReset 10.120962", "TimerStop 64.572962", "HideMessages")
         }
     })

@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.core.demo
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -18,7 +19,7 @@ class DemoPlaybackConfigTest :
                     runStop = null,
                     execLine = "demoplay ut-2026-09-13-1030-05",
                     console = "UTRecorder.UTRecorderConsole",
-                    exitDelay = 5.seconds,
+                    exitDelay = Duration.ZERO,
                     startupTimeout = 90.seconds,
                     maxRunTime = 720.seconds,
                     timeout = 780.seconds,
@@ -51,5 +52,17 @@ class DemoPlaybackConfigTest :
                 MaxRunSeconds=613
 
                 """.trimIndent()
+        }
+
+        test("runDuration spans the run from its start to its stop") {
+            val description = DemoPlaybackConfig.of("demo", 190.seconds, runStart = 166.seconds, runStop = 189.seconds)
+
+            description.runDuration() shouldBe 23.seconds
+        }
+
+        test("runDuration falls back to the start and the end of the demo") {
+            DemoPlaybackConfig.of("demo", 190.seconds).runDuration() shouldBe 190.seconds
+            DemoPlaybackConfig.of("demo", 190.seconds, runStart = 166.seconds).runDuration() shouldBe 24.seconds
+            DemoPlaybackConfig.of("demo", 190.seconds, runStop = 22.seconds).runDuration() shouldBe 22.seconds
         }
     })

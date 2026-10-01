@@ -13,11 +13,14 @@
 // Exec commands, typically run from an -EXEC script:
 //   DisableRendering  stop drawing the world,
 //   HideMessages      keep chat and progress messages off the HUD,
-//   RewindStart       seek back to the demo start once ticks settle,
-//   DemoFrames <fps>  log a spawn mark and reset the demo speed to 1 once the
-//                     followed player spawns,
+//   SeekStart         seek to SEEK_PREROLL seconds before the run start
+//                     TimerReset set, or to the demo start without one,
+//                     once ticks settle, without arming the hook library,
+//   DemoFrames <fps>  reset the demo speed to 1 once the followed player
+//                     spawns, which arms the hook library, and log a spawn
+//                     mark on the next tick,
 //   TimerReset <demo time>
-//                     make DemoFrames log the spawn mark instead once the demo
+//                     make DemoFrames signal the spawn instead once the demo
 //                     reaches the demo time the Bunny Track timer of the run
 //                     resets at,
 //   TimerStop <demo time>
@@ -32,10 +35,14 @@ class UTRecorderConsole extends UTConsole
 const SHOW_PLAYERCTRL = 0x00000800;
 const SHOW_REALTIME = 0x00004000;
 
-// A tick shorter than this counts as settled for RewindStart.
+// A tick shorter than this counts as settled for SeekStart.
 const SETTLED_DELTA = 0.05;
-// Settled ticks in a row RewindStart waits for before seeking back.
+// Settled ticks in a row SeekStart waits for before seeking.
 const SETTLED_TICKS = 10;
+// Seconds of demo time SeekStart lands before the run start.
+const SEEK_PREROLL = 2.0;
+// Seconds of demo time a seek must move to be issued, as in udemo's GotoFrame.
+const SEEK_MIN_DISTANCE = 0.5;
 // Seconds of demo time the end mark follows the stop of the Bunny Track timer.
 const TIMER_END_DELAY = 1.0;
 
@@ -71,7 +78,8 @@ var config float SpawnTimeout;
 
 var bool bNoRendering;    // DisableRendering was run
 var bool bHideMessages;   // HideMessages was run
-var bool bSignalledSpawn; // the spawn mark has been logged
+var bool bSignalledSpawn; // the spawn has been signalled
+var bool bSpawnPending;   // the spawn mark is due at the start of the next tick
 var bool bSeenPlayer;     // a followed player has existed at some point
 var bool bSeenDead;       // the first followed player seen was dead
 var float SincePlayback;  // seconds of playback the spawn check has seen
@@ -80,9 +88,9 @@ var float LastStreamTime; // demo time of the last tick that had a driver
 var int RenderedFrames;   // ticks counted while bAutoExit is on
 var bool bMarkedStart;    // the start mark has been logged
 var bool bMarkedEnd;      // the end mark has been logged
-var bool bRewindStart;    // seek back to the demo's start once ticks settle
-var bool bRewound;        // the rewind seek has been issued
-var int SettledTicks;     // settled ticks in a row before the rewind
+var bool bSeekStart;      // seek to the run start once ticks settle
+var bool bSought;         // the start seek has been issued
+var int SettledTicks;     // settled ticks in a row before the start seek
 var float TimerEnd;       // demo time the end mark is due at, 0 when TimerStop was not run
 var bool bSmoothRecorder; // SmoothRecorder was run
 var UTRecorderSmooth Smoother; // the smoother spawned in the demo level
@@ -130,6 +138,12 @@ function MarkEnd()
 // the exit while bAutoExit is on.
 event Tick(float Delta)
 {
+	if (bSpawnPending)
+	{
+		bSpawnPending = False;
+		MarkTime("spawn");
+	}
+
 	if (bNoRendering)
 		StopRendering();
 
@@ -285,22 +299,23 @@ function MuteHUD(DemoPlaybackSpec Spec, PlayerPawn Linked)
 	Log("UTRecorder: muted the HUD of" @ Linked.PlayerReplicationInfo.PlayerName, 'UTRecorder');
 }
 
-// Seeks back to the demo's start once ticks settle, before the start mark.
-exec function RewindStart()
+// Seeks to SEEK_PREROLL seconds before the run start, or to the demo start
+// without one, once ticks settle, before the start mark.
+exec function SeekStart()
 {
-	bRewindStart = True;
-	Log("UTRecorder: rewinding to the demo start once ticks settle", 'UTRecorder');
+	bSeekStart = True;
+	Log("UTRecorder: seeking to the run start once ticks settle", 'UTRecorder');
 }
 
-// True while the rewind RewindStart asked for is pending or still seeking.
+// True while the seek SeekStart asked for is pending or still seeking.
 // Issues the seek once SETTLED_TICKS ticks in a row are shorter than
 // SETTLED_DELTA.
-function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
+function bool SeekingStart(DemoPlaybackSpec Spec, float Delta)
 {
-	if (!bRewindStart)
+	if (!bSeekStart)
 		return False;
 
-	if (bRewound)
+	if (bSought)
 		return Spec.SeekTick > 0 || Spec.bSeeking;
 
 	if (Delta < SETTLED_DELTA)
@@ -311,10 +326,40 @@ function bool Rewinding(DemoPlaybackSpec Spec, float Delta)
 	if (SettledTicks < SETTLED_TICKS)
 		return True;
 
-	bRewound = True;
-	Log("UTRecorder: rewinding from" @ Spec.Driver.GetCurrentTime(), 'UTRecorder');
-	Spec.SeekTo("0");
-	return True;
+	bSought = True;
+	SeekWithoutArming(Spec, FMax(0.0, RunStart - SEEK_PREROLL));
+	return Spec.SeekTick > 0 || Spec.bSeeking;
+}
+
+// Seeks the demo to Target seconds the way udemo's GotoFrame does, but
+// without its closing SetSpeed, which would arm the hook library before the
+// spawn. Leaves the end of the seek to the spectator, which ends it on its
+// next tick as it does after GotoFrame.
+function SeekWithoutArming(DemoPlaybackSpec Spec, float Target)
+{
+	local DemoInterface Driver;
+	local float Current, Time;
+
+	Driver = Spec.Driver;
+	Current = Driver.GetCurrentTime();
+	if (Target > Driver.GetTotalTime() || Abs(Target - Current) < SEEK_MIN_DISTANCE)
+		return;
+
+	Log("UTRecorder: seeking from" @ Current @ "to" @ Target, 'UTRecorder');
+	Spec.bSeeking = True;
+	Time = Target + Driver.GetStartTime();
+	if (Time < Current)
+	{
+		Spec.BackUpRefs();
+		Driver.JumpBack();
+	}
+	if (Time - class'DemoSettings'.default.CacheSeconds > Driver.GetCurrentTime())
+		Driver.ReadTo(Time - class'DemoSettings'.default.CacheSeconds);
+	Spec.FixGRI(Time - Current);
+	Driver.ReadCache(Time, class'DemoSettings'.default.TickSize);
+	Spec.bSeeking = False;
+	Spec.SeekTick = 3;
+	Driver.bFixLevelTime = True;
 }
 
 // Keeps a UTRecorderSmooth spawned in the demo level from the next tick on.
@@ -374,12 +419,16 @@ exec function TimerStop(float Stop)
 // Otherwise signals it once the followed player is alive: at once if the
 // first player seen is alive, else when a dead one reaches SpawnHealth.
 // Signals it anyway when no player is followed or SpawnTimeout runs out.
+// While SeekStart is on, waits for the start mark first.
 function CheckSpawn(float Delta)
 {
 	local DemoPlaybackSpec Spec;
 	local PlayerPawn Linked;
 
 	if (bSignalledSpawn || Viewport == None || Viewport.Actor == None)
+		return;
+
+	if (bSeekStart && !bMarkedStart)
 		return;
 
 	Spec = DemoPlaybackSpec(Viewport.Actor);
@@ -418,7 +467,9 @@ function CheckSpawn(float Delta)
 		SignalSpawn("no spawn within" @ SpawnTimeout @ "seconds");
 }
 
-// Logs the spawn mark and sets the demo speed to 1.
+// Sets the demo speed to 1 and puts the spawn mark off to the next tick, the
+// first tick the hook library is armed for, since the level's date is filled
+// at the start of a tick.
 function SignalSpawn(string Reason)
 {
 	local DemoPlaybackSpec Spec;
@@ -428,8 +479,8 @@ function SignalSpawn(string Reason)
 		return;
 
 	bSignalledSpawn = True;
+	bSpawnPending = True;
 	Log("UTRecorder: spawn -" @ Reason, 'UTRecorder');
-	MarkTime("spawn");
 	Spec.Driver.SetSpeed(1.0);
 }
 
@@ -459,7 +510,7 @@ function CheckPlayback(float Delta)
 
 	LastStreamTime = Spec.Driver.GetCurrentTime();
 
-	if (Rewinding(Spec, Delta))
+	if (SeekingStart(Spec, Delta))
 		return;
 
 	Total = Spec.Driver.GetTotalFrames();

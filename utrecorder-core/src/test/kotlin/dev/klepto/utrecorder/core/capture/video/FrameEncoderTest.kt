@@ -85,13 +85,13 @@ class FrameEncoderTest :
                 "&recv_buffer_size=${960 * 540 * 4}"
         }
 
-        test("captureArguments describes the raw 10-bit BGRA input by the frame size, render fps and frame queue of the config") {
+        test("captureArguments describes the raw 8-bit BGRA input by the frame size, render fps and frame queue of the config") {
             val read = arguments()
             read[0] shouldBe "-y"
             read[1] shouldBe "-f"
             read[2] shouldBe "rawvideo"
             read[3] shouldBe "-pix_fmt"
-            read[4] shouldBe "x2rgb10le"
+            read[4] shouldBe "bgra"
             read[5] shouldBe "-s"
             read[6] shouldBe "960x540"
             read[7] shouldBe "-framerate"

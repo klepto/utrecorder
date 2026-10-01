@@ -68,7 +68,7 @@ class FrameEncoder(
      */
     fun captureArguments(): List<String> =
         buildList {
-            this += listOf("-y", "-f", "rawvideo", "-pix_fmt", "x2rgb10le")
+            this += listOf("-y", "-f", "rawvideo", "-pix_fmt", "bgra")
             this += listOf("-s", "${config.width}x${config.height}")
             this += listOf("-framerate", config.renderFps().toString())
             this += listOf("-thread_queue_size", config.queue.toString())
@@ -109,7 +109,7 @@ class FrameEncoder(
     }
 
     /**
-     * Returns the ffmpeg input URL that listens on [port], with a receive buffer the size of one 10-bit BGRA frame.
+     * Returns the ffmpeg input URL that listens on [port], with a receive buffer the size of one BGRA frame.
      */
     private fun streamUrl(): String =
         "tcp://$STREAM_HOST:$port?listen=1&listen_timeout=${listenTimeout.inWholeMilliseconds}" +

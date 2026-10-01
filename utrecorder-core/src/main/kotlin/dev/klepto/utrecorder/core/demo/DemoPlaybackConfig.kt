@@ -37,6 +37,12 @@ data class DemoPlaybackConfig(
     val timeout: Duration,
 ) {
     /**
+     * Returns how long the run the demo records lasts in demo time, from [runStart] to [runStop]. If the demo does not
+     * show one of them, the start or the end of the demo stands in for it.
+     */
+    fun runDuration(): Duration = (runStop ?: demoDuration) - (runStart ?: Duration.ZERO)
+
+    /**
      * Returns the `UTRecorder.ini` configuring this run, with every duration in whole seconds.
      */
     fun recorderIni(): UtIni =
@@ -69,7 +75,7 @@ data class DemoPlaybackConfig(
         /**
          * How long the game keeps running after the demo hits its last frame.
          */
-        private val EXIT_DELAY = 5.seconds
+        private val EXIT_DELAY = Duration.ZERO
 
         /**
          * Returns the settings of a run that plays the demo file [demoFileName], which is [demoDuration] long, loads

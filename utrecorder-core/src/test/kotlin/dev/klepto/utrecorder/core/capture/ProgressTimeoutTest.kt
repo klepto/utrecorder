@@ -1,4 +1,4 @@
-package dev.klepto.utrecorder.core.capture.video
+package dev.klepto.utrecorder.core.capture
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec

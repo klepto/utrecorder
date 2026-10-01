@@ -9,9 +9,9 @@ object AudioAlignment {
      * [videoStart].
      *
      * The placed audio starts where the wav plays demo time [videoStart], shifted by [audioOffset] seconds, and runs
-     * for [videoLength]. The wav position of [videoStart] is counted back from the end of [track], by the demo time
-     * between [videoStart] and the demo end of [track]. If [videoStart] or the demo end of [track] is not known, or if
-     * the shifted start would fall before the start of the wav, returns the track's own offset and length instead.
+     * for [videoLength]. The wav position of [videoStart] is counted from the start of [track], by the demo time
+     * between the demo start of [track] and [videoStart]. If [videoStart] is not known, or if the shifted start would
+     * fall before the start of the wav, returns the track's own offset and length instead.
      *
      * @param videoStart The demo time, in seconds, the first frame of the video shows, or `null` if not known.
      * @param audioOffset The manual shift, in seconds, added to the start of the placed audio.
@@ -24,8 +24,8 @@ object AudioAlignment {
     ): Placement {
         val offset =
             videoStart
-                ?.takeIf { track.demoEnd > 0 && videoLength > 0 }
-                ?.let { track.offset + track.length - (track.demoEnd - it) + audioOffset }
+                ?.takeIf { videoLength > 0 }
+                ?.let { track.offset + (it - track.demoStart) + audioOffset }
         return when {
             offset == null || offset < 0 -> Placement(track.offset, track.length)
             else -> Placement(offset, videoLength)

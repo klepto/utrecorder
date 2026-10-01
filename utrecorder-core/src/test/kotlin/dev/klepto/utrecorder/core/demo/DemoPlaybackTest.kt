@@ -58,12 +58,13 @@ class DemoPlaybackTest :
             systemDirectory.listDirectoryEntries().map { it.name } shouldBe listOf(gameExecutable)
         }
 
-        test("process plays the demo windowed on its own clock before the exec lines the configuration adds") {
+        test("process opens the Entry map and plays the demo windowed on its own clock before the exec lines the configuration adds") {
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
             val viewport = DemoPlaybackViewport(width = 64, height = 48, frameRateLimit = 60.0)
 
             val process = playback.process("capture", description, viewport) { exec += "HideMessages" }
 
+            process.map shouldBe "Entry"
             process.exec shouldBe listOf("demoplay staged-demo?timebased", "HideMessages")
             process.windowed shouldBe true
             process.baseGameIni shouldBe DemoPlaybackResources.gameIni

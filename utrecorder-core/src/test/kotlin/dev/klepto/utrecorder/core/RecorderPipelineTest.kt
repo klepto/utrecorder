@@ -115,7 +115,7 @@ class RecorderPipelineTest :
                 file = Path.of(file),
                 offset = 2.0,
                 length = 12.0,
-                demoEnd = 300.75,
+                demoStart = 288.75,
             )
 
         fun pipeline(

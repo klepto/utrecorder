@@ -7,6 +7,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.core.capture.withProgressTimeout
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.core.demo.DemoPlaybackHooks
@@ -66,15 +67,15 @@ class FfmpegVideoCapture(
         }
 
     /**
-     * Returns the listener that publishes the frames encoded to [encoded], and reports them out of the frames
-     * [description]'s demo makes to [onProgress].
+     * Returns the listener that publishes the frames encoded to [encoded], and reports them out of the frames the run
+     * of [description] makes to [onProgress].
      */
     private fun frameProgress(
         description: DemoPlaybackConfig,
         encoded: MutableStateFlow<Long>,
         onProgress: ProgressListener<Unit>,
     ): (MediaProgress) -> Unit {
-        val frames = description.demoDuration.toDouble(DurationUnit.SECONDS) * config.fps
+        val frames = description.runDuration().toDouble(DurationUnit.SECONDS) * config.fps
         return {
             encoded.value = it.frames
             onProgress(Progress(it.frames / frames))
@@ -169,8 +170,9 @@ class FfmpegVideoCapture(
         }
 
     /**
-     * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo: the
-     * console's trim command `DemoFrames <render fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
+     * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo:
+     * `SeekStart`, which skips the demo ahead to just before the run start once the ticks settle, the console's trim
+     * command `DemoFrames <render fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
      * timer reset nearest the run start, `TimerStop <run stop>`, which ends the run one second after the Bunny Track
      * timer stops, `HideMessages`, which keeps chat and progress messages off the recorded HUD,
      * and `SmoothRecorder`, which smooths the movement and view of the player who recorded the demo, when
@@ -179,6 +181,7 @@ class FfmpegVideoCapture(
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
+            this += "SeekStart"
             this += "DemoFrames %.6f".format(Locale.ROOT, config.renderFps().toDouble())
             description.runStart?.let {
                 this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))

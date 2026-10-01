@@ -34,6 +34,7 @@ class RecorderConfigTest :
                     "utrecorder.record.sound_width" to "32",
                     "utrecorder.record.sound_height" to "48",
                     "utrecorder.record.sound_fps" to "30",
+                    "utrecorder.record.sound_idle_timeout" to "PT3M",
                     "utrecorder.record.linux_mesa_threads" to "4",
                     "utrecorder.record.linux_mesa_vector_width" to "128",
                     "utrecorder.record.linux_mesa_glthread" to "true",
@@ -74,6 +75,7 @@ class RecorderConfigTest :
                 width shouldBe 32
                 height shouldBe 48
                 fps shouldBe 30
+                idleTimeout shouldBe 3.minutes
             }
         }
 
@@ -110,7 +112,8 @@ class RecorderConfigTest :
                 render shouldBe true
                 width shouldBe 64
                 height shouldBe 64
-                fps shouldBe 60
+                fps shouldBe 0
+                idleTimeout shouldBe 2.minutes
             }
         }
     })

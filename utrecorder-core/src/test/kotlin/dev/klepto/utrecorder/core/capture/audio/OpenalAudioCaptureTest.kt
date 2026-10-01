@@ -40,7 +40,8 @@ class OpenalAudioCaptureTest :
         val config = AudioCaptureConfig(ConfigReader.EMPTY)
         val log =
             listOf(
-                "ScriptLog: UTRecorder: mark start 2000 1 1 0 0 6 0 4567 12.5",
+                "ScriptLog: UTRecorder: mark start 1999 12 31 23 59 50 0 4000 0.5",
+                "ScriptLog: UTRecorder: mark spawn 2000 1 1 0 0 6 0 4567 12.5",
                 "ScriptLog: UTRecorder: mark end 2000 1 1 0 5 46 0 98765 300.75",
             )
 
@@ -131,23 +132,23 @@ class OpenalAudioCaptureTest :
             }
         }
 
-        test("execScript rewinds the demo to the start") {
-            capture().execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe listOf("RewindStart")
+        test("execScript rewinds the demo to the start and arms the hooks at the spawn") {
+            capture().execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe listOf("SeekStart", "DemoFrames 86.132813")
         }
 
         test("execScript disables rendering when the config turns the audio capture's rendering off") {
             capture(AudioCaptureConfig(ConfigReader.EMPTY, render = false))
-                .execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe listOf("RewindStart", "DisableRendering")
+                .execScript(DemoPlaybackConfig.of("staged-demo", Duration.ZERO)) shouldBe listOf("SeekStart", "DemoFrames 86.132813", "DisableRendering")
         }
 
         test("execScript passes the demo times the run starts and stops at") {
             val description =
                 DemoPlaybackConfig.of("staged-demo", Duration.ZERO, runStart = 10.120962.seconds, runStop = 64.572962.seconds)
 
-            capture().execScript(description) shouldBe listOf("RewindStart", "TimerReset 10.120962", "TimerStop 64.572962")
+            capture().execScript(description) shouldBe listOf("SeekStart", "DemoFrames 86.132813", "TimerReset 10.120962", "TimerStop 64.572962")
         }
 
-        test("track starts 6 seconds into the wav and runs for the 5 minutes 40 seconds between the marks") {
+        test("track starts 6 seconds into the wav at the spawn mark and runs for the 5 minutes 40 seconds to the end mark") {
             val wav = writeWav(home / "audio.wav")
 
             capture().track(wav, log, 400.0) shouldBe
@@ -155,7 +156,7 @@ class OpenalAudioCaptureTest :
                     file = wav,
                     offset = 6.0,
                     length = 340.0,
-                    demoEnd = 300.75,
+                    demoStart = 12.5,
                 )
         }
 
@@ -173,11 +174,20 @@ class OpenalAudioCaptureTest :
             failure.message shouldContain "end mark"
         }
 
-        test("track fails when the end mark lies no later in the demo than the start mark") {
+        test("track fails naming the missing mark when the log holds no spawn mark") {
+            val wav = writeWav(home / "audio.wav")
+
+            val failure = shouldThrow<IllegalStateException> { capture().track(wav, log.filterNot { "spawn" in it }, 400.0) }
+
+            failure.message shouldContain "spawn mark"
+        }
+
+        test("track fails when the end mark lies no later in the demo than the spawn mark") {
             val wav = writeWav(home / "audio.wav")
             val invertedLog =
                 listOf(
-                    "ScriptLog: UTRecorder: mark start 2000 1 1 0 0 6 0 4567 12.5",
+                    "ScriptLog: UTRecorder: mark start 1999 12 31 23 59 50 0 4000 0.5",
+                    "ScriptLog: UTRecorder: mark spawn 2000 1 1 0 0 6 0 4567 12.5",
                     "ScriptLog: UTRecorder: mark end 2000 1 1 0 5 46 0 98765 10.0",
                 )
 
@@ -198,7 +208,8 @@ class OpenalAudioCaptureTest :
             val wav = writeWav(home / "audio.wav")
             val wallClockLog =
                 listOf(
-                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 0 4567 12.5",
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 0 0 4000 0.5",
+                    "ScriptLog: UTRecorder: mark spawn 2026 9 13 10 30 5 0 4567 12.5",
                     "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 45 0 98765 300.75",
                 )
 
