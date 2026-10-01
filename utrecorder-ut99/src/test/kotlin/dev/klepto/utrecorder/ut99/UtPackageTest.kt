@@ -40,7 +40,7 @@ class UtPackageTest :
             val required = UtPackage.named("Engine", guid)
 
             required.name shouldBe "Engine"
-            required.guid shouldBe guid
+            required.guid() shouldBe guid
             required.path shouldBe null
         }
 
@@ -56,7 +56,7 @@ class UtPackageTest :
         test("read returns a package carrying the GUID its header holds") {
             val path = writePackage(root / "read-guid" / "Engine.u")
 
-            UtPackage.read(path).guid shouldBe guid
+            UtPackage.read(path).guid() shouldBe guid
         }
 
         test("read returns the last GUID of the heritage table for a version before 68, even past the first 1024 bytes") {
@@ -69,7 +69,7 @@ class UtPackageTest :
             guidHeaderBytes.forEachIndexed { index, value -> bytes[2064 + index] = value.toByte() }
             path.writeBytes(bytes)
 
-            UtPackage.read(path).guid shouldBe guid
+            UtPackage.read(path).guid() shouldBe guid
         }
 
         test("read returns an empty GUID for a package whose heritage table lies past the end of the file") {
@@ -80,7 +80,7 @@ class UtPackageTest :
             listOf(0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00).forEachIndexed { index, value -> bytes[36 + index] = value.toByte() }
             path.writeBytes(bytes)
 
-            UtPackage.read(path).guid shouldBe ""
+            UtPackage.read(path).guid() shouldBe ""
         }
 
         test("read returns an empty GUID for a file that is not a package") {
@@ -88,10 +88,10 @@ class UtPackageTest :
             path.createParentDirectories()
             path.writeText("not a package")
 
-            UtPackage.read(path).guid shouldBe ""
+            UtPackage.read(path).guid() shouldBe ""
         }
 
-        test("read does not read the file until guid is accessed") {
+        test("read does not read the file until guid is called") {
             val path = root / "read-lazy" / "Engine.u"
 
             val held = UtPackage.read(path)
@@ -105,7 +105,7 @@ class UtPackageTest :
             val held = UtPackage.read(path)
             path.deleteExisting()
 
-            shouldThrow<IOException> { held.guid }
+            shouldThrow<IOException> { held.guid() }
         }
 
         test("satisfies is true when the names and the GUIDs are equal ignoring case") {
@@ -129,17 +129,17 @@ class UtPackageTest :
             held.satisfies(UtPackage.named("Engine", "")) shouldBe true
 
             writePackage(path, otherGuidHeaderBytes)
-            held.guid shouldBe otherGuid
+            held.guid() shouldBe otherGuid
         }
 
         test("packages of the same name and path are equal and share a hash code even when their GUIDs differ") {
             val path = writePackage(root / "equals-guid" / "Engine.u")
             val first = UtPackage.read(path)
-            first.guid shouldBe guid
+            first.guid() shouldBe guid
 
             writePackage(path, otherGuidHeaderBytes)
             val second = UtPackage.read(path)
-            second.guid shouldBe otherGuid
+            second.guid() shouldBe otherGuid
 
             first shouldBe second
             first.hashCode() shouldBe second.hashCode()
@@ -154,7 +154,7 @@ class UtPackageTest :
             first.hashCode() shouldBe second.hashCode()
 
             writePackage(path, otherGuidHeaderBytes)
-            first.guid shouldBe otherGuid
+            first.guid() shouldBe otherGuid
         }
 
         test("packages of the same name at different paths are not equal") {
@@ -164,10 +164,10 @@ class UtPackageTest :
             first shouldNotBe second
         }
 
-        test("toString names the package, its shortened GUID and its file") {
+        test("toString names a held package by its file, and a named package by its shortened GUID") {
             val path = writePackage(root / "to-string" / "Engine.u")
 
-            UtPackage.read(path).toString() shouldBe "Engine[12345678] at $path"
+            UtPackage.read(path).toString() shouldBe "Engine at $path"
             UtPackage.named("Engine", guid).toString() shouldBe "Engine[12345678]"
         }
 

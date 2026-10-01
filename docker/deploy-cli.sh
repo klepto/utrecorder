@@ -25,7 +25,8 @@ docker rm --force "$container" >/dev/null 2>&1 || true
 docker compose run -T --name "$container" --no-deps cli "$@" 2>&1 >out/cli.out | tee out/cli.log || true
 status=$(docker inspect --format '{{.State.ExitCode}}' "$container")
 if [ "$status" -eq 0 ]; then
-    # The CLI prints the path of the mp4 as the last line of its standard out.
+    # The CLI prints only the path of the mp4 on its standard out, but Xvfb, started by the entrypoint, shares that
+    # stream, so the path is taken from the last line rather than from the whole file.
     mp4=$(tail -n 1 out/cli.out)
     docker cp "$container:$mp4" out/
     echo "out/$(basename "$mp4")"

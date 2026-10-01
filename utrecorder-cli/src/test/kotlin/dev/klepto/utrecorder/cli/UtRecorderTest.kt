@@ -1,6 +1,9 @@
 package dev.klepto.utrecorder.cli
 
 import com.sun.net.httpserver.HttpServer
+import dev.klepto.utrecorder.cli.UtRecorder.Invocation.Help
+import dev.klepto.utrecorder.cli.UtRecorder.Invocation.Invalid
+import dev.klepto.utrecorder.cli.UtRecorder.Invocation.Record
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.Progress
@@ -9,7 +12,6 @@ import dev.klepto.utrecorder.core.RecorderStage.Muxing
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldStartWith
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -46,6 +48,31 @@ class UtRecorderTest :
             }.message shouldBe "Demo URL http://api.utbt.net/demos/cap%zz.dem holds a malformed percent escape"
         }
 
+        test("parseArguments takes --help or -h anywhere as a request for the usage") {
+            UtRecorder.parseArguments(listOf("--help")) shouldBe Help
+            UtRecorder.parseArguments(listOf("-h")) shouldBe Help
+            UtRecorder.parseArguments(listOf("http://api.utbt.net/demos/x.dem", "--help", "--bogus")) shouldBe Help
+        }
+
+        test("parseArguments takes a single argument as the demo URL") {
+            UtRecorder.parseArguments(listOf("http://api.utbt.net/demos/x.dem")) shouldBe
+                Record("http://api.utbt.net/demos/x.dem")
+        }
+
+        test("parseArguments rejects no argument, more than one argument and an unknown option") {
+            UtRecorder.parseArguments(emptyList()) shouldBe Invalid("No demo URL given")
+            UtRecorder.parseArguments(listOf("http://a/demos/x.dem", "http://a/demos/y.dem")) shouldBe
+                Invalid("Expected one demo URL, got 2 arguments")
+            UtRecorder.parseArguments(listOf("http://a/demos/x.dem", "--bogus")) shouldBe
+                Invalid("Unknown option --bogus")
+            UtRecorder.parseArguments(listOf("-")) shouldBe Invalid("Unknown option -")
+        }
+
+        test("parseArguments rejects a URL that holds a malformed percent escape") {
+            UtRecorder.parseArguments(listOf("http://api.utbt.net/demos/cap%zz.dem")) shouldBe
+                Invalid("Demo URL http://api.utbt.net/demos/cap%zz.dem holds a malformed percent escape")
+        }
+
         test("progressLine prints the stage and the whole percent done") {
             UtRecorder.progressLine(Progress(Capturing, 0.426)) shouldBe "Capturing 42%"
             UtRecorder.progressLine(Progress(Muxing, 1.0)) shouldBe "Muxing 100%"
@@ -55,7 +82,7 @@ class UtRecorderTest :
             shouldThrow<Exception> { UtRecorder.main("http://127.0.0.1:1/demos/never.dem", directories) }
         }
 
-        test("main keeps the recording's workspace when it is cancelled during the fetch") {
+        test("main leaves no workspace behind when it is cancelled during the fetch") {
             directories.workspace.toFile().deleteRecursively()
             val requestReceived = CompletableDeferred<Unit>()
             val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
@@ -74,11 +101,7 @@ class UtRecorderTest :
                     job.cancelAndJoin()
                 }
 
-                directories.workspace
-                    .listDirectoryEntries()
-                    .single()
-                    .fileName
-                    .toString() shouldStartWith "record-"
+                directories.workspace.listDirectoryEntries() shouldBe emptyList()
             } finally {
                 server.stop(0)
             }

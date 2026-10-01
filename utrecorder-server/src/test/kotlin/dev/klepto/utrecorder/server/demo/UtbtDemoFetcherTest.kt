@@ -1,9 +1,11 @@
 package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -19,7 +21,8 @@ import kotlin.time.Instant
 
 class UtbtDemoFetcherTest :
     FunSpec({
-        val config = ServerConfig(ConfigReader.EMPTY)
+        val directories = DirectoriesConfig(ConfigReader.EMPTY, home = tempdir().toPath())
+        val config = ServerConfig(ConfigReader.EMPTY, directories)
 
         fun id(minute: Int): String = "00000000-0000-4000-8000-0000000000%02d".format(minute)
 

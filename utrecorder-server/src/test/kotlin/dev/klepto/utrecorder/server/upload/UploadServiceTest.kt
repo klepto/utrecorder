@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server.upload
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
@@ -47,6 +48,7 @@ import kotlin.time.TimeSource
 class UploadServiceTest :
     FunSpec({
         val root = tempdir().toPath()
+        val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home"))
         val now = AtomicReference(Instant.parse("2026-09-27T08:00:00Z"))
         val clock =
             object : Clock {
@@ -121,6 +123,7 @@ class UploadServiceTest :
             val config =
                 ServerConfig(
                     ConfigReader.EMPTY,
+                    directories,
                     recordings = recordings,
                     uploadInterval = 20.milliseconds,
                     dailyUploads = dailyUploads,

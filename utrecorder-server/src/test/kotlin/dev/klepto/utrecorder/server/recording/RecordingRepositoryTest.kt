@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
@@ -11,6 +12,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -26,6 +28,8 @@ import kotlin.time.Instant
 
 class RecordingRepositoryTest :
     FunSpec({
+        val config = ServerConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = tempdir().toPath()))
+
         fun demo(
             capId: String,
             minute: Int,
@@ -52,7 +56,7 @@ class RecordingRepositoryTest :
             block: suspend (RecordingRepository) -> R,
         ): R =
             SqliteDocumentStore.open(file) {
-                block(RecordingRepository(it, DemoRepository(it), ServerConfig(ConfigReader.EMPTY), clock))
+                block(RecordingRepository(it, DemoRepository(it), config, clock))
             }
 
         test("stores a pending recording of an added demo and skips a demo already stored") {
@@ -69,13 +73,13 @@ class RecordingRepositoryTest :
         test("stores the demo of an added recording in the demo repository and reads it from there once reopened") {
             val file = file()
             SqliteDocumentStore.open(file) { store ->
-                RecordingRepository(store, DemoRepository(store), ServerConfig(ConfigReader.EMPTY), clock) += listOf(demo("cap", 0))
+                RecordingRepository(store, DemoRepository(store), config, clock) += listOf(demo("cap", 0))
             }
 
             val stored =
                 SqliteDocumentStore.open(file) { store ->
                     val demos = DemoRepository(store)
-                    demos.all() to RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)["cap"]?.demo
+                    demos.all() to RecordingRepository(store, demos, config, clock)["cap"]?.demo
                 }
             stored shouldBe (listOf(demo("cap", 0)) to demo("cap", 0))
         }

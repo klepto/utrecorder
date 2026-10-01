@@ -12,7 +12,7 @@ const RECORDINGS_INTERVAL = 30_000;
 /** The number of recordings a page of the recordings list holds. */
 const RECORDINGS_PAGE_SIZE = 20;
 
-/** The key of every query. Each recordings key starts with `recordings`, so invalidating it reaches all of them. */
+/** The key of every query. Each recordings key starts with `recordings`. */
 const QUERY_KEYS = {
   jobs: ["jobs"],
   queue: ["queue"],
@@ -75,8 +75,8 @@ export interface RecordingPages {
 /**
  * Pages through the finished recordings, `RECORDINGS_PAGE_SIZE` at a time. Each page asks for one recording more
  * than it shows, and another page follows only when that recording came back. The next page starts at the number of
- * recordings shown so far. `query.data` holds every shown recording, skipping one whose `capId` is already present,
- * since a recording that lands meanwhile shifts every offset. It is `undefined` until the first page arrives.
+ * recordings shown so far. `query.data` holds every shown recording, skipping one whose `capId` is already present.
+ * It is `undefined` until the first page arrives.
  */
 export const useRecordingPages = (): RecordingPages => {
   const query = useInfiniteQuery({

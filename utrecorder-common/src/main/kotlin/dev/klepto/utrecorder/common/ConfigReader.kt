@@ -6,13 +6,23 @@ import kotlin.time.Duration
  * Source of configuration values, each looked up by a dotted key such as `home` or `record.fps`.
  *
  * Use [SystemConfigReader] to read values from system properties and environment variables, or [EMPTY] for a reader
- * that configures no key.
+ * that configures no key and holds no system property or environment variable.
  */
 fun interface ConfigReader {
     /**
      * Returns the value configured for [key], or `null` if none is configured.
      */
     operator fun get(key: String): String?
+
+    /**
+     * Returns the system property [name], without any prefix, or `null` if this reader holds none of that name.
+     */
+    fun systemProperty(name: String): String? = null
+
+    /**
+     * Returns the environment variable [name], without any prefix, or `null` if this reader holds none of that name.
+     */
+    fun environmentVariable(name: String): String? = null
 
     /**
      * Returns the value configured for [key], converted by [mapper]. If none is configured, returns `null` instead.
@@ -102,15 +112,9 @@ class SystemConfigReader(
         systemProperty("$prefix.$key")
             ?: environmentVariable("${prefix.uppercase()}_${key.uppercase().replace('.', '_')}")
 
-    /**
-     * Returns the system property [name], without any prefix, or `null` if it is not set or empty.
-     */
-    fun systemProperty(name: String): String? = properties(name)?.takeIf { it.isNotEmpty() }
+    override fun systemProperty(name: String): String? = properties(name)?.takeIf { it.isNotEmpty() }
 
-    /**
-     * Returns the environment variable [name], without any prefix, or `null` if it is not set or empty.
-     */
-    fun environmentVariable(name: String): String? = environment(name)?.takeIf { it.isNotEmpty() }
+    override fun environmentVariable(name: String): String? = environment(name)?.takeIf { it.isNotEmpty() }
 
     companion object {
         /**

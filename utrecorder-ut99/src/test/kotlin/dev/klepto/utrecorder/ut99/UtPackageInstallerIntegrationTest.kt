@@ -13,17 +13,19 @@ import kotlin.io.path.exists
  * package neither the installation nor an empty packages directory holds, and that [UtPackageInstaller.uninstall]
  * deletes it again.
  *
- * Runs only under `./gradlew :utrecorder-ut99:integrationTest`. The installation is downloaded on the first run.
+ * Runs only under `./gradlew :utrecorder-ut99:integrationTest`. The installation is built in a temporary home on every
+ * run. Its downloads go to the cache directory that the `utrecorder.test.cache` system property names, so a later run
+ * reuses them. Without the property, they go to the cache directory of the temporary home.
  */
 class UtPackageInstallerIntegrationTest :
     FunSpec({
         val packageName = "swJumpPad"
         val packageGuid = "5AC8779640DFA12A546D2B907A0A7D52"
         val home = createTempDirectory("utrecorder-utpackageinstaller-integration")
-        val defaults = UtConfig()
-        val config = UtConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = home), defaults.gameDirectory)
+        val reader = ConfigReader { mapOf("cache" to System.getProperty("utrecorder.test.cache"))[it] }
+        val config = UtConfig(ConfigReader.EMPTY, DirectoriesConfig(reader, home = home))
 
-        beforeSpec { UtInstaller(defaults).install() }
+        beforeSpec { UtInstaller(config).install() }
         afterSpec { home.toFile().deleteRecursively() }
 
         val installation by lazy { UtInstallation(config.gameDirectory, config) }
@@ -45,7 +47,7 @@ class UtPackageInstallerIntegrationTest :
                     installer.isInstalled() shouldBe true
                     packagesDirectoryFile.exists() shouldBe false
                     installed.exists() shouldBe true
-                    UtPackage.read(installed).guid shouldBe packageGuid
+                    UtPackage.read(installed).guid() shouldBe packageGuid
                 } finally {
                     installer.uninstall()
                 }

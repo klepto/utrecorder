@@ -22,7 +22,7 @@ import kotlin.io.path.name
  *
  * [uninstall] deletes only the maps this installer wrote, and leaves the ones the maps directory already held.
  *
- * @property installation the installation whose maps directory holds the archives.
+ * @property installation The installation whose maps directory holds the archives.
  */
 class UtMapInstaller(
     private val installation: UtInstallation,

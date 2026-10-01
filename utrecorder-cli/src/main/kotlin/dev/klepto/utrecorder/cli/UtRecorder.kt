@@ -31,9 +31,18 @@ import kotlin.time.Duration.Companion.seconds
  */
 object UtRecorder {
     /**
-     * The status the CLI exits with when no URL is given.
+     * The status the CLI exits with when its arguments are invalid.
      */
-    private const val EXIT_FAILURE = 1
+    private const val EXIT_USAGE = 2
+
+    /**
+     * The usage text, printed for `--help` and after an invalid argument.
+     */
+    private const val USAGE =
+        "Usage: utrecorder-cli [-h | --help] <demo-url>\n" +
+            "Records the Unreal Tournament demo that <demo-url> names to an mp4 and prints the path of the mp4 on " +
+            "standard out; the log goes to standard error. -h and --help print this text. Exits with status 0 when " +
+            "the recording succeeds, 1 when it fails and 2 when the arguments are invalid."
 
     /**
      * The name of the mp4 when the URL names no file.
@@ -48,11 +57,66 @@ object UtRecorder {
     private val log = logger<UtRecorder>()
 
     /**
-     * Returns the name of the mp4 recorded from the demo that [url] names, without its extension.
+     * What the command-line arguments ask the CLI to do.
+     */
+    sealed interface Invocation {
+        /**
+         * A request to print the usage.
+         */
+        data object Help : Invocation
+
+        /**
+         * A request to record the demo that [url] names.
+         *
+         * @property url The demo URL.
+         */
+        data class Record(
+            val url: String,
+        ) : Invocation
+
+        /**
+         * Arguments the CLI rejects.
+         *
+         * @property message Why the arguments are rejected.
+         */
+        data class Invalid(
+            val message: String,
+        ) : Invocation
+    }
+
+    /**
+     * Returns what [arguments] ask the CLI to do.
      *
-     * The name joins every segment of the path of [url] after the first, without the query string. It is decoded,
-     * lowercased, stripped of a `.dem` extension and stripped of every character other than a letter, a digit, a dot,
-     * a hyphen or an underscore. If nothing is left, returns `demo` instead.
+     * `--help` or `-h` anywhere among [arguments] asks for the usage. Otherwise, [arguments] must be a single demo URL.
+     * Any other argument that starts with `-` is an unknown option. If [arguments] holds an unknown option, no
+     * argument, more than one argument or a URL that [outputName] rejects, returns [Invocation.Invalid] instead.
+     */
+    fun parseArguments(arguments: List<String>): Invocation {
+        val option = arguments.firstOrNull { it.startsWith('-') }
+        return when {
+            arguments.any { it == "--help" || it == "-h" } -> Invocation.Help
+            option != null -> Invocation.Invalid("Unknown option $option")
+            arguments.isEmpty() -> Invocation.Invalid("No demo URL given")
+            arguments.size > 1 -> Invocation.Invalid("Expected one demo URL, got ${arguments.size} arguments")
+            else -> parseUrl(arguments.single())
+        }
+    }
+
+    /**
+     * Returns a request to record [url]. If [outputName] rejects [url], returns [Invocation.Invalid] instead.
+     */
+    private fun parseUrl(url: String): Invocation =
+        runCatching { outputName(url) }
+            .fold({ Invocation.Record(url) }, { Invocation.Invalid(it.message.orEmpty()) })
+
+    /**
+     * Returns the name of the mp4 recorded from the demo that [url] names, without the `.mp4` extension.
+     *
+     * The name starts from the part of [url] after the scheme, the host and the first path segment, without the query
+     * string. That part is URL-decoded and lowercased, and a trailing `.dem` is removed. Then every character other than
+     * a letter, a digit, a dot, a hyphen or an underscore is removed, the slashes between segments included. If nothing
+     * is left, returns `demo` instead. A [url] without a scheme is read the same way, its first segment taken as the
+     * host.
      *
      * @throws IllegalArgumentException If [url] holds a malformed percent escape.
      */
@@ -89,12 +153,16 @@ object UtRecorder {
     /**
      * Records the demo that [url] names and prints the path of the mp4 on standard out.
      *
-     * The demo is downloaded into the demo cache of [directories] if the cache does not hold it. The progress of the
-     * recording is logged when a stage starts, every 5 seconds while the stage runs, and once more when the stage
-     * finishes. Each stage and whole percent is logged once.
+     * The mp4 is named by [outputName]. The demo is downloaded into the workspace of the recording under [directories],
+     * and is kept there with the mp4. Standard out receives only the path of the mp4, once the recording is done. The
+     * progress of the recording is logged when a stage starts, every 5 seconds while the stage runs, and once more when
+     * the stage finishes. Each stage and whole percent is logged once.
      *
-     * @throws IllegalArgumentException If [url] holds a malformed percent escape.
-     * @throws IllegalStateException If the demo cannot be fetched, resolved or recorded.
+     * @throws IllegalArgumentException If [url] holds a malformed percent escape, or if [url] names no demo file.
+     * @throws java.io.IOException If the demo cannot be downloaded.
+     * @throws IllegalStateException If the demo cannot be resolved, if a capture fails the recording, or if the length
+     * of the mp4 does not match the run time the demo reports.
+     * @throws dev.klepto.utrecorder.ut99.UtPackageException If no source serves one of the packages the demo names.
      */
     suspend fun main(
         url: String,
@@ -148,23 +216,33 @@ object UtRecorder {
     }
 
     /**
-     * Records the demo that the first of [arguments] names and prints the path of the mp4 on standard out.
+     * Records the demo that [arguments] name and prints the path of the mp4 on standard out.
      *
-     * If [arguments] is empty, prints the usage on standard error and exits with status 1 instead. If the URL holds a
-     * malformed percent escape, prints that on standard error and exits with status 1 instead. When the JVM shuts down
-     * during a recording, the recording is cancelled, the shutdown waits for it to finish, and the cancellation is
-     * logged.
+     * [arguments] are read by [parseArguments]. If they ask for the usage, prints it on standard out and returns
+     * instead. If they are invalid, prints why and the usage on standard error and exits with status 2 instead. If the
+     * recording fails, the exception is thrown out of this function, so the JVM prints it on standard error and exits
+     * with status 1. When the JVM shuts down during a recording, the recording is cancelled, the shutdown waits for it
+     * to finish, and the cancellation is logged.
      */
     @JvmStatic
     fun main(arguments: Array<String>) {
-        if (arguments.isEmpty()) {
-            System.err.println("Usage: utrecorder-cli <demo-url>")
-            exitProcess(EXIT_FAILURE)
-        }
-        runCatching { outputName(arguments.first()) }.onFailure {
-            System.err.println(it.message)
-            exitProcess(EXIT_FAILURE)
-        }
+        val url =
+            when (val invocation = parseArguments(arguments.asList())) {
+                Invocation.Help -> {
+                    println(USAGE)
+                    return
+                }
+
+                is Invocation.Invalid -> {
+                    System.err.println(invocation.message)
+                    System.err.println(USAGE)
+                    exitProcess(EXIT_USAGE)
+                }
+
+                is Invocation.Record -> {
+                    invocation.url
+                }
+            }
         val job = Job()
         val mainThread = Thread.currentThread()
         Runtime.getRuntime().addShutdownHook(
@@ -175,7 +253,7 @@ object UtRecorder {
         )
         try {
             runBlocking(job) {
-                main(arguments.first())
+                main(url)
             }
         } catch (e: CancellationException) {
             log.info { "Cancelled the recording: ${e.message}" }

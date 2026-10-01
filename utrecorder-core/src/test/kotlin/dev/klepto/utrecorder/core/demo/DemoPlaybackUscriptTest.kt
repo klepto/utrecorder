@@ -9,10 +9,13 @@ import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import java.nio.file.attribute.FileTime
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
+import kotlin.io.path.getLastModifiedTime
 import kotlin.io.path.readBytes
+import kotlin.io.path.setLastModifiedTime
 import kotlin.io.path.writeText
 
 class DemoPlaybackUscriptTest :
@@ -45,5 +48,14 @@ class DemoPlaybackUscriptTest :
             val written = recorderPackage.install()
 
             written.single().readBytes() shouldBe EmbeddedArtifacts("unrealscript").read("UTRecorder.u")
+        }
+
+        test("install leaves a UTRecorder.u that already holds the package untouched") {
+            recorderPackage.install()
+            installation.systemDirectory["UTRecorder.u"].setLastModifiedTime(FileTime.fromMillis(0))
+
+            recorderPackage.install()
+
+            installation.systemDirectory["UTRecorder.u"].getLastModifiedTime() shouldBe FileTime.fromMillis(0)
         }
     })

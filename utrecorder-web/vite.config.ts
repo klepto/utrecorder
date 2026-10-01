@@ -24,9 +24,9 @@ export default defineConfig(({ mode }) => ({
   plugins: [react(), removeMockServiceWorker()],
   define: {
     __APP_VERSION__: JSON.stringify(process.env.UTRECORDER_VERSION ?? "dev"),
-    __APP_COMMIT__: JSON.stringify(process.env.UTRECORDER_COMMIT ?? "unknown"),
   },
   server: {
+    host: true,
     port: 5173,
     proxy: mode === "server" ? { "/api": serverUrl, "/mp4": serverUrl, "/view": serverUrl } : undefined,
   },

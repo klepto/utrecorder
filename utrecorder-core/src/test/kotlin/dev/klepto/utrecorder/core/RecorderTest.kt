@@ -18,8 +18,9 @@ class RecorderTest :
     FunSpec({
         val home = createTempDirectory("utrecorder-recorder-test")
         val installation = home / "install"
-        val config = RecorderConfig(ConfigReader.EMPTY, UtConfig(ConfigReader.EMPTY, gameDirectory = installation))
-        val recorder = Recorder(config, DirectoriesConfig(ConfigReader.EMPTY, home = home / "home"))
+        val directories = DirectoriesConfig(ConfigReader.EMPTY, home = home / "home")
+        val config = RecorderConfig(ConfigReader.EMPTY, UtConfig(ConfigReader.EMPTY, directories, installation))
+        val recorder = Recorder(config, directories)
 
         beforeSpec {
             (installation / "System").createDirectories()

@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.core.RecorderStage
@@ -54,6 +55,7 @@ import kotlin.time.TimeSource
 class RecordingServiceTest :
     FunSpec({
         val root = tempdir().toPath()
+        val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home"))
 
         fun demo(
             capId: String,
@@ -81,6 +83,7 @@ class RecordingServiceTest :
         ): ServerConfig =
             ServerConfig(
                 ConfigReader.EMPTY,
+                directories,
                 recordings = recordings,
                 recordingMaxAttempts = maxAttempts,
                 recordingCooldown = cooldown,
@@ -111,7 +114,7 @@ class RecordingServiceTest :
         ) {
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demoRepository = DemoRepository(store)
-                val repository = RecordingRepository(store, demoRepository, ServerConfig(ConfigReader.EMPTY), clock)
+                val repository = RecordingRepository(store, demoRepository, ServerConfig(ConfigReader.EMPTY, directories), clock)
                 demoRepository += demos
                 coroutineScope {
                     val job = launch { service(demoRepository, repository).start() }
@@ -399,7 +402,7 @@ class RecordingServiceTest :
             val gate = CompletableDeferred<Unit>()
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
                 val recorder = recorder { demo, _ -> done(demo).also { gate.await() } }
                 demos += listOf(demo("busy", 3), demo("slower", 0).copy(userId = "1", capTime = 12.seconds))
                 coroutineScope {
@@ -418,7 +421,7 @@ class RecordingServiceTest :
             val recordings = createTempDirectory(root, "recordings")
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
                 repository +=
                     listOf(
                         demo("recorded", 0).copy(userId = "1", capTime = 12.seconds),
@@ -456,7 +459,7 @@ class RecordingServiceTest :
             val gate = CompletableDeferred<Unit>()
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
                 repository +=
                     listOf(
                         demo("beaten-by-pending", 0).copy(userId = "1", capTime = 12.seconds),
@@ -498,7 +501,7 @@ class RecordingServiceTest :
             val gate = CompletableDeferred<Unit>()
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
                 val record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult = { demo, _ ->
                     if (demo.capId == "slower") gate.await()
                     done(demo)
@@ -527,7 +530,7 @@ class RecordingServiceTest :
             val recorded = CopyOnWriteArrayList<String>()
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
                 repository += listOf(demo("recording", 0))
                 repository.take()
                 repository += listOf(demo("failed", 1), demo("recorded", 2), demo("unresolvable", 3))
@@ -549,7 +552,7 @@ class RecordingServiceTest :
                     val demos = DemoRepository(store)
                     RecordingService(
                         demos,
-                        RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY), clock),
+                        RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock),
                         emptyList(),
                         config(root),
                     )

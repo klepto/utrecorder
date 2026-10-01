@@ -154,6 +154,9 @@ abstract class CompileNativeTask : DefaultTask() {
     /**
      * Returns the command line that compiles [sourceFiles] into [fileName] with the given [toolchain]. Every path is
      * absolute except the output, which is relative because the compiler runs in the work directory.
+     *
+     * A shared library links `dl` with [GCC], and `ws2_32` with [MINGW] and [MSVC].
+     * An executable links no extra library.
      */
     private fun command(
         toolchain: NativeToolchain,
@@ -208,7 +211,7 @@ abstract class CompileNativeTask : DefaultTask() {
             val sources = paths.joinToString(" ") { "\"$it\"" }
             val compile =
                 when {
-                    shared -> "cl /nologo /O2 /LD $sources /Fe:\"$fileName\" /link ws2_32.lib gdi32.lib user32.lib"
+                    shared -> "cl /nologo /O2 /LD $sources /Fe:\"$fileName\" /link ws2_32.lib"
                     else -> "cl /nologo /O2 $sources /Fe:\"$fileName\" /link /SUBSYSTEM:CONSOLE /ENTRY:wmainCRTStartup"
                 }
             return "call \"${toolchain.command}\" -arch=x86 -host_arch=x64 -no_logo && $compile"

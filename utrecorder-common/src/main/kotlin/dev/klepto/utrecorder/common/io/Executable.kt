@@ -149,7 +149,8 @@ data class Executable(
  * directly, without going through [Executable.execute], hang forever: nothing ever completes [streamClosed].
  *
  * Closing destroys the process and every process it started, and destroys forcibly any of them still running after
- * [Executable.closeTimeout]. Closing also ends the output stream [pump] reads.
+ * [Executable.closeTimeout]. Closing blocks the calling thread while it waits for them to exit. Closing also ends the
+ * output stream [pump] reads.
  *
  * @property executable The configuration the process was started from.
  * @property process The process this one reads and waits on.
@@ -265,7 +266,7 @@ class ExecutableProcess(
  * while [block] runs.
  *
  * The process is closed when [block] finishes, before this function waits for the pump. The close runs even when the
- * caller is cancelled, and then blocks the cancelling thread for up to [Executable.closeTimeout].
+ * caller is cancelled, and blocks the calling thread for up to [Executable.closeTimeout].
  */
 suspend fun <T> Executable.execute(block: suspend ExecutableProcess.() -> T): T =
     coroutineScope {

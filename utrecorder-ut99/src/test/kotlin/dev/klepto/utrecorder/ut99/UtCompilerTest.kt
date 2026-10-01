@@ -222,7 +222,7 @@ class UtCompilerTest :
         test("throws naming the missing path when the installation holds no compiler executable") {
             val installation = installation("no-compiler", compiler = false)
 
-            val exception = shouldThrow<IllegalStateException> { UtCompiler(installation) }
+            val exception = shouldThrow<IllegalStateException> { UtCompiler(installation, installation.config) }
 
             exception.message shouldContain "${root / "no-compiler" / "System" / compilerName}"
         }

@@ -43,8 +43,8 @@ import kotlin.time.DurationUnit
  * Use the constructor to create one. A capture stages the demo through a [DemoPlayback], extracts the hooks into a
  * workspace of its own, and plays the demo windowed and with sound. The run is killed once its wav has not grown for
  * [AudioCaptureConfig.idleTimeout], however long the whole run takes. The wav is placed by the marks the run logged and
- * moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in the wav out of the demo's duration, read once
- * a second while the run plays. A run that produces no wav, no marks, or marks outside its wav fails with an
+ * moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in the wav out of
+ * [DemoPlaybackConfig.runDuration], read once a second while the run plays. A run that produces no wav, no marks, or marks outside its wav fails with an
  * [IllegalStateException].
  *
  * @property config The audio capture configuration, carrying the sound viewport, its frame rate limit and the idle

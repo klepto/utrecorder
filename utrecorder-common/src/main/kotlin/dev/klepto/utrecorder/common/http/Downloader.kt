@@ -17,6 +17,7 @@ import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.copyAndClose
 import io.ktor.utils.io.streams.asByteWriteChannel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.nio.file.Path
@@ -77,7 +78,7 @@ class Downloader(
                 verifyHash(temporary)
                 temporary.move(outputPath)
             } finally {
-                temporary.deleteCatching()
+                withContext(NonCancellable) { temporary.deleteCatching() }
             }
         }
     }

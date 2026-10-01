@@ -2,7 +2,7 @@ import { MantineProvider } from "@mantine/core";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import type { Demo } from "../api/types";
-import { RecordTime } from "./RecordTime";
+import { CapTime } from "./CapTime";
 
 const demo: Demo = {
   capId: "1",
@@ -18,12 +18,12 @@ const demo: Demo = {
 const renderTime = (value: Demo) => {
   render(
     <MantineProvider forceColorScheme="dark">
-      <RecordTime demo={value} />
+      <CapTime demo={value} />
     </MantineProvider>,
   );
 };
 
-describe("RecordTime", () => {
+describe("CapTime", () => {
   test("shows the cap time after the medal the demo names", () => {
     renderTime({ ...demo, medal: 6 });
     expect(screen.getByRole("img", { name: "World Record" })).toBeInTheDocument();

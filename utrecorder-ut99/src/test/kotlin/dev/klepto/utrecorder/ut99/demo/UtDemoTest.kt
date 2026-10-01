@@ -242,7 +242,7 @@ class UtDemoTest :
                 val packages = UtDemo.read(path).packages
 
                 packages shouldBe expected
-                packages.map { it.guid } shouldBe expected.map { it.guid }
+                packages.map { it.guid() } shouldBe expected.map { it.guid() }
             }
 
             test("read returns the level package as the first package") {
@@ -392,7 +392,7 @@ class UtDemoTest :
                 val packages = UtDemo.read(bytes).packages
 
                 packages shouldBe listOf(UtPackage.named("Weapon", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
-                packages.single().guid shouldBe "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                packages.single().guid() shouldBe "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             }
 
             test("read returns an empty GUID for a package the demo names no GUID for") {
@@ -402,7 +402,7 @@ class UtDemoTest :
                 val packages = UtDemo.read(bytes).packages
 
                 packages shouldBe listOf(UtPackage.named("Weapon", ""))
-                packages.single().guid shouldBe ""
+                packages.single().guid() shouldBe ""
             }
 
             test("read skips a package whose name is not a plain file name and keeps the others") {

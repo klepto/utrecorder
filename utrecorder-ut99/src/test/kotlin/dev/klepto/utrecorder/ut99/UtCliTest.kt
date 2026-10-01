@@ -14,23 +14,24 @@ import kotlin.io.path.writeText
 class UtCliTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utcli-test")
+        val homeReader = ConfigReader { mapOf("home" to "${root / "home"}")[it] }
 
         afterSpec { root.toFile().deleteRecursively() }
 
         context("run") {
             test("returns 1 for an unknown command") {
-                UtCli(listOf("compile", "--install=${root / "unknown"}")).run() shouldBe 1
+                UtCli(listOf("compile", "--install=${root / "unknown"}"), homeReader).run() shouldBe 1
             }
 
             test("returns 1 when the arguments name no command") {
-                UtCli(listOf("--install=${root / "missing"}")).run() shouldBe 1
+                UtCli(listOf("--install=${root / "missing"}"), homeReader).run() shouldBe 1
             }
 
             test("returns 1 for make with no --sources, without provisioning an installation") {
                 val install = root / "no-sources"
                 val arguments = listOf("make", "--output=${root / "out" / "Package.u"}", "--install=$install")
 
-                UtCli(arguments).run() shouldBe 1
+                UtCli(arguments, homeReader).run() shouldBe 1
 
                 install.exists() shouldBe false
             }

@@ -6,7 +6,6 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.FileSystemOperations
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.provider.Property
-import org.gradle.api.services.ServiceReference
 import org.gradle.api.tasks.CacheableTask
 import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
@@ -92,12 +91,6 @@ abstract class CompileUscriptTask : DefaultTask() {
      */
     @get:OutputDirectory
     abstract val logDirectory: DirectoryProperty
-
-    /**
-     * The build service that holds compiles to one at a time.
-     */
-    @get:ServiceReference(UCC_SERVICE)
-    abstract val ucc: Property<UccService>
 
     /**
      * The service the compiler is forked through.

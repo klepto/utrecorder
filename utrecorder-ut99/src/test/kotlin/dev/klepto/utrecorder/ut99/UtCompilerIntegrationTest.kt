@@ -23,12 +23,15 @@ import kotlin.io.path.writeText
  * `-ini=` path, that it resolves a package staged next to `System`, and that it writes the compiled package into
  * `System`.
  *
- * Runs only under `./gradlew :utrecorder-ut99:integrationTest`. The installation is downloaded on the first run.
+ * Runs only under `./gradlew :utrecorder-ut99:integrationTest`. The installation is built in a temporary home on every
+ * run. Its downloads go to the cache directory that the `utrecorder.test.cache` system property names, so a later run
+ * reuses them. Without the property, they go to the cache directory of the temporary home.
  */
 class UtCompilerIntegrationTest :
     FunSpec({
         val root = createTempDirectory("utrecorder-utcompiler-integration")
-        val config = UtConfig()
+        val reader = ConfigReader { mapOf("cache" to System.getProperty("utrecorder.test.cache"))[it] }
+        val config = UtConfig(ConfigReader.EMPTY, DirectoriesConfig(reader, home = root / "home"))
 
         beforeSpec { UtInstaller(config).install() }
         afterSpec { root.toFile().deleteRecursively() }

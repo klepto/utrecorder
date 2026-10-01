@@ -42,8 +42,7 @@ const toggleOnKey = (event: KeyboardEvent<HTMLElement>, onToggle: () => void) =>
 
 /**
  * One recording as a card whose header expands it to its video. Beaten by a faster run, the header carries an
- * "outdated" label under the timestamp, level with the player. The video mounts only while `open`, because `Collapse`
- * keeps its children mounted, and a mounted video downloads.
+ * "outdated" label under the timestamp, level with the player. The video mounts only while `open`.
  */
 export const RecordingItem = ({
   recording,

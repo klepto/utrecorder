@@ -4,7 +4,7 @@ import { NEW_TAB, playerUrl } from "../site";
 
 /**
  * The alias of the player of `demo`, linked to their utbt.net profile if the cap list names them. A click or key press
- * on the link does not reach the elements around it, so Enter only follows the link, as a click does.
+ * on the link does not reach the elements around it.
  */
 export const PlayerLink = ({ demo }: { demo: Demo }) => {
   if (demo.userId === null) return demo.player;

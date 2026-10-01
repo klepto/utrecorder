@@ -7,6 +7,7 @@ import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.demo.DemoService
 import dev.klepto.utrecorder.server.demo.UtbtDemoFetcher
 import dev.klepto.utrecorder.server.http.HttpService
+import dev.klepto.utrecorder.server.recording.DefaultRecorderProvider
 import dev.klepto.utrecorder.server.recording.RecordingJobs
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingService
@@ -41,10 +42,11 @@ object Server {
             val jobs = RecordingJobs()
             val uploader = uploader(config)
             val cache = CacheService(repository, uploader, config)
+            val recorder = DefaultRecorderProvider(config.recorder)
             val services: List<Service> =
                 listOfNotNull(
                     DemoService(UtbtDemoFetcher(config), demos, config),
-                    RecordingService(demos, repository, config = config, jobs = jobs),
+                    RecordingService(demos, repository, listOf(recorder), config, jobs),
                     uploader?.let { UploadService(repository, it, config) },
                     cache,
                     HttpService(repository, jobs, cache, config),

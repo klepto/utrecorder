@@ -1,7 +1,11 @@
 package dev.klepto.utrecorder.common.io
 
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.suspendCatchingIo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.OutputStream
@@ -13,6 +17,7 @@ import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.security.DigestInputStream
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.PathWalkOption
 import kotlin.io.path.copyTo
@@ -20,12 +25,15 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.createParentDirectories
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.exists
+import kotlin.io.path.fileSize
 import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 import kotlin.io.path.moveTo
+import kotlin.io.path.readBytes
 import kotlin.io.path.readLines
 import kotlin.io.path.readText
 import kotlin.io.path.walk
+import kotlin.io.path.writeBytes
 import kotlin.time.Duration
 
 /**
@@ -149,6 +157,52 @@ private fun Path.moveFileReplacing(
     }
 
 /**
+ * The lock of each directory that [replaceIfChanged] has written into.
+ */
+private val REPLACE_LOCKS = ConcurrentHashMap<Path, Mutex>()
+
+/**
+ * Writes [bytes] to the file at this path unless the file already holds them, and returns this path.
+ *
+ * The bytes are written to a file of a workspace opened in the directory of this path, which then replaces this path
+ * in one move. Calls in this process that write into one directory run one at a time. If [config] is not provided,
+ * uses the directories read from the properties and the environment instead.
+ */
+suspend fun Path.replaceIfChanged(
+    bytes: ByteArray,
+    config: DirectoriesConfig = DirectoriesConfig(),
+): Path {
+    val target = toAbsolutePath().normalize()
+    val lock = REPLACE_LOCKS.computeIfAbsent(target.parent) { Mutex() }
+    lock.withLock {
+        if (!target.holds(bytes)) target.replace(bytes, config)
+    }
+    return this
+}
+
+/**
+ * Returns `true` if the file at this path exists and holds exactly [bytes].
+ */
+private suspend fun Path.holds(bytes: ByteArray): Boolean =
+    withContext(Dispatchers.IO) {
+        exists() && fileSize() == bytes.size.toLong() && readBytes().contentEquals(bytes)
+    }
+
+/**
+ * Replaces the file at this path with [bytes], staged in a workspace opened in the directory of this path.
+ */
+private suspend fun Path.replace(
+    bytes: ByteArray,
+    config: DirectoriesConfig,
+) {
+    workspace("replace", parent, config) { staging ->
+        val staged = staging[fileName.toString()]
+        withContext(Dispatchers.IO) { staged.writeBytes(bytes) }
+        staged.move(this@replace)
+    }
+}
+
+/**
  * Returns the lines of the file at this path, decoded with [charset].
  *
  * If the file does not exist, returns an empty list instead.
@@ -201,7 +255,7 @@ private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
  * attempts.
  *
  * A path that does not exist counts as a success. Only an [IOException] is held as a failure. If no attempt succeeds,
- * the failure is that of the last attempt.
+ * the failure is that of the last attempt. Cancellation stops the wait between attempts.
  *
  * @throws IllegalArgumentException if [attempts] is below 1.
  */
@@ -224,7 +278,7 @@ suspend fun Path.deleteCatching(
  * Returns the outcome of deleting this path and everything under it once, after waiting [after].
  */
 @OptIn(ExperimentalPathApi::class)
-private fun Path.deleteOnceCatching(after: Duration = Duration.ZERO): Result<Unit> {
-    Thread.sleep(after.inWholeMilliseconds)
+private suspend fun Path.deleteOnceCatching(after: Duration = Duration.ZERO): Result<Unit> {
+    delay(after)
     return suspendCatchingIo { deleteRecursively() }
 }

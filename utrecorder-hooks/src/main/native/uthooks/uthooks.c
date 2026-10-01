@@ -1,8 +1,10 @@
 /*
- * Hook library loaded into the Unreal Tournament process. It steps the engine clocks by a fixed amount per presented
- * frame, and sends every frame presented while the demo plays to the frame socket as raw 8-bit BGRA pixels. In audio
- * mode it steps the engine clocks by one mixer period of the OpenAL wave output per presented frame instead, and lets
- * the mixer render exactly that period before the next frame.
+ * Hook library loaded into the Unreal Tournament process. It hooks the presented frame, SwapBuffers on Windows and
+ * SDL_GL_SwapWindow on Linux, and steps the engine clocks by a fixed amount per presented frame. Once execSetSpeed arms
+ * the capture, it reads each frame back with glReadPixels and sends it to the frame socket in UTRECORDER_PORT as raw
+ * 8-bit BGRA pixels, until the demo ends. In audio mode it steps the engine clocks by one mixer period of the OpenAL
+ * wave output per presented frame instead, lets the mixer render exactly that period before the next frame, and sends
+ * no frames.
  */
 
 #ifdef _WIN32
@@ -34,6 +36,7 @@
 #define readCycles() __builtin_ia32_rdtsc()
 #endif
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +59,11 @@
 /* Highest frame rate UTRECORDER_FPS accepts. */
 #define CLOCK_MAX_RATE 1000
 
-/* Clock steps in one frame. Before the demo plays, a presented frame advances the clocks by one step instead. */
+/*
+ * Clock steps in one frame of frame mode, so the clocks count clockRate * CLOCK_PREROLL_STEPS steps per second. While the
+ * demo plays, a presented frame advances the clocks by this many steps. Before it plays, a presented frame advances them
+ * by one step, so the engine runs at this fraction of the frame rate.
+ */
 #define CLOCK_PREROLL_STEPS 20
 
 /* Highest sample rate UTRECORDER_AUDIO_RATE accepts, and highest period UTRECORDER_AUDIO_PERIOD accepts. */
@@ -144,13 +151,33 @@ static int startSockets(void) {
 #endif
 }
 
-/* Connects stream to the frame socket on streamPort. Disables capture when that fails. */
+/*
+ * Reports the reason, a printf format and its arguments, as a capture stopped line on standard error, drops the pending
+ * frame, closes stream and disables capture.
+ */
+static void stopCapture(const char *format, ...) {
+    va_list arguments;
+    fputs("uthooks: ", stderr);
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputs(", capture stopped\n", stderr);
+    fflush(stderr);
+    pendingSize = 0;
+    if (stream != STREAM_CLOSED) {
+        closeStream(stream);
+        stream = STREAM_CLOSED;
+    }
+    captureDisabled = 1;
+}
+
+/* Connects stream to the frame socket on streamPort. Stops capture when that fails. */
 static void openStream(void) {
     struct sockaddr_in address;
     int attempt;
     int nodelay = 1;
     if (!startSockets()) {
-        captureDisabled = 1;
+        stopCapture("the socket library did not start");
         return;
     }
     memset(&address, 0, sizeof(address));
@@ -168,7 +195,7 @@ static void openStream(void) {
         stream = STREAM_CLOSED;
         sleepMillis(CONNECT_DELAY_MS);
     }
-    captureDisabled = 1;
+    stopCapture("could not connect to the frame socket on port %d", streamPort);
 }
 
 /* Sends size bytes of data to stream, retrying a send a signal interrupted. Returns whether every byte was sent. */
@@ -184,13 +211,13 @@ static int sendAll(const unsigned char *data, size_t size) {
     return 1;
 }
 
-/* Resolves readViewport and readPixels. Disables capture when either is missing. */
+/* Resolves readViewport and readPixels. Stops capture when either is missing. */
 static void resolveGl(void) {
 #ifdef _WIN32
     HMODULE library = GetModuleHandleA("opengl32.dll");
     if (!library) library = LoadLibraryA("opengl32.dll");
     if (!library) {
-        captureDisabled = 1;
+        stopCapture("opengl32.dll could not be loaded");
         return;
     }
     readViewport = (GetIntegervFunction) GetProcAddress(library, "glGetIntegerv");
@@ -198,28 +225,27 @@ static void resolveGl(void) {
 #else
     GetProcAddressFunction lookup = (GetProcAddressFunction) dlsym(RTLD_NEXT, "SDL_GL_GetProcAddress");
     if (!lookup) {
-        captureDisabled = 1;
+        stopCapture("SDL_GL_GetProcAddress not found");
         return;
     }
     readViewport = (GetIntegervFunction) lookup("glGetIntegerv");
     readPixels = (ReadPixelsFunction) lookup("glReadPixels");
 #endif
-    if (!readViewport || !readPixels) captureDisabled = 1;
+    if (!readViewport || !readPixels) stopCapture("glGetIntegerv or glReadPixels not found");
 }
 
-/* Sends the pending frame, opening stream first if needed. Closes stream and disables capture when the send fails. */
+/* Sends the pending frame, opening stream first if needed. Stops capture when the send fails. */
 static void sendPending(void) {
     if (!pendingSize) return;
     if (stream == STREAM_CLOSED) openStream();
     if (captureDisabled) return;
-    if (!sendAll(pending, pendingSize)) {
-        closeStream(stream);
-        stream = STREAM_CLOSED;
-        captureDisabled = 1;
-    }
+    if (!sendAll(pending, pendingSize)) stopCapture("a frame send to the frame socket failed");
 }
 
-/* Reallocates both frame buffers for a width by height viewport and drops the pending frame. */
+/*
+ * Reallocates both frame buffers for a width by height viewport and drops the pending frame. Stops capture when either
+ * allocation fails.
+ */
 static void resizeFrames(int width, int height) {
     size_t size = (size_t) width * height * 4;
     free(pixels);
@@ -229,7 +255,7 @@ static void resizeFrames(int width, int height) {
     pendingSize = 0;
     pixels = malloc(size);
     pending = malloc(size);
-    if (!pixels || !pending) captureDisabled = 1;
+    if (!pixels || !pending) stopCapture("frame buffers for %dx%d could not be allocated", width, height);
 }
 
 /*
@@ -243,17 +269,10 @@ static int wrongFrameSize(int width, int height) {
     return width != expectedWidth || height != expectedHeight;
 }
 
-/* Reports a width by height viewport that does not match the expected frame size, closes stream and disables capture. */
+/* Stops capture for a width by height viewport that does not match the expected frame size. */
 static void rejectFrameSize(int width, int height) {
-    fprintf(stderr, "uthooks: viewport %dx%d does not match the frame size %sx%s, capture stopped\n", width, height,
-            getenv("UTRECORDER_WIDTH"), getenv("UTRECORDER_HEIGHT"));
-    fflush(stderr);
-    pendingSize = 0;
-    if (stream != STREAM_CLOSED) {
-        closeStream(stream);
-        stream = STREAM_CLOSED;
-    }
-    captureDisabled = 1;
+    stopCapture("viewport %dx%d does not match the frame size %sx%s", width, height, getenv("UTRECORDER_WIDTH"),
+                getenv("UTRECORDER_HEIGHT"));
 }
 
 /* Reads the current viewport into pixels, sends the pending frame, then makes the frame just read the pending one. */
@@ -1486,14 +1505,14 @@ static void installHooks(void) {
     HMODULE gdi = GetModuleHandleA("gdi32.dll");
     const char **name;
     if (!kernel || !gdi) {
-        captureDisabled = 1;
+        stopCapture("kernel32.dll or gdi32.dll is not loaded");
         return;
     }
     realSwapBuffers = (SwapBuffersFunction) GetProcAddress(gdi, "SwapBuffers");
     realLoadLibraryW = (LoadLibraryWFunction) GetProcAddress(kernel, "LoadLibraryW");
     realLoadLibraryExW = (LoadLibraryExWFunction) GetProcAddress(kernel, "LoadLibraryExW");
     if (!realSwapBuffers || !realLoadLibraryW || !realLoadLibraryExW) {
-        captureDisabled = 1;
+        stopCapture("SwapBuffers, LoadLibraryW or LoadLibraryExW not found");
         return;
     }
     patchModule(GetModuleHandleA(0));

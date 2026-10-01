@@ -13,8 +13,8 @@ import kotlin.time.Instant
  * @property error The failure of the last capture of [demo], or `null` if none has failed.
  * @property md5 The MD5 checksum of the uploaded mp4, or `null` if it was not uploaded.
  * @property lastUpdate The time [status] last changed, or [Instant.DISTANT_PAST] if the recording was never stored.
- * @property views The number of times the recording was requested.
- * @property lastView The time the recording was last requested, or `null` if it never was.
+ * @property views The number of views of the recording written to the store.
+ * @property lastView The time of the last view of the recording written to the store, or `null` if none was.
  * @property recordedAt The time the mp4 was stored, or `null` if it was not recorded by the server.
  * @property processingTime The time the last attempt took to produce the mp4, or `null` if it was not recorded by
  * the server.
@@ -43,7 +43,7 @@ enum class RecordingStatus {
     /** Waiting for a recorder. */
     Pending,
 
-    /** Taken by a recorder. */
+    /** Taken by a recorder. Set to [Pending] again when a [RecordingService] starts. */
     Recording,
 
     /** Stored as an mp4. */
@@ -62,12 +62,12 @@ enum class RecordingStatus {
      */
     Outdated,
 
-    /** Given up on after its last capture failed. Pending again when a [RecordingRepository] is opened. */
+    /** Given up on after its last capture failed. Set to [Pending] again when a [RecordingService] starts. */
     Failed,
 
     /**
-     * Given up on because its demo names a package that no source holds. Pending again when a [RecordingRepository] is
-     * opened.
+     * Given up on because its demo names a package that no source holds. Set to [Pending] again when a
+     * [RecordingService] starts.
      */
     Unresolvable,
 }

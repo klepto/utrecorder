@@ -1,10 +1,12 @@
 package dev.klepto.utrecorder.server.demo
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
@@ -22,7 +24,8 @@ import kotlin.time.Instant
 
 class DemoServiceTest :
     FunSpec({
-        val config = ServerConfig(ConfigReader.EMPTY, utbtCooldown = 100.milliseconds)
+        val directories = DirectoriesConfig(ConfigReader.EMPTY, home = tempdir().toPath())
+        val config = ServerConfig(ConfigReader.EMPTY, directories, utbtCooldown = 100.milliseconds)
         val start = Instant.parse("2026-09-26T12:00:00Z")
 
         fun demo(minute: Int): Demo =

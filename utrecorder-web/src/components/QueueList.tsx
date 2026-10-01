@@ -2,12 +2,12 @@ import { Table, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
 import type { Demo } from "../api/types";
 import { formatRemaining } from "../format";
+import { CapTime } from "./CapTime";
 import { capLinkProps } from "./capLinkProps";
 import type { JobsState } from "./JobsState";
 import { PlayerLink } from "./PlayerLink";
 import { QueryList, type QueryState } from "./QueryList";
 import classes from "./QueueList.module.css";
-import { RecordTime } from "./RecordTime";
 import { Timestamp } from "./Timestamp";
 import { Truncated } from "./Truncated";
 import { useNextStart } from "./useNextStart";
@@ -54,7 +54,7 @@ const QueueRow = ({ demo, next, deadline }: { demo: Demo; next: boolean; deadlin
       </Table.Td>
       <Table.Td>
         <Text size="sm">
-          <RecordTime demo={demo} />
+          <CapTime demo={demo} />
         </Text>
       </Table.Td>
       <Table.Td ta="right">

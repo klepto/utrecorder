@@ -1,5 +1,7 @@
 package dev.klepto.utrecorder.common.io
 
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.OperatingSystem
 import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
 import io.kotest.assertions.throwables.shouldThrow
@@ -12,26 +14,34 @@ import io.kotest.matchers.paths.shouldNotExist
 import io.kotest.matchers.result.shouldBeSuccess
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Paths
+import java.nio.file.attribute.FileTime
 import java.security.NoSuchAlgorithmException
 import kotlin.concurrent.thread
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteExisting
 import kotlin.io.path.div
+import kotlin.io.path.getLastModifiedTime
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.readBytes
 import kotlin.io.path.readText
+import kotlin.io.path.setLastModifiedTime
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.measureTime
 import kotlin.time.measureTimedValue
 
 class PathsTest :
@@ -211,6 +221,38 @@ class PathsTest :
             }
         }
 
+        context("replaceIfChanged") {
+            val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root / "replace-home")
+
+            test("writes a missing file and leaves no staged file beside it") {
+                val directory = (root / "replace-missing").createDirectories()
+
+                (directory / "UTRecorder.u").replaceIfChanged(sample.toByteArray(), directories)
+
+                (directory / "UTRecorder.u").readText() shouldBe sample
+                directory.listDirectoryEntries().map { it.fileName.toString() } shouldBe listOf("UTRecorder.u")
+            }
+
+            test("replaces a file that holds other bytes") {
+                val directory = (root / "replace-changed").createDirectories()
+                (directory / "UTRecorder.u").writeText("stale")
+
+                (directory / "UTRecorder.u").replaceIfChanged(sample.toByteArray(), directories)
+
+                (directory / "UTRecorder.u").readText() shouldBe sample
+            }
+
+            test("leaves a file that already holds the bytes untouched") {
+                val directory = (root / "replace-unchanged").createDirectories()
+                val target = (directory / "UTRecorder.u").apply { writeText(sample) }
+                target.setLastModifiedTime(FileTime.fromMillis(0))
+
+                target.replaceIfChanged(sample.toByteArray(), directories)
+
+                target.getLastModifiedTime() shouldBe FileTime.fromMillis(0)
+            }
+        }
+
         context("readLinesOrEmpty") {
             test("returns the lines of an existing file") {
                 file("read-lines", "first\nsecond").readLinesOrEmpty() shouldBe listOf("first", "second")
@@ -354,6 +396,28 @@ class PathsTest :
 
                     outcome.exceptionOrNull().shouldBeInstanceOf<IOException>()
                     elapsed.inWholeMilliseconds shouldBeGreaterThanOrEqual 400L
+                    path.shouldExist()
+                }
+
+            test("stops waiting between attempts when cancelled")
+                .config(enabledIf = windowsOnly) {
+                    val path = file("delete-cancelled", sample)
+                    val stream = FileOutputStream(path.toFile(), true)
+
+                    val elapsed =
+                        try {
+                            measureTime {
+                                coroutineScope {
+                                    val deletion = launch { path.deleteCatching(attempts = 3, delay = 5.seconds) }
+                                    delay(200.milliseconds)
+                                    deletion.cancelAndJoin()
+                                }
+                            }
+                        } finally {
+                            stream.close()
+                        }
+
+                    elapsed.inWholeMilliseconds shouldBeLessThan 5000L
                     path.shouldExist()
                 }
         }

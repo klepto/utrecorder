@@ -4,7 +4,6 @@ import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.core.RecorderStage
-import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.cache.CacheService
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
@@ -136,7 +135,7 @@ class HttpServiceTest :
                 repository += statuses.keys.map { demo(it) }
                 statuses.forEach { (capId, status) -> repository.finish(capId, status) }
                 cache.set(CacheService(repository, uploader.takeIf { archive }, config, clock))
-                val service = HttpService(repository, jobs, cache.get(), config, VideoCaptureConfig(ConfigReader.EMPTY))
+                val service = HttpService(repository, jobs, cache.get(), config)
                 testApplication {
                     application { service.module(this) }
                     block(repository)

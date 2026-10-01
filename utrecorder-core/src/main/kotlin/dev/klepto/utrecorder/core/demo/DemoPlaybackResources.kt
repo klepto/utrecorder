@@ -1,12 +1,10 @@
 package dev.klepto.utrecorder.core.demo
 
 import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.replaceIfChanged
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.nio.file.Path
-import kotlin.io.path.writeText
 
 /**
  * Files for demo playback, carried as resources of the recorder.
@@ -33,12 +31,11 @@ object DemoPlaybackResources {
     /**
      * Returns the Bunny Track HUD layout file, written into the `System` directory of [installation].
      *
-     * Replaces the file that the installation already held there.
+     * Replaces the file that the installation already held there only when it holds other text.
      */
     suspend fun installHudLayout(installation: UtInstallation): Path {
-        val path = installation.systemDirectory[HUD_LAYOUT_INI]
-        withContext(Dispatchers.IO) { path.writeText(read(HUD_LAYOUT_INI), UtPlatform.CHARSET) }
-        return path
+        val layout = read(HUD_LAYOUT_INI).toByteArray(UtPlatform.CHARSET)
+        return installation.systemDirectory[HUD_LAYOUT_INI].replaceIfChanged(layout, installation.config.directoriesConfig)
     }
 
     /**

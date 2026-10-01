@@ -3,22 +3,23 @@
 // the game once the demo ends.
 //
 // Configured through its section of the game ini and installed as the
-// [Engine.Engine] Console. It does nothing until bAutoExit is on. While it
-// is on, the console logs a start and an end mark around the demo, then
-// stops playback and exits the process once the demo passes the end TimerStop
-// set, the demo is over, the demo spectator is gone, or a timeout runs out.
-// It also stops warp zones from moving actors on the client, since the demo
-// already carries every position.
+// [Engine.Engine] Console. While bAutoExit is on, the console logs a start
+// and an end mark around the demo, then stops playback and exits the process
+// once the demo passes the end TimerStop set, the demo is over, the demo
+// spectator is gone, or a timeout runs out. While bAutoExit is on, it also
+// stops warp zones from moving actors on the client.
 //
-// Exec commands, typically run from an -EXEC script:
+// Exec commands, typically run from an -EXEC script. They act whether
+// bAutoExit is on or not:
 //   DisableRendering  stop drawing the world,
 //   HideMessages      keep chat and progress messages off the HUD,
 //   SeekStart         seek to SEEK_PREROLL seconds before the run start
 //                     TimerReset set, or to the demo start without one,
 //                     once ticks settle, without arming the hook library,
-//   DemoFrames <fps>  reset the demo speed to 1 once the followed player
-//                     spawns, which arms the hook library, and log a spawn
-//                     mark on the next tick,
+//   DemoFrames <rate> turn on the spawn check when the rate is above 0: set
+//                     the demo speed to 1 once the followed player spawns,
+//                     which arms the hook library, and log a spawn mark on
+//                     the next tick,
 //   TimerReset <demo time>
 //                     make DemoFrames signal the spawn instead once the demo
 //                     reaches the demo time the Bunny Track timer of the run
@@ -48,8 +49,8 @@ const SEEK_MIN_DISTANCE = 0.5;
 // Seconds of demo time the end mark follows the stop of the Bunny Track timer.
 const TIMER_END_DELAY = 1.0;
 
-// Master switch. Off by default, so the console behaves like UTConsole while
-// it stays installed for normal play.
+// Turns on the marks, the exit and the warp-zone unlinking.
+// Off by default.
 var config bool  bAutoExit;
 
 // Seconds to keep running after the demo hits its last frame.
@@ -68,8 +69,8 @@ var config bool  bStopDemoFirst;
 // Log the clocks on every tick and the end-frame wait.
 var config bool  bVerbose;
 
-// Rendered frames per demo second DemoFrames set. Above 0, the console
-// watches for the followed player's spawn.
+// The rate DemoFrames set. Above 0, the console watches for the followed
+// player's spawn. No other use is made of the value.
 var config float PlaybackFrameRate;
 
 // Health at which a dead followed player counts as spawned.
@@ -89,7 +90,7 @@ var bool bRunStart;       // TimerReset was run, so RunStart is known
 var float RunStart;       // demo time TimerReset set, 0 or earlier when the run began before the demo
 var float LastStreamTime; // demo time of the last tick that had a driver
 var int RenderedFrames;   // ticks counted while bAutoExit is on
-var bool bMarkedStart;    // the start mark has been logged
+var bool bReachedStart;   // the start seek is over and the demo is past its first frame
 var bool bMarkedEnd;      // the end mark has been logged
 var bool bSeekStart;      // seek to the run start once ticks settle
 var bool bSought;         // the start seek has been issued
@@ -137,8 +138,8 @@ function MarkEnd()
 	MarkTime("end");
 }
 
-// Applies the exec commands that were run, then polls playback and advances
-// the exit while bAutoExit is on.
+// Applies the exec commands that were run and runs the start seek, then polls
+// playback and advances the exit while bAutoExit is on.
 event Tick(float Delta)
 {
 	if (bSpawnPending)
@@ -165,7 +166,10 @@ event Tick(float Delta)
 	Super.Tick(Delta);
 
 	if (!bAutoExit)
+	{
+		CheckStart(Delta);
 		return;
+	}
 
 	RenderedFrames++;
 
@@ -310,7 +314,7 @@ function MuteHUD(DemoPlaybackSpec Spec, PlayerPawn Linked)
 }
 
 // Seeks to SEEK_PREROLL seconds before the run start, or to the demo start
-// without one, once ticks settle, before the start mark.
+// without one, once ticks settle, before the demo reaches the start.
 exec function SeekStart()
 {
 	bSeekStart = True;
@@ -341,10 +345,10 @@ function bool SeekingStart(DemoPlaybackSpec Spec, float Delta)
 	return Spec.SeekTick > 0 || Spec.bSeeking;
 }
 
-// Seeks the demo to Target seconds the way udemo's GotoFrame does, but
-// without its closing SetSpeed, which would arm the hook library before the
-// spawn. Leaves the end of the seek to the spectator, which ends it on its
-// next tick as it does after GotoFrame.
+// Seeks the demo to Target seconds through the jump path of udemo's
+// GotoFrame, without its start-time guard, its short forward ReadCache path
+// and its closing SetSpeed. Sets SeekTick and bFixLevelTime as the spectator
+// does after its own GotoFrame.
 function SeekWithoutArming(DemoPlaybackSpec Spec, float Target)
 {
 	local DemoInterface Driver;
@@ -401,11 +405,15 @@ function SpawnSmoother()
 	Log("UTRecorder: spawned recorder smoother" @ Smoother, 'UTRecorder');
 }
 
-// Sets PlaybackFrameRate to Rate, which turns on the spawn check.
+// Sets PlaybackFrameRate to Rate, which turns on the spawn check when Rate is
+// above 0. Does not change the playback rate.
 exec function DemoFrames(float Rate)
 {
 	PlaybackFrameRate = Rate;
-	Log("UTRecorder: locking playback to" @ Rate @ "rendered frames per demo second", 'UTRecorder');
+	if (Rate > 0)
+		Log("UTRecorder: watching for the spawn at rate" @ Rate, 'UTRecorder');
+	else
+		Log("UTRecorder: not watching for the spawn at rate" @ Rate, 'UTRecorder');
 }
 
 // Sets RunStart to Start, which makes the spawn check wait for the demo to
@@ -431,8 +439,9 @@ exec function TimerStop(float Stop)
 // at once when RunStart is 0 or earlier.
 // Otherwise signals it once the followed player is alive: at once if the
 // first player seen is alive, else when a dead one reaches SpawnHealth.
-// Signals it anyway when no player is followed or SpawnTimeout runs out.
-// While SeekStart is on, waits for the start mark first.
+// Signals it anyway when a followed player seen before is gone, or when
+// SpawnTimeout runs out. While SeekStart is on, waits for the demo to reach
+// the start first.
 function CheckSpawn(float Delta)
 {
 	local DemoPlaybackSpec Spec;
@@ -441,7 +450,7 @@ function CheckSpawn(float Delta)
 	if (bSignalledSpawn || Viewport == None || Viewport.Actor == None)
 		return;
 
-	if (bSeekStart && !bMarkedStart)
+	if (bSeekStart && !bReachedStart)
 		return;
 
 	Spec = DemoPlaybackSpec(Viewport.Actor);
@@ -480,9 +489,8 @@ function CheckSpawn(float Delta)
 		SignalSpawn("no spawn within" @ SpawnTimeout @ "seconds");
 }
 
-// Sets the demo speed to 1 and puts the spawn mark off to the next tick, the
-// first tick the hook library is armed for, since the level's date is filled
-// at the start of a tick.
+// Sets the demo speed to 1, which arms the hook library, and puts the spawn
+// mark off to the start of the next tick.
 function SignalSpawn(string Reason)
 {
 	local DemoPlaybackSpec Spec;
@@ -498,7 +506,7 @@ function SignalSpawn(string Reason)
 }
 
 // Logs the start and end marks. Begins the exit ExitDelay seconds after the
-// demo passes TimerEnd once the start mark is logged, or once the demo has sat
+// demo passes TimerEnd once the demo reached the start, or once the demo has sat
 // on its last frame for ExitDelay seconds, whichever comes first.
 function CheckPlayback(float Delta)
 {
@@ -523,19 +531,13 @@ function CheckPlayback(float Delta)
 
 	LastStreamTime = Spec.Driver.GetCurrentTime();
 
-	if (SeekingStart(Spec, Delta))
+	if (!ReachStart(Spec, Delta))
 		return;
 
 	Total = Spec.Driver.GetTotalFrames();
 	Current = Spec.Driver.GetCurrentFrame();
 
-	if (!bMarkedStart && Total > 0 && Current > 0)
-	{
-		bMarkedStart = True;
-		MarkTime("start");
-	}
-
-	if (bMarkedStart && TimerEnd > 0.0 && LastStreamTime >= TimerEnd)
+	if (bReachedStart && TimerEnd > 0.0 && LastStreamTime >= TimerEnd)
 	{
 		MarkEnd();
 		SinceEnd += Delta;
@@ -561,6 +563,39 @@ function CheckPlayback(float Delta)
 
 	if (SinceEnd >= ExitDelay)
 		BeginExit("demo reached frame" @ Current @ "of" @ Total);
+}
+
+// Runs the start seek and watches for the start while bAutoExit is off, so
+// that the spawn check still sees the demo reach the start.
+function CheckStart(float Delta)
+{
+	local DemoPlaybackSpec Spec;
+
+	if (Viewport == None)
+		return;
+
+	Spec = DemoPlaybackSpec(Viewport.Actor);
+	if (Spec == None || Spec.Driver == None)
+		return;
+
+	ReachStart(Spec, Delta);
+}
+
+// False while the seek SeekStart asked for is pending or still seeking.
+// Otherwise sets bReachedStart once the demo is past its first frame, and
+// logs the start mark then while bAutoExit is on.
+function bool ReachStart(DemoPlaybackSpec Spec, float Delta)
+{
+	if (SeekingStart(Spec, Delta))
+		return False;
+
+	if (bReachedStart || Spec.Driver.GetTotalFrames() <= 0 || Spec.Driver.GetCurrentFrame() <= 0)
+		return True;
+
+	bReachedStart = True;
+	if (bAutoExit)
+		MarkTime("start");
+	return True;
 }
 
 // Begins the exit ExitDelay seconds after a demo spectator that existed is

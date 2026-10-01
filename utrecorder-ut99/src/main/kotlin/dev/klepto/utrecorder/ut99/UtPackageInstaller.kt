@@ -153,9 +153,11 @@ class UtPackageInstaller(
         required: UtPackage,
     ): UtPackage? {
         val path = checkNotNull(downloaded.path) { "No file holds the package ${downloaded.name}" }
-        if (withContext(Dispatchers.IO) { downloaded.satisfies(required) }) return UtPackage.read(path.move(installationPath(path)))
+        if (downloaded.satisfies(required)) return UtPackage.read(path.move(installationPath(path)))
 
-        log.warn { "Discarding ${path.fileName}, its GUID ${downloaded.guid} does not match the recorded ${required.guid}" }
+        val downloadedGuid = downloaded.guid()
+        val requiredGuid = required.guid()
+        log.warn { "Discarding ${path.fileName}, its GUID $downloadedGuid does not match the recorded $requiredGuid" }
         withContext(Dispatchers.IO) { path.deleteIfExists() }
         return null
     }
@@ -177,7 +179,7 @@ class UtPackageInstaller(
         private suspend fun firstSatisfying(
             candidates: List<UtPackage>,
             required: UtPackage,
-        ): UtPackage? = withContext(Dispatchers.IO) { candidates.firstOrNull { it.satisfies(required) } }
+        ): UtPackage? = candidates.firstOrNull { it.satisfies(required) }
 
         /**
          * Returns the first package extension the redirect [base] serves the package [name] under. If it serves none,

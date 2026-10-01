@@ -79,9 +79,9 @@ class Recorder(
     /**
      * Returns the mp4 recorded from the demo at [url].
      *
-     * The demo is downloaded into the workspace of this recording, so it is deleted along with it. [onProgress]
-     * receives the [FetchingDemo] stage first. Everything else is as for the [record] that takes a demo file. Several
-     * recordings may share one installation.
+     * The demo is downloaded into the workspace of this recording and is kept there with the rest of its files.
+     * [onProgress] receives the [FetchingDemo] stage first. Everything else is as for the [record] that takes a demo
+     * file. Several recordings may share one installation.
      *
      * @param name The name of the mp4 without its extension. If not provided, uses the file name of the downloaded demo
      * without its `.dem` extension.

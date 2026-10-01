@@ -10,6 +10,8 @@ import dev.klepto.utrecorder.common.withBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.deleteIfExists
@@ -28,19 +30,24 @@ import kotlin.time.toKotlinInstant
  */
 class Workspace private constructor(
     private val name: String,
+    private val id: String,
     private val workingDirectory: Path?,
     private val parent: Workspace?,
     private val config: DirectoriesConfig,
 ) {
-    private val id: String = IDS.next()
     private val prefix: String = "$name-$id"
+
+    /**
+     * Directory under the workspace directory of [config] that holds the id of this workspace.
+     */
+    private val claimedDirectory: Path = config.workspace[prefix]
 
     /**
      * Directory under the workspace directory of [config] that the tracked files end up in.
      *
      * A nested workspace uses the directory of its parent.
      */
-    private val outputDirectory: Path = parent?.outputDirectory ?: config.workspace[prefix]
+    private val outputDirectory: Path = parent?.outputDirectory ?: claimedDirectory
 
     /**
      * Pattern that matches the name of a file that a workspace of this name wrote into a shared working directory.
@@ -60,15 +67,15 @@ class Workspace private constructor(
     private val ownsDirectory: Boolean = workingDirectory == null && parent == null
 
     private val registry: PathRegistry =
-        when (workingDirectory) {
-            null -> PathRegistry("", directory)
-            else -> PathRegistry("$prefix-", workingDirectory)
+        when {
+            ownsDirectory -> PathRegistry("", directory)
+            else -> PathRegistry("$prefix-", directory)
         }
 
     /**
      * Returns the path of a new file named [name] in [directory], and tracks it.
      *
-     * In a shared working directory, the file name carries the workspace name and id as a prefix.
+     * Unless this workspace holds a directory of its own, the file name carries the workspace name and id as a prefix.
      */
     operator fun get(name: String): Path = registry.newFile(name).also(::track)
 
@@ -153,21 +160,22 @@ class Workspace private constructor(
     }
 
     /**
-     * Removes the output directory when the workspace left nothing there.
+     * Removes the claimed directory when the workspace left nothing there.
      *
-     * A nested workspace leaves the directory to its parent.
+     * A nested workspace always leaves its claimed directory empty, since its files end up in the directory of its parent.
      */
     private suspend fun deleteIfEmpty() {
-        if (parent != null) return
         withContext(Dispatchers.IO) {
-            if (outputDirectory.isDirectory() && outputDirectory.listDirectoryEntries().isEmpty()) {
-                outputDirectory.deleteIfExists()
+            if (claimedDirectory.isDirectory() && claimedDirectory.listDirectoryEntries().isEmpty()) {
+                claimedDirectory.deleteIfExists()
             }
         }
     }
 
     /**
      * Removes the expired entries of the workspace directory and of the shared working directory.
+     *
+     * Only a top-level workspace removes entries of the workspace directory.
      */
     private suspend fun prune() {
         expiredEntries(Clock.System.now() - RETENTION)
@@ -183,7 +191,11 @@ class Workspace private constructor(
      */
     private suspend fun expiredEntries(deadline: Instant): List<Path> =
         withContext(Dispatchers.IO) {
-            val workspaceEntries = config.workspace.createDirectories().listDirectoryEntries()
+            val workspaceEntries =
+                when (parent) {
+                    null -> config.workspace.createDirectories().listDirectoryEntries()
+                    else -> emptyList()
+                }
             val sharedEntries =
                 workingDirectory
                     ?.listDirectoryEntries()
@@ -217,11 +229,38 @@ class Workspace private constructor(
             config: DirectoriesConfig,
             block: suspend Workspace.(Workspace) -> T,
         ): T {
-            val workspace = Workspace(name, workingDirectory, getOrNull<Workspace>(), config)
+            val id = claim(name, config)
+            val workspace = Workspace(name, id, workingDirectory, getOrNull<Workspace>(), config)
             return withBinding(workspace) {
                 withContext(Dispatchers.IO) { workspace.enter(block) }
             }
         }
+
+        /**
+         * Returns a new id for a workspace named [name], held by creating its directory under the workspace directory of
+         * [config].
+         *
+         * An id whose directory already exists, such as one held by another process, is skipped for the next one.
+         */
+        private suspend fun claim(
+            name: String,
+            config: DirectoriesConfig,
+        ): String =
+            withContext(Dispatchers.IO) {
+                val parent = config.workspace.createDirectories()
+                generateSequence(IDS::next).first { parent["$name-$it"].createDirectoryIfAbsent() }
+            }
+
+        /**
+         * Returns `true` if this directory was created, and `false` if something already exists at this path.
+         */
+        private fun Path.createDirectoryIfAbsent(): Boolean =
+            try {
+                Files.createDirectory(this)
+                true
+            } catch (exists: FileAlreadyExistsException) {
+                false
+            }
     }
 }
 
@@ -230,6 +269,10 @@ class Workspace private constructor(
  *
  * If [workingDirectory] is not provided, the workspace names its files in a directory of its own instead. If [config]
  * is not provided, uses the directories read from the properties and the environment instead.
+ *
+ * If the calling coroutine already runs in a workspace, the new workspace is nested in it. A nested workspace has no
+ * directory of its own: its files end up in the directory of the workspace around it, named with the workspace name and
+ * id as a prefix.
  */
 suspend fun <T> workspace(
     name: String = "task",

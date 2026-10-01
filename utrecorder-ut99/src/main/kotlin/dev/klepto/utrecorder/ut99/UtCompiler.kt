@@ -9,6 +9,7 @@ import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.startAndAwait
 import dev.klepto.utrecorder.common.io.workspace
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -231,7 +232,7 @@ class UtCompiler(
             }
             run("make", "-nobind", "-bytehax", "-packages=$packageName", "-ini=${iniPath.absolutePathString()}")
         } finally {
-            stagedPath.deleteCatching()
+            withContext(NonCancellable) { stagedPath.deleteCatching() }
         }
     }
 

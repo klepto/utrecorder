@@ -248,7 +248,7 @@ class UtPackageInstallerTest :
                 installer.install()
                 installer.uninstall()
 
-                UtPackage.read(packagesDirectory("packages-directory-kept") / "BTPog.u").guid shouldBe
+                UtPackage.read(packagesDirectory("packages-directory-kept") / "BTPog.u").guid() shouldBe
                     "123456789ABCDEF0876543210BADF00D"
             }
 
@@ -272,7 +272,7 @@ class UtPackageInstallerTest :
                 installer.install()
 
                 val target = installationPath(installation, UtDirectory.System, "Engine.u")
-                UtPackage.read(target).guid shouldBe "123456789ABCDEF0876543210BADF00D"
+                UtPackage.read(target).guid() shouldBe "123456789ABCDEF0876543210BADF00D"
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 
@@ -372,7 +372,7 @@ class UtPackageInstallerTest :
                 installer.install()
 
                 requests.last() shouldBe "GET /first/BTPog.u.uz"
-                UtPackage.read(installationPath(installation, UtDirectory.System, "BTPog.u")).guid shouldBe
+                UtPackage.read(installationPath(installation, UtDirectory.System, "BTPog.u")).guid() shouldBe
                     "123456789ABCDEF0876543210BADF00D"
             }
 
@@ -398,7 +398,7 @@ class UtPackageInstallerTest :
                 installer.install()
 
                 val target = installationPath(installation, UtDirectory.System, "BTPog.u")
-                UtPackage.read(target).guid shouldBe "11111111222222223333333344444444"
+                UtPackage.read(target).guid() shouldBe "11111111222222223333333344444444"
                 installer.installed.map { it.path } shouldBe listOf(target)
             }
 

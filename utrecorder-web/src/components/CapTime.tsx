@@ -35,7 +35,7 @@ const medalOf = (demo: Demo): Medal => {
  * The cap time of `demo` as `formatCapTime` writes it, in the color of its medal, after the icon of its medal named by
  * its alt text.
  */
-export const RecordTime = ({ demo }: { demo: Demo }) => {
+export const CapTime = ({ demo }: { demo: Demo }) => {
   const medal = medalOf(demo);
   return (
     <span style={{ whiteSpace: "nowrap", color: medal.color }}>

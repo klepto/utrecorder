@@ -10,8 +10,13 @@ import io.kotest.matchers.paths.shouldExist
 import io.kotest.matchers.paths.shouldNotExist
 import io.kotest.matchers.shouldBe
 import io.ktor.client.plugins.ClientRequestException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.readBytes
@@ -276,6 +281,27 @@ class DownloaderTest :
             serve()
 
             Downloader(url, directories = directories).download(root / "clean-success")
+
+            workspaceFiles() shouldBe emptyList()
+        }
+
+        test("removes the temporary file when the download is cancelled mid-body") {
+            val release = CountDownLatch(1)
+            handler = { exchange ->
+                exchange.sendResponseHeaders(200, 1024)
+                exchange.responseBody.write(ByteArray(512))
+                exchange.responseBody.flush()
+                release.await(10, TimeUnit.SECONDS)
+            }
+            val received = CompletableDeferred<Unit>()
+
+            val download =
+                launch {
+                    Downloader(url, directories = directories).download(root / "cancelled") { received.complete(Unit) }
+                }
+            received.await()
+            download.cancelAndJoin()
+            release.countDown()
 
             workspaceFiles() shouldBe emptyList()
         }

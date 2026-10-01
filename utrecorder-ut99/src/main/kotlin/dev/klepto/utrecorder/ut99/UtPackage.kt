@@ -29,29 +29,37 @@ import kotlin.io.path.nameWithoutExtension
 class UtPackage private constructor(
     val name: String,
     val path: Path?,
-    guid: () -> String,
+    /**
+     * The GUID the demo recorded for a package a demo names. Unused for a package held in a file.
+     */
+    private val recordedGuid: String,
 ) {
     /**
-     * The GUID of this package version, read from the file on first access. Empty for a file that is not a package, for
-     * a file that ends before its GUID, and for a package whose demo recorded no GUID.
+     * Returns the GUID of this package version. For a package held in a file, reads it from the file on every call.
+     * Returns an empty string for a file that is not a package, for a file that ends before its GUID, and for a package
+     * whose demo recorded no GUID.
      *
      * @throws java.io.IOException if the file cannot be read.
      */
-    val guid: String by lazy(guid)
+    suspend fun guid(): String =
+        when (path) {
+            null -> recordedGuid
+            else -> withContext(Dispatchers.IO) { readGuid(path) }
+        }
 
     /**
      * Returns `true` when this package satisfies [required]: the names are equal ignoring case, and either [required]
      * carries no GUID or the two GUIDs are equal ignoring case.
      */
-    fun satisfies(required: UtPackage): Boolean =
+    suspend fun satisfies(required: UtPackage): Boolean =
         name.equals(required.name, ignoreCase = true) &&
-            (required.guid.isEmpty() || guid.equals(required.guid, ignoreCase = true))
+            required.guid().let { it.isEmpty() || guid().equals(it, ignoreCase = true) }
 
     override fun equals(other: Any?): Boolean = other is UtPackage && name.equals(other.name, ignoreCase = true) && path == other.path
 
     override fun hashCode(): Int = Objects.hash(name.lowercase(), path)
 
-    override fun toString(): String = "$name[${guid.take(SHORT_GUID_LENGTH)}]" + (path?.let { " at $it" } ?: "")
+    override fun toString(): String = path?.let { "$name at $it" } ?: "$name[${recordedGuid.take(SHORT_GUID_LENGTH)}]"
 
     companion object {
         /**
@@ -95,7 +103,7 @@ class UtPackage private constructor(
         private const val WORD_BYTES = 4
 
         /**
-         * The number of GUID characters [toString] names a package version by.
+         * The number of GUID characters [toString] names the version of a package a demo names by.
          */
         private const val SHORT_GUID_LENGTH = 8
 
@@ -106,12 +114,12 @@ class UtPackage private constructor(
         fun named(
             name: String,
             guid: String,
-        ): UtPackage = UtPackage(name, null) { guid }
+        ): UtPackage = UtPackage(name, null, guid)
 
         /**
-         * Returns the package held at [path], named after the file and carrying the GUID of its header.
+         * Returns the package held at [path], named after the file. The file is not read until [guid] is called.
          */
-        fun read(path: Path): UtPackage = UtPackage(path.nameWithoutExtension, path) { readGuid(path) }
+        fun read(path: Path): UtPackage = UtPackage(path.nameWithoutExtension, path, "")
 
         /**
          * Returns the packages held directly in [directory]: its regular files whose extension is one of [extensions],

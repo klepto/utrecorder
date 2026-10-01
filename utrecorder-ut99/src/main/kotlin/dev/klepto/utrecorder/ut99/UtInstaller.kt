@@ -36,7 +36,7 @@ import kotlin.io.path.writeText
  */
 @OptIn(ExperimentalPathApi::class)
 class UtInstaller(
-    private val config: UtConfig,
+    private val config: UtConfig = UtConfig(),
 ) : Installer {
     /**
      * File in the game directory that holds the name of the patch the installation was materialized with.

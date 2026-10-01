@@ -1,6 +1,5 @@
 import com.github.gradle.node.npm.task.NpmTask
 import dev.klepto.utrecorder.build.embedded.EmbeddedArtifactsExtension
-import dev.klepto.utrecorder.build.web.GitCommitSource
 import org.gradle.language.base.plugins.LifecycleBasePlugin
 
 plugins {
@@ -27,12 +26,6 @@ tasks.npmInstall {
     inputs.file(nodeVersionFile).withPathSensitivity(PathSensitivity.NONE)
 }
 
-val gitCommit =
-    providers
-        .of(GitCommitSource::class.java) {
-            parameters.repository = rootProject.layout.projectDirectory
-        }.orElse("unknown")
-
 val webSources =
     files(
         "src",
@@ -52,12 +45,10 @@ val webBuild =
         dependsOn(tasks.npmInstall)
         npmCommand = listOf("run", "build")
         environment.put("UTRECORDER_VERSION", project.version.toString())
-        environment.put("UTRECORDER_COMMIT", gitCommit)
 
         inputs.files(webSources).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.file(nodeVersionFile).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("version", project.version.toString())
-        inputs.property("commit", gitCommit)
         outputs.dir(layout.buildDirectory.dir("web"))
     }
 

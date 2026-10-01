@@ -6,13 +6,10 @@ const CATCH_UP = 1_000;
 /** The time the shown progress takes to fill from `0` to the estimated progress when it first appears, in milliseconds. */
 const FILL = 600;
 
-/**
- * The longest time one animation frame moves the shown progress on by, in milliseconds. A browser pauses animation
- * frames in a hidden tab, and without the limit the first frame after it would move the bar far past the estimate.
- */
+/** The longest time one animation frame moves the shown progress on by, in milliseconds. */
 const MAX_FRAME = 100;
 
-/** How many poll intervals the estimated progress keeps rising after a report, so a late poll does not stop the bar. */
+/** How many poll intervals the estimated progress keeps rising after a report. */
 const EXTRAPOLATED_INTERVALS = 1.5;
 
 /**
@@ -37,11 +34,11 @@ const performanceTime = (epoch: number) => {
 };
 
 /**
- * Returns an estimate of `value`, reported at the epoch millisecond `reportedAt`, that moves on every animation frame. The estimate continues from the last reported
- * `value` at the rate the reports rose at, for at most `EXTRAPOLATED_INTERVALS` times `interval` milliseconds after
- * that report. The returned value follows the estimate with a speed that changes smoothly, so it never jumps, and it
- * only ever rises, up to `1`. When the estimate falls below it, it slows down instead of moving back. It starts at `0`
- * and fills to the estimate within `FILL` milliseconds.
+ * Returns an estimate of `value`, reported at the epoch millisecond `reportedAt`, that moves on every animation frame.
+ * The estimate continues from the last reported `value` at the rate the reports rose at, for at most
+ * `EXTRAPOLATED_INTERVALS` times `interval` milliseconds after that report. The returned value follows the estimate with
+ * a speed that changes smoothly, so it never jumps, and it only ever rises, up to `1`. When the estimate falls below it,
+ * it slows down instead of moving back. It starts at `0` and fills to the estimate within `FILL` milliseconds.
  */
 export const useExtrapolated = (value: number, reportedAt: number, interval: number) => {
   const [shown, setShown] = useState(0);

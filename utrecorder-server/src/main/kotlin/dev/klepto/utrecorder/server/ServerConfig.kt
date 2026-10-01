@@ -5,6 +5,8 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.SystemConfigReader
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.toAbsolutePath
+import dev.klepto.utrecorder.core.RecorderConfig
+import dev.klepto.utrecorder.ut99.UtConfig
 import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
@@ -17,8 +19,10 @@ import kotlin.time.Duration.Companion.seconds
  * Use the constructor. A property that is not provided takes the value its `server.*` key configures, or else its
  * literal default. Without arguments, it reads the configuration of the current process.
  *
- * @param reader The source of the `server.*` keys and of [directories].
+ * @param reader The source of the `server.*` keys, of [directories] and of [recorder].
  * @property directories The home directory and the workspace directory that scratch work, such as a download, runs in.
+ * @property recorder The configuration demos are recorded with. If not provided, reads [reader] and installs the game
+ * under [directories].
  * @property recordings The directory that holds one `<capId>.mp4` per recorded demo. If not provided, uses the
  * `recordings` subdirectory of [DirectoriesConfig.home].
  * @property database The SQLite database file of the server. If not provided, uses `database/server.db` under
@@ -54,6 +58,7 @@ import kotlin.time.Duration.Companion.seconds
 class ServerConfig(
     reader: ConfigReader = SystemConfigReader(),
     val directories: DirectoriesConfig = DirectoriesConfig(reader),
+    val recorder: RecorderConfig = RecorderConfig(reader, UtConfig(reader, directories)),
     val recordings: Path = reader.get("server.recordings", directories.home["recordings"], String::toAbsolutePath),
     val database: Path = reader.get("server.database", directories.home["database/server.db"], String::toAbsolutePath),
     val uploadInterval: Duration = reader.duration("server.upload_interval", 1.minutes),

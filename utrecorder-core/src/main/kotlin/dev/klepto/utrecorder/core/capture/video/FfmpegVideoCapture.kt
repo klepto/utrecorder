@@ -34,8 +34,8 @@ import kotlin.time.DurationUnit
  * A capture stages the demo through a [DemoPlayback], extracts the hooks into a workspace of its own, and plays the
  * demo windowed and without sound. The run is killed once ffmpeg has encoded no new frame for
  * [VideoCaptureConfig.idleTimeout], however long the whole run takes. The frames are encoded into a video file in a
- * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number the demo's duration makes at [VideoCaptureConfig.fps]. A run that logs no marks
- * fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
+ * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number
+ * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
  * that it stopped the frame capture fails with an [IllegalStateException] naming the reason it gave.
  *
  * @property config The video capture configuration, carrying the frame size, the fps, the idle timeout and the renderer

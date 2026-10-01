@@ -18,11 +18,11 @@ enum class OperatingSystem(
     val libraryPathVariable: String?,
 ) {
     WINDOWS(executableSuffix = ".exe", libraryPathVariable = null) {
-        override fun dataDirectory(reader: SystemConfigReader): Path =
+        override fun dataDirectory(reader: ConfigReader): Path =
             reader.environmentVariable("LOCALAPPDATA")?.toAbsolutePath() ?: homeDirectory(reader)["AppData"]["Local"]
     },
     LINUX(executableSuffix = "", libraryPathVariable = "LD_LIBRARY_PATH") {
-        override fun dataDirectory(reader: SystemConfigReader): Path =
+        override fun dataDirectory(reader: ConfigReader): Path =
             reader.environmentVariable("XDG_DATA_HOME")?.toAbsolutePath() ?: homeDirectory(reader)[".local"]["share"]
     },
     ;
@@ -35,7 +35,7 @@ enum class OperatingSystem(
      *
      * @throws IllegalStateException if the environment variable is not set and no `user.home` is set either.
      */
-    abstract fun dataDirectory(reader: SystemConfigReader = SystemConfigReader()): Path
+    abstract fun dataDirectory(reader: ConfigReader = SystemConfigReader()): Path
 
     companion object {
         /**
@@ -57,7 +57,7 @@ enum class OperatingSystem(
          *
          * @throws IllegalStateException if no `user.home` is set.
          */
-        private fun homeDirectory(reader: SystemConfigReader): Path =
+        private fun homeDirectory(reader: ConfigReader): Path =
             checkNotNull(reader.systemProperty("user.home")) { "No user.home system property" }.toAbsolutePath()
     }
 }

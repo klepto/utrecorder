@@ -29,7 +29,7 @@ class DemoPlaybackTest :
         (systemDirectory / gameExecutable).writeText("")
         val installation =
             UtInstallation(installationDirectory, UtConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = home)))
-        val playback = DemoPlayback(installation)
+        val playback = DemoPlayback(installation, installation.config.directoriesConfig)
 
         afterSpec {
             home.toFile().deleteRecursively()

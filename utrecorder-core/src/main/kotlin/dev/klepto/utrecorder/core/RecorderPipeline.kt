@@ -24,6 +24,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.nio.file.Path
 import java.util.Locale
+import kotlin.io.path.div
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit.SECONDS
@@ -31,7 +32,7 @@ import kotlin.time.DurationUnit.SECONDS
 /**
  * A recording of demos in one installation: a video capture and an audio capture, muxed into one mp4.
  *
- * Create one with the constructor. Run one recording per installation at a time.
+ * Create one with the constructor. Several recordings may share one installation.
  *
  * @property video The configuration of the video capture and of its encode.
  * @property audio The configuration of the audio capture and of the audio of the mux.
@@ -73,7 +74,8 @@ class RecorderPipeline(
      * Returns the path of the mp4 `<name>.mp4` recorded from [demo], kept in a workspace of the recording's own.
      *
      * The audio capture runs beside the video capture, and the mux runs once both have finished. Cancelling this call
-     * cancels both captures. The audio track is placed against the end mark of the video capture.
+     * cancels both captures. The audio track is placed by [AudioAlignment.place] to start at the demo time of the video
+     * capture's spawn mark, the demo time the first frame of the video shows.
      *
      * The last step checks the length of the mp4 against [runTime]. The mp4 must run at least [runTime], and at most
      * [LENGTH_TOLERANCE] longer. If [runTime] is not provided, the length is not checked.
@@ -104,7 +106,7 @@ class RecorderPipeline(
             capturing(Progress(1.0))
 
             val muxing = Muxing.start(onProgress)
-            val target = output["$name.mp4"]
+            val target = (output.directory / "$name.mp4").also(output::track)
             val placement = AudioAlignment.place(audioTrack, videoTrack.length, videoTrack.demoStart, audio.offset)
             val mp4 = muxer.merge(videoTrack.file, audioTrack.file, placement.offset, placement.length, target, muxing)
             runTime?.let { checkLength(mp4, it) }

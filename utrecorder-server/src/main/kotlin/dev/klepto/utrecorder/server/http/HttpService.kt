@@ -3,7 +3,6 @@ package dev.klepto.utrecorder.server.http
 import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.RecorderStage
-import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.cache.CacheService
@@ -59,9 +58,9 @@ import kotlin.time.Instant
  *   instead, if [cache] names one. The mp4 of an [Outdated] recording is served the same way, but never redirected;
  *   once its mp4 is gone, the recording answers `404`. Every other request answers `404`.
  * - `GET /view/{capId}`: an HTML page that plays `/mp4/{capId}` and carries OpenGraph video tags for link previews: the
- *   title of the cap, the size of [video], and absolute URLs built from the origin of the request. The origin honours
- *   the `X-Forwarded-*` headers only if [ServerConfig.trustForwardedHeaders] is enabled. Answers `404` wherever
- *   `/mp4/{capId}` answers `404`.
+ *   title of the cap, the video size of [ServerConfig.recorder], and absolute URLs built from the origin of the
+ *   request. The origin honours the `X-Forwarded-*` headers only if [ServerConfig.trustForwardedHeaders] is enabled.
+ *   Answers `404` wherever `/mp4/{capId}` answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
  * - `GET /api/queue`: the next 10 demos to be recorded, in the order they are taken.
  * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, plus every
@@ -84,15 +83,14 @@ import kotlin.time.Instant
  * @property repository The recordings to serve.
  * @property jobs The running recordings.
  * @property cache The cache that counts the views and names the download URL of an archived mp4.
- * @property config The recordings directory, the port and whether the forwarded headers are trusted.
- * @property video The size of the recorded videos.
+ * @property config The recordings directory, the port, whether the forwarded headers are trusted and the size of the
+ * recorded videos.
  */
 class HttpService(
     private val repository: RecordingRepository,
     private val jobs: RecordingJobs,
     private val cache: CacheService,
     private val config: ServerConfig = ServerConfig(),
-    private val video: VideoCaptureConfig = VideoCaptureConfig(),
 ) : Service {
     override suspend fun start() {
         val server = embeddedServer(CIO, port = config.port) { module(this) }
@@ -216,8 +214,8 @@ class HttpService(
                 <meta property="og:url" content="${pageUrl.escapeHtml()}" />
                 <meta property="og:video" content="$mp4" />
                 <meta property="og:video:type" content="video/mp4" />
-                <meta property="og:video:width" content="${video.width}" />
-                <meta property="og:video:height" content="${video.height}" />
+                <meta property="og:video:width" content="${config.recorder.video.width}" />
+                <meta property="og:video:height" content="${config.recorder.video.height}" />
               </head>
               <body style="margin: 0; background: #000">
                 <video src="$mp4" controls autoplay playsinline style="display: block; width: 100vw; height: 100vh"></video>

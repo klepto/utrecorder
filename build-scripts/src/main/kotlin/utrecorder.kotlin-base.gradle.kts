@@ -1,3 +1,4 @@
+import dev.klepto.utrecorder.build.IntegrationTestCache
 import dev.klepto.utrecorder.build.bundle
 import dev.klepto.utrecorder.build.javaVersion
 import dev.klepto.utrecorder.build.ktlintVersion
@@ -35,6 +36,17 @@ tasks.test {
     filter.excludeTestsMatching(INTEGRATION_TEST_PATTERN)
 }
 
+val integrationTestCachePath =
+    providers
+        .systemProperty(IntegrationTestCache.PROPERTY)
+        .filter(String::isNotEmpty)
+        .orElse(".utrecorder/cache")
+
+val integrationTestCache =
+    layout.settingsDirectory
+        .dir(integrationTestCachePath)
+        .map { it.asFile.absolutePath }
+
 tasks.register<Test>("integrationTest") {
     group = LifecycleBasePlugin.VERIFICATION_GROUP
     description = "Runs the tests that exercise real external dependencies. Opt-in, never part of `check`."
@@ -47,4 +59,5 @@ tasks.register<Test>("integrationTest") {
     filter.isFailOnNoMatchingTests = false
     outputs.upToDateWhen { false }
     testLogging.showStandardStreams = true
+    jvmArgumentProviders += IntegrationTestCache(integrationTestCache)
 }

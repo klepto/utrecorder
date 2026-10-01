@@ -1,14 +1,22 @@
 package dev.klepto.utrecorder.core
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.SystemConfigReader
+import dev.klepto.utrecorder.ut99.UtConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlin.io.path.createTempDirectory
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 class RecorderConfigTest :
     FunSpec({
+        val home = createTempDirectory("utrecorder-recorder-config-test")
+        val ut = UtConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = home))
+
+        afterSpec { home.toFile().deleteRecursively() }
+
         test("reads every record key") {
             val properties =
                 mapOf(
@@ -42,7 +50,7 @@ class RecorderConfigTest :
                 )
             val reader = SystemConfigReader(properties = properties::get, environment = { null })
 
-            val config = RecorderConfig(reader)
+            val config = RecorderConfig(reader, ut)
 
             with(config.video) {
                 fps shouldBe 90
@@ -80,7 +88,7 @@ class RecorderConfigTest :
         }
 
         test("falls back to the literal defaults") {
-            val config = RecorderConfig(ConfigReader.EMPTY)
+            val config = RecorderConfig(ConfigReader.EMPTY, ut)
 
             with(config.video) {
                 fps shouldBe 60

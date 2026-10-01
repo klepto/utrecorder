@@ -10,8 +10,9 @@ object AudioAlignment {
      *
      * The placed audio starts where the wav plays demo time [videoStart], shifted by [audioOffset] seconds, and runs
      * for [videoLength]. The wav position of [videoStart] is counted from the start of [track], by the demo time
-     * between the demo start of [track] and [videoStart]. If [videoStart] is not known, or if the shifted start would
-     * fall before the start of the wav, returns the track's own offset and length instead.
+     * between the demo start of [track] and [videoStart]. If [videoStart] is not known, if [videoLength] is not
+     * positive, or if the shifted start would fall before the start of the wav, returns the track's own offset and
+     * length instead.
      *
      * @param videoStart The demo time, in seconds, the first frame of the video shows, or `null` if not known.
      * @param audioOffset The manual shift, in seconds, added to the start of the placed audio.

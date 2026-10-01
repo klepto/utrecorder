@@ -152,6 +152,14 @@ class ConfigReaderTest :
             test("configures no key") {
                 ConfigReader.EMPTY["home"].shouldBeNull()
             }
+
+            test("holds no system property") {
+                ConfigReader.EMPTY.systemProperty("user.home").shouldBeNull()
+            }
+
+            test("holds no environment variable") {
+                ConfigReader.EMPTY.environmentVariable("LOCALAPPDATA").shouldBeNull()
+            }
         }
 
         context("default lookups") {

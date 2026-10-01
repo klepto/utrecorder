@@ -17,9 +17,10 @@
 // the timeline or before the latest teleport or respawn is shown: the player
 // holds there until the delay has passed.
 //
-// Nothing the demo delivers is changed: the pose written here stays on the
-// player only until the next demo frame overwrites it. While a smoother
-// exists, udemo's own recorder smoothing is off.
+// It writes the pose onto the player, along with his eye height state, a
+// level view roll and the flags of UTPure-style and IG+ players. The next
+// demo frame overwrites the pose. While a smoother exists, udemo's own
+// recorder smoothing is off.
 //=============================================================================
 class UTRecorderSmooth extends Actor;
 
@@ -211,9 +212,8 @@ function RunFrame(float Delta)
 	}
 	Observe(Delta);
 	Place();
-	// A UTPure-style player draws its own view copy while its flag says one has
-	// arrived; lowered, it draws the view written here. The demo raises it with
-	// the next copy.
+	// Lowers a UTPure-style player's view copy flag, so it draws the view
+	// written here.
 	if (bVRPawn)
 	{
 		Rec.SetPropertyText("zzbRepVRData", "False");
@@ -273,8 +273,7 @@ function PlayerPawn LinkedRecorder()
 }
 
 // Switches udemo's own recorder smoothing off through the driver's live value,
-// never the saved setting. udemo copies the saved setting back whenever it
-// re-links the player, so this runs every frame.
+// never the saved setting.
 function ServiceNative()
 {
 	if (Spec.Driver.GetPropertyText("SmoothRecorderMovement") != "Smooth_None")
@@ -1900,8 +1899,7 @@ function Place()
 	// ---- movement
 	if (bHaveL)
 	{
-		// Placed with world collision off: the path can sit a fraction of a
-		// unit inside a wall the snapshots touched.
+		// Placed with world collision off.
 		bOldCW = Rec.bCollideWorld;
 		Rec.bCollideWorld = false;
 		Rec.SetLocation(L);
@@ -1909,9 +1907,7 @@ function Place()
 		WLoc = Rec.Location;
 		bWroteLoc = true;
 		Rec.EyeHeight = OE;
-		// udemo sets BaseEyeHeight to EyeHeight at the start of every frame and
-		// clears ShakeVert, so the player's own update keeps the demo's value.
-		// Set so here as well, it keeps ours.
+		// Set the way udemo sets them at the start of every frame.
 		Rec.BaseEyeHeight = OE;
 		Rec.ShakeVert = 0.0;
 		WEye = Rec.EyeHeight;
@@ -1938,7 +1934,7 @@ function Place()
 	}
 	else if (Rec.ViewRotation.Roll != 0)
 	{
-		// udemo works the replayed kick into the roll again every frame
+		// holds the roll level on frames with no rotation to write
 		R = Rec.ViewRotation;
 		R.Roll = 0;
 		Rec.ViewRotation = R;

@@ -1,6 +1,8 @@
 package dev.klepto.utrecorder.core.demo
 
 import dev.klepto.utrecorder.common.io.EmbeddedArtifacts
+import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.replaceIfChanged
 import dev.klepto.utrecorder.ut99.UtInstallation
 import java.nio.file.Path
 
@@ -8,7 +10,8 @@ import java.nio.file.Path
  * The recorder's UnrealScript package, `UTRecorder.u`, in the `System` directory of an installation.
  *
  * The package holds the console that plays a demo, exits the process when the demo ends, and logs the start and end
- * marks. The console does nothing until the game ini of a run turns on its `bAutoExit`.
+ * marks. The console runs the exec commands of a run whether `bAutoExit` is on or not. It seeks to the run start, logs
+ * the marks, unlinks the warp zones and exits only when the game ini of a run turns on its `bAutoExit`.
  *
  * Create one with the constructor.
  *
@@ -19,9 +22,13 @@ class DemoPlaybackUscript(
 ) {
     /**
      * Returns the paths of the package's artifacts after writing them into the installation's `System` directory.
-     * Files of the same name are overwritten.
+     *
+     * A file of the same name is replaced only when it holds other bytes.
      */
-    suspend fun install(): List<Path> = ARTIFACTS.extractTo(installation.systemDirectory)
+    suspend fun install(): List<Path> =
+        ARTIFACTS.names.map { name ->
+            installation.systemDirectory[name].replaceIfChanged(ARTIFACTS.read(name), installation.config.directoriesConfig)
+        }
 
     private companion object {
         /**

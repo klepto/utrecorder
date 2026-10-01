@@ -12,7 +12,7 @@ const splitDuration = (value: string): { whole: number; fraction: string } => {
 
 /**
  * Formats the ISO-8601 duration `value` as `m:ss.ccc`, or as `s.ccc` under a minute. The seconds are truncated to three
- * decimals, never rounded, so `PT59.9999S` reads `59.999` and a cap time never reads slower than the timer's.
+ * decimals, never rounded, so `PT59.9999S` reads `59.999`.
  */
 export const formatCapTime = (value: string): string => {
   const { whole, fraction } = splitDuration(value);

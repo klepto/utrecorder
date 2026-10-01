@@ -22,10 +22,9 @@ interface Estimate {
 
 /**
  * Returns the estimate after `last`, for the next demo `next`, while `capture` runs at `progress` in the jobs fetched at
- * the epoch millisecond `now`. Without a
- * capture, the deadline is `START_DELAY` after the capture ended or `next` changed. With one, it is `START_DELAY` after
- * the end of the capture, extrapolated at the average speed since the capture was first seen, and it only changes when
- * the progress does. Until the progress has risen since the capture was first seen, the deadline is `null`.
+ * the epoch millisecond `now`. Without a capture, the deadline is `START_DELAY` after the capture ended or `next`
+ * changed. With one, it is `START_DELAY` after the end of the capture, extrapolated at the average speed since the
+ * capture was first seen, and it only changes when the progress does. Until the progress has risen since the capture was first seen, the deadline is `null`.
  */
 const reestimate = (last: Estimate | null, next: string, capture: string | null, progress: number, now: number) => {
   if (last === null || last.next !== next || last.capture !== capture) {

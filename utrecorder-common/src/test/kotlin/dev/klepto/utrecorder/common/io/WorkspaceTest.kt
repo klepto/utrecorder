@@ -24,9 +24,13 @@ import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Path
 import java.nio.file.attribute.FileTime
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlin.io.path.createDirectories
+import kotlin.io.path.createParentDirectories
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.deleteExisting
 import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
@@ -43,6 +47,19 @@ class WorkspaceTest :
         val windowsOnly = { _: TestCase -> OperatingSystem.current() == WINDOWS }
 
         fun expire(path: Path) = path.setLastModifiedTime(FileTime.from(Instant.now().minus(8, ChronoUnit.DAYS)))
+
+        // Holds the directory of every id the next 10 minutes can produce, as another process sharing the home would.
+        fun claimAhead(
+            name: String,
+            config: DirectoriesConfig,
+        ): Set<Path> {
+            val format = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm-ss").withZone(ZoneId.systemDefault())
+            val now = Instant.now()
+            return (0L..600L)
+                .map { config.workspace / "$name-${format.format(now.plusSeconds(it))}" }
+                .onEach { (it / "foreign.log").createParentDirectories().writeText("foreign") }
+                .toSet()
+        }
 
         // Coroutine stack trace recovery can rethrow a copy of the failure, with the original as its cause.
         fun suppressed(failure: Throwable): List<Throwable> =
@@ -122,6 +139,23 @@ class WorkspaceTest :
 
                 first shouldNotBe second
             }
+
+            test("skips an id whose directory another process already holds") {
+                val config = DirectoriesConfig(ConfigReader.EMPTY, home = root / "claimed")
+                val taken = claimAhead("claimed", config)
+                lateinit var directory: Path
+                lateinit var entries: List<Path>
+
+                workspace("claimed", config = config) {
+                    directory = it.directory
+                    entries = it.directory.listDirectoryEntries()
+                    this["make.log"].writeText("log")
+                }
+
+                taken.contains(directory) shouldBe false
+                entries shouldBe emptyList()
+                taken.forEach { it.listDirectoryEntries() shouldBe listOf(it / "foreign.log") }
+            }
         }
 
         context("a workspace in a shared root") {
@@ -188,7 +222,9 @@ class WorkspaceTest :
                     shouldThrow<IllegalStateException> {
                         workspace("ucc", shared, config) {
                             val log = this["make.log"].apply { writeText("log") }
-                            (config.workspace / log.fileName.toString().removeSuffix("-make.log")).writeText("blocker")
+                            val claimed = config.workspace / log.fileName.toString().removeSuffix("-make.log")
+                            claimed.deleteExisting()
+                            claimed.writeText("blocker")
                             error("Boom")
                         }
                     }
@@ -205,7 +241,9 @@ class WorkspaceTest :
                     shouldThrow<CancellationException> {
                         workspace("ucc", shared, config) {
                             val log = this["make.log"].apply { writeText("log") }
-                            (config.workspace / log.fileName.toString().removeSuffix("-make.log")).writeText("blocker")
+                            val claimed = config.workspace / log.fileName.toString().removeSuffix("-make.log")
+                            claimed.deleteExisting()
+                            claimed.writeText("blocker")
                             throw CancellationException("Stop")
                         }
                     }
@@ -220,6 +258,60 @@ class WorkspaceTest :
                 workspace("ucc", shared, DirectoriesConfig(ConfigReader.EMPTY, home = root / "shared-empty-home")) {}
 
                 (root / "shared-empty-home" / "workspace").listDirectoryEntries() shouldBe emptyList()
+            }
+
+            test("names no file with an id whose directory another process already holds") {
+                val shared = (root / "shared-claimed").createDirectories()
+                val config = DirectoriesConfig(ConfigReader.EMPTY, home = root / "shared-claimed-home")
+                val taken = claimAhead("ucc", config).map { it.fileName.toString() }
+                lateinit var log: Path
+
+                workspace("ucc", shared, config) {
+                    log = this["make.log"].apply { writeText("log") }
+                }
+
+                taken.contains(log.fileName.toString().removeSuffix("-make.log")) shouldBe false
+            }
+        }
+
+        context("a nested workspace") {
+            test("names files in the directory of its parent with the name and id of the workspace as a prefix") {
+                val config = DirectoriesConfig(ConfigReader.EMPTY, home = root / "nested-names")
+
+                workspace("record", config = config) { recording ->
+                    workspace("video", config = config) {
+                        directory shouldBe recording.directory
+                        this["log.txt"].parent shouldBe recording.directory
+                        this["log.txt"].fileName.toString() shouldMatch Regex("""video-\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-log\.txt""")
+                    }
+                }
+            }
+
+            test("keeps the files of two nested workspaces that name the same file apart, in the directory of their parent") {
+                val config = DirectoriesConfig(ConfigReader.EMPTY, home = root / "nested-apart")
+                lateinit var directory: Path
+
+                workspace("record", config = config) { recording ->
+                    directory = recording.directory
+                    workspace("video", config = config) { this["log.txt"].writeText("video") }
+                    workspace("audio", config = config) { this["log.txt"].writeText("audio") }
+                }
+
+                directory.listDirectoryEntries().map { it.readText() }.sorted() shouldBe listOf("audio", "video")
+                (root / "nested-apart" / "workspace").listDirectoryEntries() shouldBe listOf(directory)
+            }
+
+            test("leaves an expired entry of the workspace directory to the top-level workspace") {
+                val config = DirectoriesConfig(ConfigReader.EMPTY, home = root / "nested-prune")
+                lateinit var stale: Path
+
+                workspace("record", config = config) {
+                    stale = (config.workspace / "stale").createDirectories()
+                    expire(stale)
+                    workspace("video", config = config) {}
+                }
+
+                stale.shouldExist()
             }
         }
 
