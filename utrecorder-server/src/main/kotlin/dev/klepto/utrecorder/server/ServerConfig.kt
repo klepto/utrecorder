@@ -10,6 +10,7 @@ import dev.klepto.utrecorder.ut99.UtConfig
 import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -44,6 +45,8 @@ import kotlin.time.Duration.Companion.seconds
  * headers. Enable it only when a proxy in front of the server sets those headers.
  * @property recordingMaxAttempts How many times a demo is recorded before the server gives up on it.
  * @property recordingCooldown How long a recorder waits after each recording.
+ * @property recordingRetryInterval How long the server waits between two passes that record again every recording it gave
+ * up on.
  * @property recordingRecentAge The age up to which a demo is recent. An older demo is a backlog demo.
  * @property recordingBacklogBuffer The most recordings that may be recording or recorded without being uploaded when a
  * backlog demo is taken.
@@ -72,6 +75,7 @@ class ServerConfig(
     val trustForwardedHeaders: Boolean = reader.get("server.trust_forwarded_headers", false, String::toBoolean),
     val recordingMaxAttempts: Int = reader.get("server.recording.max_attempts", 3, String::toInt),
     val recordingCooldown: Duration = reader.duration("server.recording.cooldown", 10.seconds),
+    val recordingRetryInterval: Duration = reader.duration("server.recording.retry_interval", 12.hours),
     val recordingRecentAge: Duration = reader.duration("server.recording.recent_age", 7.days),
     val recordingBacklogBuffer: Int = reader.get("server.recording.backlog_buffer", 1, String::toInt),
     val utbtApiUrl: String = reader.get("server.utbt.api_url", "https://gateway.utbt.net"),

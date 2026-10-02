@@ -111,7 +111,7 @@ class UtPackageInstaller(
      */
     private suspend fun copyIntoInstallation(source: UtPackage): UtPackage {
         val path = checkNotNull(source.path) { "No file holds the package ${source.name}" }
-        return UtPackage.read(path.copy(installationPath(path), overwrite = true))
+        return UtPackage.read(path.copy(installationPath(source), overwrite = true))
     }
 
     /**
@@ -140,20 +140,20 @@ class UtPackageInstaller(
             Downloader(url, directories = config.directoriesConfig).download(archive)
             val extracted = installation.compiler.extract(archive, workspace[fileName])
             archive.deleteIfExists()
-            moveIntoInstallation(UtPackage.read(extracted), required)
+            moveIntoInstallation(UtPackage.read(extracted, required.name), required)
         }
     }
 
     /**
-     * Moves the downloaded package [downloaded] into the installation and returns the package the installation now
-     * holds. If [downloaded] does not satisfy [required], deletes it and returns `null` instead.
+     * Moves the downloaded package [downloaded] into the installation, under its package name, and returns the package
+     * the installation now holds. If [downloaded] does not satisfy [required], deletes it and returns `null` instead.
      */
     private suspend fun moveIntoInstallation(
         downloaded: UtPackage,
         required: UtPackage,
     ): UtPackage? {
         val path = checkNotNull(downloaded.path) { "No file holds the package ${downloaded.name}" }
-        if (downloaded.satisfies(required)) return UtPackage.read(path.move(installationPath(path)))
+        if (downloaded.satisfies(required)) return UtPackage.read(path.move(installationPath(downloaded)))
 
         val downloadedGuid = downloaded.guid()
         val requiredGuid = required.guid()
@@ -163,11 +163,13 @@ class UtPackageInstaller(
     }
 
     /**
-     * Returns the path the package file [path] takes in the installation, in the directory its extension maps to.
+     * Returns the path the package [source] takes in the installation: a file named after the package, in the directory
+     * the extension of its file maps to.
      */
-    private fun installationPath(path: Path): Path {
+    private fun installationPath(source: UtPackage): Path {
+        val path = checkNotNull(source.path) { "No file holds the package ${source.name}" }
         val directory = checkNotNull(UtDirectory.of(path.extension)) { "No directory of an installation holds $path" }
-        return installation.directory[directory]["${path.fileName}"]
+        return installation.directory[directory]["${source.name}.${path.extension}"]
     }
 
     companion object {

@@ -42,7 +42,8 @@ import kotlin.time.measureTimedValue
  * capture ends.
  *
  * On start, every [RecordingStatus.Recording], [Failed] or [Unresolvable] recording of [repository] is set to [Pending]
- * again, before any demo is taken.
+ * again, before any demo is taken. Once every [ServerConfig.recordingRetryInterval] after that, every [Failed] or
+ * [Unresolvable] recording is set to [Pending] again.
  *
  * Each of [recorders] takes its demos from [repository] on its own, and records one demo at a time. It waits
  * [ServerConfig.recordingCooldown] after each attempt before it records again. The cooldown after the last attempt starts
@@ -54,7 +55,7 @@ import kotlin.time.measureTimedValue
  * @property demos The demos to choose from.
  * @property repository The recordings of the chosen demos, and the queue they are taken from.
  * @property recorders The recorders that take the demos.
- * @property config The recordings directory, the attempts and the cooldown.
+ * @property config The recordings directory, the attempts, the cooldown and the retry interval.
  * @property jobs The list the running recordings are tracked in.
  * @throws IllegalArgumentException If [recorders] is empty.
  */
@@ -75,6 +76,7 @@ class RecordingService(
         coroutineScope {
             requeue()
             launch { demos.changes.collect { queueFastest() } }
+            launch { retryLoop() }
             recorders.forEach { launch { it.recordQueued() } }
             awaitCancellation()
         }
@@ -84,6 +86,23 @@ class RecordingService(
      */
     private suspend fun requeue() {
         repository.updateAll { if (it.status in REQUEUED) it.copy(status = Pending) else it }
+    }
+
+    /**
+     * Runs [retry] once every [ServerConfig.recordingRetryInterval].
+     */
+    private suspend fun retryLoop() {
+        while (isRunning()) {
+            delay(config.recordingRetryInterval)
+            retry()
+        }
+    }
+
+    /**
+     * Sets every [Failed] or [Unresolvable] recording of [repository] to [Pending].
+     */
+    private suspend fun retry() {
+        repository.updateAll { if (it.status in GIVEN_UP) it.copy(status = Pending) else it }
     }
 
     /**
@@ -201,7 +220,9 @@ class RecordingService(
     }
 
     private companion object {
-        val REQUEUED = setOf(RecordingStatus.Recording, Failed, Unresolvable)
+        val GIVEN_UP = setOf(Failed, Unresolvable)
+
+        val REQUEUED = GIVEN_UP + RecordingStatus.Recording
 
         val COMPLETED = setOf(Recorded, Uploaded, Archived)
 

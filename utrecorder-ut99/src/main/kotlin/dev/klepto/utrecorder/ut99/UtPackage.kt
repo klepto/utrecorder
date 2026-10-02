@@ -117,9 +117,13 @@ class UtPackage private constructor(
         ): UtPackage = UtPackage(name, null, guid)
 
         /**
-         * Returns the package held at [path], named after the file. The file is not read until [guid] is called.
+         * Returns the package [name] held at [path]. The file is not read until [guid] is called. If [name] is not
+         * provided, names the package after the file instead.
          */
-        fun read(path: Path): UtPackage = UtPackage(path.nameWithoutExtension, path, "")
+        fun read(
+            path: Path,
+            name: String = path.nameWithoutExtension,
+        ): UtPackage = UtPackage(name, path, "")
 
         /**
          * Returns the packages held directly in [directory]: its regular files whose extension is one of [extensions],

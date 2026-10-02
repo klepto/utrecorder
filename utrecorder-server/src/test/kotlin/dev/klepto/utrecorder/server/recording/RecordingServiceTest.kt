@@ -46,6 +46,7 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -80,6 +81,7 @@ class RecordingServiceTest :
             recordings: Path,
             maxAttempts: Int = 3,
             cooldown: Duration = 20.milliseconds,
+            retryInterval: Duration = 12.hours,
         ): ServerConfig =
             ServerConfig(
                 ConfigReader.EMPTY,
@@ -87,6 +89,7 @@ class RecordingServiceTest :
                 recordings = recordings,
                 recordingMaxAttempts = maxAttempts,
                 recordingCooldown = cooldown,
+                recordingRetryInterval = retryInterval,
             )
 
         fun recorder(record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult): RecorderProvider =
@@ -544,6 +547,50 @@ class RecordingServiceTest :
                     job.cancelAndJoin()
                 }
             }
+        }
+
+        test("records failed and unresolvable recordings again once the retry interval passes, and leaves outdated and the rest") {
+            val recordings = createTempDirectory(root, "recordings")
+            val starts = CopyOnWriteArrayList<String>()
+            val gate = CompletableDeferred<Unit>()
+            val record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult = { demo, _ ->
+                starts += demo.capId
+                val attempt = starts.count { it == demo.capId }
+                when {
+                    demo.capId == "busy" -> done(demo).also { gate.await() }
+                    attempt > 1 -> done(demo)
+                    demo.capId == "failed" -> RecorderResult.Failed(IllegalStateException("Capture failed"))
+                    else -> RecorderResult.Unresolvable(UtPackageException("BTPog", listOf("http://packages.example")))
+                }
+            }
+            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
+                val demos = DemoRepository(store)
+                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
+                repository += listOf(demo("recorded", 0), demo("outdated", 4))
+                repository.finish("recorded", Recorded)
+                repository.finish("outdated", Outdated, "Capture failed")
+                demos += listOf(demo("busy", 1), demo("failed", 2), demo("unresolvable", 3))
+                val config = config(recordings, maxAttempts = 1, retryInterval = 300.milliseconds)
+                coroutineScope {
+                    val job =
+                        launch {
+                            RecordingService(demos, repository, listOf(recorder(record), recorder(record)), config).start()
+                        }
+                    eventually(10.seconds) {
+                        repository["failed"]?.status shouldBe Recorded
+                        repository["unresolvable"]?.status shouldBe Recorded
+                    }
+                    delay(600.milliseconds)
+                    repository["busy"]?.status shouldBe RecordingStatus.Recording
+                    repository["recorded"]?.status shouldBe Recorded
+                    repository["outdated"]?.status shouldBe Outdated
+                    gate.complete(Unit)
+                    job.cancelAndJoin()
+                }
+            }
+
+            starts.filter { it == "busy" } shouldContainExactly listOf("busy")
+            starts.filter { it != "busy" } shouldContainExactlyInAnyOrder listOf("failed", "failed", "unresolvable", "unresolvable")
         }
 
         test("rejects an empty list of recorders") {

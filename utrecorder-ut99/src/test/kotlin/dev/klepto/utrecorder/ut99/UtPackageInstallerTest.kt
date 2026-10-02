@@ -5,6 +5,7 @@ import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.Executable
 import dev.klepto.utrecorder.common.io.startAndAwait
+import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.ut99.UtDirectory.Maps
 import dev.klepto.utrecorder.ut99.UtPlatform.WINDOWS
 import io.kotest.assertions.throwables.shouldThrow
@@ -388,6 +389,19 @@ class UtPackageInstallerTest :
                 installer.installed shouldBe emptyList()
                 installationPath(installation, UtDirectory.System, "BTPog.u").exists() shouldBe false
                 packagesDirectory("mismatched-everywhere").listDirectoryEntries() shouldBe emptyList()
+            }
+
+            test("installs a package downloaded at the recorded GUID under its own name when it runs inside a workspace") {
+                val installation = installation("inside-workspace")
+                served["/first/CTF-BT-Test.unr.uz"] = archive("CTF-BT-Test.unr", packageBytes(guid))
+                val installer = installer(installation, UtPackage.named("CTF-BT-Test", guid))
+                val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root / "inside-workspace")
+
+                workspace("recording", config = directories) { installer.install() }
+
+                val target = installationPath(installation, Maps, "CTF-BT-Test.unr")
+                UtPackage.read(target).guid() shouldBe "123456789ABCDEF0876543210BADF00D"
+                installer.installed.map { it.path } shouldBe listOf(target)
             }
 
             test("keeps a downloaded package at any GUID when the demo names no GUID") {
