@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up the utrecorder server database
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/utrecorder/backup.sh

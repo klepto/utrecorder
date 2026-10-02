@@ -8,7 +8,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # uthooks.so is compiled for Linux here, and UTRecorderConsole compiles against a materialized UT99 install, which
 # runs the game's own Linux binaries under a virtual display, so the builder needs the same 32-bit runtime the final
-# image does, plus the C toolchain.
+# image does, plus the C toolchain. The tests load the bundled ffmpeg's 64-bit libraries, which link libxcb, libasound
+# and libpulse without shipping them, so the builder carries those too.
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -18,6 +19,11 @@ RUN dpkg --add-architecture i386 \
         libc6-dev-i386 \
         xvfb \
         x11-utils \
+        libxcb1 \
+        libxcb-shm0 \
+        libxcb-shape0 \
+        libxcb-xfixes0 \
+        libpulse0 \
         libc6:i386 \
         libstdc++6:i386 \
         libgcc-s1:i386 \
@@ -35,8 +41,8 @@ RUN dpkg --add-architecture i386 \
         libxi6:i386 \
         libxfixes3:i386 \
         libxss1:i386 \
-    && (apt-get install -y --no-install-recommends libasound2t64:i386 \
-        || apt-get install -y --no-install-recommends libasound2:i386) \
+    && (apt-get install -y --no-install-recommends libasound2t64:i386 libasound2t64 \
+        || apt-get install -y --no-install-recommends libasound2:i386 libasound2) \
     && rm -rf /var/lib/apt/lists/*
 
 ENV DISPLAY=:99 \
@@ -50,7 +56,8 @@ COPY . .
 
 # The Gradle user home is a build cache mount, so a rebuild reuses the Gradle distribution and the dependencies it
 # downloaded before instead of downloading them again. The development home's cache/ is a build cache mount too, so
-# the UT99 install UCC compiles against is extracted from the iso and patch downloaded before.
+# the UT99 install UCC compiles against is extracted from the iso and patch downloaded before. The step runs the tests
+# as well as the build: `check` comes first, so an image exists only when the tests pass.
 RUN --mount=type=cache,target=/root/.gradle \
     --mount=type=cache,target=/utrecorder/.utrecorder/cache \
     Xvfb "$DISPLAY" -screen 0 "${SCREEN_SIZE}x24" -nolisten tcp -ac >/dev/null 2>&1 & \
@@ -59,7 +66,7 @@ RUN --mount=type=cache,target=/root/.gradle \
         sleep 0.1; \
     done \
     && xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 \
-    && { ./gradlew --no-daemon :utrecorder-server:installDist :utrecorder-cli:installDist \
+    && { ./gradlew --no-daemon check :utrecorder-server:installDist :utrecorder-cli:installDist \
         || { cat utrecorder-hooks/build/native-logs/*/compile.log 2>/dev/null; exit 1; }; }
 
 FROM eclipse-temurin:25-jre AS runtime

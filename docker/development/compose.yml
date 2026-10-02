@@ -3,7 +3,7 @@ name: utrecorder
 services:
   server:
     build:
-      context: ..
+      context: ../..
       dockerfile: docker/Dockerfile
       target: server
     image: utrecorder-server
@@ -13,7 +13,7 @@ services:
     volumes:
       - server-home:/var/lib/utrecorder
       - cache:/var/cache/utrecorder
-    # Any UTRECORDER_* key, such as the Internet Archive keys, set in docker/.env. The file is optional and gitignored.
+    # Any UTRECORDER_* key, such as the Internet Archive keys, set in docker/development/.env. The file is optional and gitignored.
     env_file:
       - path: .env
         required: false
@@ -26,7 +26,7 @@ services:
   # with the server, and the cli profile keeps docker compose up from starting it.
   cli:
     build:
-      context: ..
+      context: ../..
       dockerfile: docker/Dockerfile
       target: cli
     image: utrecorder-cli

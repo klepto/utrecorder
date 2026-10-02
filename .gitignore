@@ -52,7 +52,7 @@ bin/
 utrecorder-web/node_modules/
 
 ### Docker ###
-# Secrets and overrides docker compose reads for the services in docker/compose.yml.
-docker/.env
-# Recordings and logs docker/deploy-cli.sh copies out of the CLI container.
-docker/out/
+# Secrets and overrides docker compose reads for the services in docker/development/compose.yml.
+docker/development/.env
+# The host keeps its .env in /opt/utrecorder; one copied here for testing is never committed.
+docker/production/.env

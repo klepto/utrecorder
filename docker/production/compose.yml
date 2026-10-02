@@ -1,0 +1,43 @@
+# The services the production host runs from /opt/utrecorder. bootstrap.sh copies this file there, and
+# utrecorder-deploy starts them. UTRECORDER_VERSION and every other UTRECORDER_* key come from /opt/utrecorder/.env.
+name: utrecorder
+
+services:
+  server:
+    image: ghcr.io/klepto/utrecorder-server:${UTRECORDER_VERSION:?set UTRECORDER_VERSION in .env or run utrecorder-deploy}
+    init: true
+    restart: unless-stopped
+    # Only Caddy and utrecorder-deploy reach the server; the host's firewall never sees this port.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - server-home:/var/lib/utrecorder
+      - cache:/var/cache/utrecorder
+    # bootstrap.sh creates the file on the host. It is optional only so that docker compose config runs in a checkout.
+    env_file:
+      - path: .env
+        required: false
+    # The shutdown hook waits for a cancelled recording to kill the game and ffmpeg and clean up its workspace.
+    stop_grace_period: 1m
+    # At most four cores of CPU time. The JVM reads the limit, so the llvmpipe thread count follows it.
+    cpus: 4
+
+  # Terminates TLS for recorder.example.com with a Let's Encrypt certificate and proxies to the server.
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  server-home:
+  cache:
+  # Caddy's certificates and ACME account. Losing it only costs a new certificate.
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Switches the production host to one version of the server image: utrecorder-deploy <version>. A rollback is the
+# same command with an older version. Run as root on the host; bootstrap.sh puts it on PATH.
+#
+# Holds a lock so two deploys never run at once, warns when a recording is running, backs up the database, pulls the
+# image before it writes UTRECORDER_VERSION into .env, restarts the server and waits until it answers HTTP. Keeps the
+# image of the current and the previous version and removes older ones. It never empties a volume and never rolls
+# back on its own.
+set -euo pipefail
+
+readonly DIRECTORY=/opt/utrecorder
+readonly IMAGE=ghcr.io/klepto/utrecorder-server
+readonly URL=http://127.0.0.1:8080/api/jobs
+readonly TIMEOUT_SECONDS=300
+readonly LOCK=/run/lock/utrecorder-deploy.lock
+
+fail() {
+    echo "utrecorder-deploy: $*" >&2
+    exit 1
+}
+
+if [[ $# -ne 1 || ! $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
+    echo "Usage: utrecorder-deploy <version>" >&2
+    exit 2
+fi
+readonly VERSION=$1
+
+exec 9>"$LOCK"
+flock --nonblock 9 || fail "another deploy is running."
+
+cd "$DIRECTORY"
+[[ -f .env ]] || fail "$DIRECTORY/.env is missing; run bootstrap.sh first."
+previous=$(sed -n 's/^UTRECORDER_VERSION=//p' .env | tail -n 1)
+
+# A deploy during a recording restarts it: the server requeues the job, which loses only its progress.
+if jobs=$(curl --fail --silent --show-error --max-time 5 "$URL" 2>/dev/null); then
+    if [[ $jobs != "[]" ]]; then
+        echo "A recording is running:"
+        echo "$jobs"
+        answer=
+        read -r -p "Deploy anyway? The recording starts over once the new server is up. [y/N] " answer || true
+        [[ $answer == [yY]* ]] || fail "cancelled."
+    fi
+else
+    echo "The server does not answer at $URL, so no running recording is checked."
+fi
+
+"$DIRECTORY/backup.sh"
+
+# Pulled before .env changes, so a mistyped version fails here and leaves .env as it was.
+docker pull "$IMAGE:$VERSION"
+
+if grep -q '^UTRECORDER_VERSION=' .env; then
+    sed -i "s/^UTRECORDER_VERSION=.*/UTRECORDER_VERSION=$VERSION/" .env
+else
+    echo "UTRECORDER_VERSION=$VERSION" >>.env
+fi
+
+docker compose up --detach server
+# Caddy needs no restart for a new server version; this only starts it on the first deploy.
+docker compose up --detach --no-deps caddy
+
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+until curl --fail --silent --output /dev/null --max-time 5 "$URL"; do
+    if ((SECONDS >= deadline)); then
+        docker compose logs --tail 50 server >&2
+        echo >&2
+        echo "utrecorder-deploy: version $VERSION did not answer at $URL within $TIMEOUT_SECONDS seconds." >&2
+        if [[ -n $previous && $previous != "$VERSION" ]]; then
+            echo "To roll back, run: utrecorder-deploy $previous" >&2
+        fi
+        exit 1
+    fi
+    sleep 2
+done
+echo "Version $VERSION answers at $URL."
+
+# Keeps the current and the previous version, so a rollback needs no download.
+docker image ls "$IMAGE" --format '{{.Tag}}' | while read -r tag; do
+    if [[ $tag != "$VERSION" && $tag != "$previous" && $tag != "<none>" ]]; then
+        docker image rm "$IMAGE:$tag"
+    fi
+done

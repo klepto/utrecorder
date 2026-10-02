@@ -3,6 +3,8 @@ import dev.klepto.utrecorder.build.bundle
 import dev.klepto.utrecorder.build.javaVersion
 import dev.klepto.utrecorder.build.ktlintVersion
 import dev.klepto.utrecorder.build.lib
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
 import org.gradle.language.base.plugins.LifecycleBasePlugin
 
 plugins {
@@ -30,6 +32,11 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // The build logs at quiet level, which hides Gradle's default failed-test lines, so a failure is logged there.
+    testLogging.quiet {
+        events(TestLogEvent.FAILED)
+        exceptionFormat = TestExceptionFormat.FULL
+    }
 }
 
 tasks.test {

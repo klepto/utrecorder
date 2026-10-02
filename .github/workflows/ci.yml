@@ -1,0 +1,55 @@
+# Builds the Dockerfile's builder stage, which runs `check` and both distributions, and pushes nothing.
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+  # Add once the repository is public, when minutes no longer limit how often a cold build may run:
+  # push:
+  #   branches: [development]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Restore the BuildKit cache mounts
+        id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/buildkit-cache
+          key: buildkit-cache-${{ hashFiles('gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties', '**/*.gradle.kts') }}
+          restore-keys: buildkit-cache-
+
+      - name: Inject the cache mounts into BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          cache-map: |
+            {
+              "${{ runner.temp }}/buildkit-cache/gradle": "/root/.gradle",
+              "${{ runner.temp }}/buildkit-cache/utrecorder": "/utrecorder/.utrecorder/cache"
+            }
+          scratch-dir: ${{ runner.temp }}/buildkit-scratch
+          skip-extraction: ${{ steps.cache.outputs.cache-hit == 'true' }}
+
+      - name: Build and test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: builder
+          push: false
+          outputs: type=cacheonly
