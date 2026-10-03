@@ -15,8 +15,8 @@ import kotlinx.coroutines.CancellationException
  */
 interface RecorderProvider {
     /**
-     * Returns the result of recording [Demo.demoUrl] into an mp4 named after [Demo.capId]. The mp4 of a
-     * [RecorderResult.Done] lies inside the workspace of its recording.
+     * Returns the result of recording [Demo.demoUrl] into an mp4 and a thumbnail named after [Demo.capId]. The mp4 and
+     * the thumbnail of a [RecorderResult.Done] lie inside the workspace of their recording.
      *
      * [onProgress] receives each progress report of the recording.
      */
@@ -39,8 +39,8 @@ class DefaultRecorderProvider(
         onProgress: ProgressListener<RecorderStage>,
     ): RecorderResult =
         try {
-            val recording = Recorder(config).record(demo.demoUrl, demo.capId, onProgress)
-            RecorderResult.Done(recording)
+            val mp4 = Recorder(config).record(demo.demoUrl, demo.capId, onProgress)
+            RecorderResult.Done(mp4, mp4.resolveSibling("${demo.capId}.jpg"))
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: UtPackageException) {

@@ -23,7 +23,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimedValue
@@ -140,7 +139,7 @@ class RecordingService(
     }
 
     /**
-     * Stores the mp4 of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [repository]. A
+     * Stores the mp4 and the thumbnail of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [repository]. A
      * stored mp4 is recorded in [processingTime].
      */
     private suspend fun processRecording(
@@ -151,7 +150,7 @@ class RecordingService(
         val capId = demo.capId
         when (result) {
             is RecorderResult.Done -> {
-                suspendCatching { store(demo, result.mp4) }
+                suspendCatching { store(demo, result) }
                     .onSuccess { repository.recorded(capId, processingTime) }
                     .onFailure {
                         log.error(it) { "Could not store recording $capId" }
@@ -207,16 +206,18 @@ class RecordingService(
     }
 
     /**
-     * Moves [recordingPath] to the recorded file of [demo], then deletes the workspace that held it.
+     * Moves the mp4 and the thumbnail of [result] to the recorded files of [demo], then deletes the workspace that held
+     * them.
      */
     private suspend fun store(
         demo: Demo,
-        recordingPath: Path,
+        result: RecorderResult.Done,
     ) {
-        recordingPath.move(config.mp4(demo.capId))
-        recordingPath.parent
+        result.thumbnail.move(config.thumbnail(demo.capId))
+        result.mp4.move(config.mp4(demo.capId))
+        result.mp4.parent
             .deleteCatching()
-            .onFailure { log.warn(it) { "Could not delete the workspace ${recordingPath.parent}" } }
+            .onFailure { log.warn(it) { "Could not delete the workspace ${result.mp4.parent}" } }
     }
 
     private companion object {

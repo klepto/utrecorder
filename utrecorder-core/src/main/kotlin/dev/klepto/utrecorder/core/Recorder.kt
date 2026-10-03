@@ -33,7 +33,7 @@ import kotlin.time.Duration.Companion.minutes
  * Recorder of Unreal Tournament demos in one installation.
  *
  * Create one with the constructor. Use [playDemo] to play a demo and read its marks, and [record] to record a demo
- * into an mp4.
+ * into an mp4 with a thumbnail.
  *
  * @property config The configuration demos are played and recorded with.
  * @property directories The directories the workspaces are kept under.
@@ -77,17 +77,18 @@ class Recorder(
     }
 
     /**
-     * Returns the mp4 recorded from the demo at [url].
+     * Returns the mp4 recorded from the demo at [url]. Its thumbnail lies beside it, named as the mp4 with a `.jpg`
+     * extension.
      *
      * The demo is downloaded into the workspace of this recording and is kept there with the rest of its files.
      * [onProgress] receives the [FetchingDemo] stage first. Everything else is as for the [record] that takes a demo
      * file. Several recordings may share one installation.
      *
-     * @param name The name of the mp4 without its extension. If not provided, uses the file name of the downloaded demo
-     * without its `.dem` extension.
-     * @throws IllegalStateException If the demo cannot be fetched or resolved, if a capture fails the recording, or if
-     * the length of the mp4 does not match the run time the demo reports. A failed audio capture always fails the
-     * recording.
+     * @param name The name of the mp4 and of its thumbnail without their extensions. If not provided, uses the file name
+     * of the downloaded demo without its `.dem` extension.
+     * @throws IllegalStateException If the demo cannot be fetched or resolved, if a capture fails the recording, if the
+     * length of the mp4 does not match the run time the demo reports, or if the thumbnail cannot be written. A failed
+     * audio capture always fails the recording.
      * @throws UtPackageException If no source serves one of the packages the demo names at the GUID it recorded.
      */
     suspend fun record(
@@ -119,20 +120,21 @@ class Recorder(
     }
 
     /**
-     * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo].
+     * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo]. Its thumbnail `<name>.jpg` lies beside it.
      *
      * The installation is provisioned and its maps are decompressed when either is missing. Every package the demo
      * names is installed at the GUID the demo recorded. The recorder's console package and HUD layout are installed
-     * too. The mp4 and the files of both captures are kept in a workspace of their own, whether the recording succeeds
+     * too. The mp4, its thumbnail and the files of both captures are kept in a workspace of their own, whether the recording succeeds
      * or fails. Several recordings may share one installation.
      *
      * [onProgress] receives each [RecorderStage] after [FetchingDemo] as it starts, and an estimate of how much of the
      * stage is done while it runs. It is called from any thread, and often, so it must return quickly.
      *
-     * @param name The name of the mp4 without its extension. If not provided, uses the file name of [demo] without its
-     * `.dem` extension.
-     * @throws IllegalStateException If the demo cannot be resolved, if a capture fails the recording, or if the length
-     * of the mp4 does not match the run time the demo reports. A failed audio capture always fails the recording.
+     * @param name The name of the mp4 and of its thumbnail without their extensions. If not provided, uses the file name
+     * of [demo] without its `.dem` extension.
+     * @throws IllegalStateException If the demo cannot be resolved, if a capture fails the recording, if the length of
+     * the mp4 does not match the run time the demo reports, or if the thumbnail cannot be written. A failed audio
+     * capture always fails the recording.
      * @throws UtPackageException If no source serves one of the packages the demo names at the GUID it recorded.
      */
     suspend fun record(
@@ -142,7 +144,8 @@ class Recorder(
     ): Path = workspace("record", config = directories) { recordDemo(demo, name, onProgress) }
 
     /**
-     * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo], inside this workspace.
+     * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo], with its thumbnail `<name>.jpg` beside it,
+     * inside this workspace.
      */
     private suspend fun Workspace.recordDemo(
         demo: Path,

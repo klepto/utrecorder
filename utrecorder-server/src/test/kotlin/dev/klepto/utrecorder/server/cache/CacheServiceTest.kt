@@ -23,6 +23,7 @@ import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.paths.shouldExist
 import io.kotest.matchers.paths.shouldNotExist
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CoroutineStart.UNDISPATCHED
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -291,7 +292,7 @@ class CacheServiceTest :
         test("flushes the counted views when stopped") {
             cache(mapOf("viewed" to Recorded), listOf("viewed")) { service, repository, _ ->
                 coroutineScope {
-                    val job = launch { service.start() }
+                    val job = launch(start = UNDISPATCHED) { service.start() }
                     service.view("viewed")
                     job.cancelAndJoin()
                 }

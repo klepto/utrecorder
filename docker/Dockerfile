@@ -54,6 +54,10 @@ ENV DISPLAY=:99 \
 WORKDIR /utrecorder
 COPY . .
 
+# The version the distributions carry. Empty keeps version= from gradle.properties. release.yml sets it for a
+# development build, whose version is never committed.
+ARG VERSION=
+
 # The Gradle user home is a build cache mount, so a rebuild reuses the Gradle distribution and the dependencies it
 # downloaded before instead of downloading them again. The development home's cache/ is a build cache mount too, so
 # the UT99 install UCC compiles against is extracted from the iso and patch downloaded before. The step runs the tests
@@ -66,7 +70,7 @@ RUN --mount=type=cache,target=/root/.gradle \
         sleep 0.1; \
     done \
     && xdpyinfo -display "$DISPLAY" >/dev/null 2>&1 \
-    && { ./gradlew --no-daemon check :utrecorder-server:installDist :utrecorder-cli:installDist \
+    && { ./gradlew --no-daemon ${VERSION:+-Pversion=$VERSION} check :utrecorder-server:installDist :utrecorder-cli:installDist \
         || { cat utrecorder-hooks/build/native-logs/*/compile.log 2>/dev/null; exit 1; }; }
 
 FROM eclipse-temurin:25-jre AS runtime

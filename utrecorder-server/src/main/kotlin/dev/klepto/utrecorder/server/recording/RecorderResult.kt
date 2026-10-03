@@ -11,9 +11,11 @@ sealed interface RecorderResult {
      * The demo was captured.
      *
      * @property mp4 The captured mp4, inside the workspace of the capture.
+     * @property thumbnail The thumbnail of [mp4], beside it.
      */
     data class Done(
         val mp4: Path,
+        val thumbnail: Path,
     ) : RecorderResult
 
     /**

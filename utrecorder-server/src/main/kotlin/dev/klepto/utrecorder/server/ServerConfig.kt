@@ -26,6 +26,8 @@ import kotlin.time.Duration.Companion.seconds
  * under [directories].
  * @property recordings The directory that holds one `<capId>.mp4` per recorded demo. If not provided, uses the
  * `recordings` subdirectory of [DirectoriesConfig.home].
+ * @property thumbnails The directory that holds one `<capId>.jpg` per recorded demo. If not provided, uses the
+ * `thumbnails` subdirectory of [DirectoriesConfig.home].
  * @property database The SQLite database file of the server. If not provided, uses `database/server.db` under
  * [DirectoriesConfig.home].
  * @property uploadInterval How long the upload loop waits between two passes over the uploaded recordings, and between
@@ -63,6 +65,7 @@ class ServerConfig(
     val directories: DirectoriesConfig = DirectoriesConfig(reader),
     val recorder: RecorderConfig = RecorderConfig(reader, UtConfig(reader, directories)),
     val recordings: Path = reader.get("server.recordings", directories.home["recordings"], String::toAbsolutePath),
+    val thumbnails: Path = reader.get("server.thumbnails", directories.home["thumbnails"], String::toAbsolutePath),
     val database: Path = reader.get("server.database", directories.home["database/server.db"], String::toAbsolutePath),
     val uploadInterval: Duration = reader.duration("server.upload_interval", 1.minutes),
     val dailyUploads: Int = reader.get("server.daily_uploads", 200, String::toInt),
@@ -90,6 +93,11 @@ class ServerConfig(
      * Returns the file in [recordings] that holds the mp4 of the recording [capId].
      */
     fun mp4(capId: String): Path = recordings["$capId.mp4"]
+
+    /**
+     * Returns the file in [thumbnails] that holds the thumbnail of the recording [capId].
+     */
+    fun thumbnail(capId: String): Path = thumbnails["$capId.jpg"]
 
     private companion object {
         const val BYTES_PER_GIGABYTE = 1_073_741_824L

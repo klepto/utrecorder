@@ -1,16 +1,24 @@
-# Publishes ghcr.io/klepto/utrecorder-server:<version> for a tag v<version> that release.sh pushed. A version names
-# one image forever: the job fails when the image already exists, and no latest tag is ever pushed.
+# Publishes ghcr.io/klepto/utrecorder-server:<version> when release.sh starts it on the tag v<version>. A release
+# version is version= in gradle.properties at the tag. A development build version is <base>-dev.<commit>, where <base>
+# is that version without its pre-release suffix and <commit> is the short hash of the tagged commit; it is passed to
+# the build instead of committed. A version names one image forever: the job fails when the image already exists, and
+# no latest tag is ever pushed.
 name: Release
+run-name: Release ${{ inputs.version }}
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to publish, from the tag v<version> the workflow runs on.
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.version }}
   cancel-in-progress: false
 
 env:
@@ -30,14 +38,36 @@ jobs:
       - name: Read the version
         id: version
         env:
-          TAG: ${{ github.ref_name }}
+          INPUT: ${{ inputs.version }}
         run: |
           version=$(sed -n 's/^version=//p' gradle.properties | tr -d '\r')
-          if [ "$TAG" != "v$version" ]; then
-            echo "::error::Tag $TAG does not match version=$version in gradle.properties"
+          if [ "$GITHUB_REF" != "refs/tags/v$INPUT" ]; then
+            echo "::error::Release $INPUT runs on $GITHUB_REF, not on the tag v$INPUT"
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$INPUT" in
+            *-dev.*)
+              hash=${INPUT##*-dev.}
+              if [ "${INPUT%-dev.*}" != "${version%%-*}" ]; then
+                echo "::error::Development build $INPUT does not start with ${version%%-*}, from version=$version in gradle.properties"
+                exit 1
+              fi
+              case "$GITHUB_SHA" in
+                "$hash"*) ;;
+                *)
+                  echo "::error::Development build $INPUT does not name the tagged commit $GITHUB_SHA"
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              if [ "$INPUT" != "$version" ]; then
+                echo "::error::Version $INPUT does not match version=$version in gradle.properties at $GITHUB_REF_NAME"
+                exit 1
+              fi
+              ;;
+          esac
+          echo "version=$INPUT" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -92,6 +122,7 @@ jobs:
           target: server
           push: true
           tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          build-args: VERSION=${{ steps.version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}

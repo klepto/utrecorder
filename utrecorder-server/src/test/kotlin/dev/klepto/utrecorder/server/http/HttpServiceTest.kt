@@ -25,6 +25,7 @@ import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -115,6 +116,7 @@ class HttpServiceTest :
         suspend fun http(
             statuses: Map<String, RecordingStatus>,
             mp4s: List<String> = emptyList(),
+            thumbnails: List<String> = emptyList(),
             archive: Boolean = true,
             jobs: RecordingJobs = RecordingJobs(),
             trustForwardedHeaders: Boolean = false,
@@ -123,11 +125,14 @@ class HttpServiceTest :
             val directory = createTempDirectory(root, "http")
             val recordings = directory.resolve("recordings").createDirectories()
             mp4s.forEach { recordings.resolve("$it.mp4").writeText("0123456789") }
+            val thumbnailDirectory = directory.resolve("thumbnails").createDirectories()
+            thumbnails.forEach { thumbnailDirectory.resolve("$it.jpg").writeText("jpg") }
             val config =
                 ServerConfig(
                     ConfigReader.EMPTY,
                     directories = DirectoriesConfig(ConfigReader.EMPTY, home = directory.resolve("home")),
                     recordings = recordings,
+                    thumbnails = thumbnailDirectory,
                     trustForwardedHeaders = trustForwardedHeaders,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
@@ -204,6 +209,21 @@ class HttpServiceTest :
                 response.status shouldBe HttpStatusCode.PartialContent
                 response.bodyAsText() shouldBe "234"
                 repository["local"]?.views shouldBe 2
+            }
+        }
+
+        test("answers HEAD with the headers of GET and no body, and counts no view for it") {
+            http(mapOf("local" to Recorded), listOf("local")) { repository ->
+                val mp4 = client.head("/mp4/local")
+                val view = client.head("/view/local")
+                cache.get().flushViews()
+
+                mp4.status shouldBe HttpStatusCode.OK
+                mp4.contentType() shouldBe ContentType.Video.MP4
+                mp4.headers[HttpHeaders.ContentLength] shouldBe "10"
+                mp4.bodyAsText() shouldBe ""
+                view.status shouldBe HttpStatusCode.OK
+                repository["local"]?.views shouldBe 0
             }
         }
 
@@ -286,6 +306,10 @@ class HttpServiceTest :
                 body shouldContain "<meta property=\"og:video:type\" content=\"video/mp4\" />"
                 body shouldContain "<meta property=\"og:video:width\" content=\"1280\" />"
                 body shouldContain "<meta property=\"og:video:height\" content=\"720\" />"
+                body shouldContain "<meta property=\"og:image\" content=\"https://recorder.example.com/thumb/local\" />"
+                body shouldContain "<meta property=\"og:image:type\" content=\"image/jpeg\" />"
+                body shouldContain "<meta property=\"og:image:width\" content=\"1280\" />"
+                body shouldContain "<meta property=\"og:image:height\" content=\"720\" />"
                 body shouldContain "<video src=\"https://recorder.example.com/mp4/local\""
                 repository["local"]?.views shouldBe 0
             }
@@ -302,6 +326,27 @@ class HttpServiceTest :
 
                 body shouldContain "<meta property=\"og:url\" content=\"http://localhost/view/local\" />"
                 body shouldContain "<meta property=\"og:video\" content=\"http://localhost/mp4/local\" />"
+            }
+        }
+
+        test("serves the thumbnail of a served recording as a JPEG, also after its mp4 is evicted, and counts no view") {
+            http(mapOf("local" to Recorded, "evicted" to Archived), listOf("local"), listOf("local", "evicted")) { repository ->
+                val response = client.get("/thumb/local")
+                cache.get().flushViews()
+
+                response.status shouldBe HttpStatusCode.OK
+                response.contentType() shouldBe ContentType.Image.JPEG
+                response.bodyAsText() shouldBe "jpg"
+                client.get("/thumb/evicted").status shouldBe HttpStatusCode.OK
+                repository["local"]?.views shouldBe 0
+            }
+        }
+
+        test("answers 404 for the thumbnail of an unknown, unserved or unthumbnailed recording") {
+            http(mapOf("pending" to Pending, "missing" to Recorded), thumbnails = listOf("pending")) {
+                client.get("/thumb/unknown").status shouldBe HttpStatusCode.NotFound
+                client.get("/thumb/pending").status shouldBe HttpStatusCode.NotFound
+                client.get("/thumb/missing").status shouldBe HttpStatusCode.NotFound
             }
         }
 

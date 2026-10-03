@@ -17,6 +17,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.path
 import io.ktor.serialization.kotlinx.json.json
@@ -25,6 +26,7 @@ import io.ktor.server.application.install
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.http.content.staticResources
+import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.compression.Compression
 import io.ktor.server.plugins.compression.deflate
 import io.ktor.server.plugins.compression.gzip
@@ -57,10 +59,12 @@ import kotlin.time.Instant
  *   recording is [Archived] and its mp4 is not in [ServerConfig.recordings], redirects to the download URL of [cache]
  *   instead, if [cache] names one. The mp4 of an [Outdated] recording is served the same way, but never redirected;
  *   once its mp4 is gone, the recording answers `404`. Every other request answers `404`.
+ * - `GET /thumb/{capId}`: the thumbnail of a recording `/mp4/{capId}` would serve, if it is in
+ *   [ServerConfig.thumbnails]. Every other request answers `404`.
  * - `GET /view/{capId}`: an HTML page that plays `/mp4/{capId}` and carries OpenGraph video tags for link previews: the
- *   title of the cap, the video size of [ServerConfig.recorder], and absolute URLs built from the origin of the
- *   request. The origin honours the `X-Forwarded-*` headers only if [ServerConfig.trustForwardedHeaders] is enabled.
- *   Answers `404` wherever `/mp4/{capId}` answers `404`.
+ *   title of the cap, the video size of [ServerConfig.recorder], `/thumb/{capId}` as its image, and absolute URLs
+ *   built from the origin of the request. The origin honours the `X-Forwarded-*` headers only if
+ *   [ServerConfig.trustForwardedHeaders] is enabled. Answers `404` wherever `/mp4/{capId}` answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
  * - `GET /api/queue`: the next 10 demos to be recorded, in the order they are taken.
  * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, plus every
@@ -74,17 +78,18 @@ import kotlin.time.Instant
  *   its `index.html`, and the `index` of the resources answers `404`. Files under `assets/` are cached for a year;
  *   `index.html` is never cached without revalidation.
  *
- * JavaScript, CSS, HTML and JSON responses are compressed.
+ * Every `GET` route also answers `HEAD`, with the headers of its `GET` answer and no body. JavaScript, CSS, HTML and
+ * JSON responses are compressed.
  *
- * A request of `/mp4/{capId}` for a stored recording counts one view of it through [cache], unless it continues a
- * playback: a request with a `Range` header other than `bytes=0-` counts none. A request of `/view/{capId}` counts
- * none.
+ * A `GET` of `/mp4/{capId}` for a stored recording counts one view of it through [cache], unless it continues a
+ * playback: a request with a `Range` header other than `bytes=0-` counts none. A `HEAD` request and a request of
+ * `/thumb/{capId}` or `/view/{capId}` count none.
  *
  * @property repository The recordings to serve.
  * @property jobs The running recordings.
  * @property cache The cache that counts the views and names the download URL of an archived mp4.
- * @property config The recordings directory, the port, whether the forwarded headers are trusted and the size of the
- * recorded videos.
+ * @property config The recordings and thumbnails directories, the port, whether the forwarded headers are trusted
+ * and the size of the recorded videos.
  */
 class HttpService(
     private val repository: RecordingRepository,
@@ -108,6 +113,7 @@ class HttpService(
      */
     fun module(application: Application) {
         application.install(PartialContent)
+        application.install(AutoHeadResponse)
         if (config.trustForwardedHeaders) application.install(XForwardedHeaders)
         application.install(ContentNegotiation) { json() }
         application.install(Compression) {
@@ -116,6 +122,7 @@ class HttpService(
         }
         application.routing {
             get("/mp4/{capId}") { serveMp4(call.parameters["capId"].orEmpty()) }
+            get("/thumb/{capId}") { serveThumbnail(call.parameters["capId"].orEmpty()) }
             get("/view/{capId}") { serveView(call.parameters["capId"].orEmpty()) }
             get("/api/jobs") { call.respond(jobs.jobs.first().map { it.toResponse() }) }
             get("/api/queue") { call.respond(repository.pending(LIMIT)) }
@@ -134,7 +141,7 @@ class HttpService(
      * is never redirected: once its mp4 is gone, it answers `404`.
      */
     private suspend fun RoutingContext.serveMp4(capId: String) {
-        val recording = cache.view(capId, counted = isFromStart())
+        val recording = cache.view(capId, counted = call.request.local.method == HttpMethod.Get && isFromStart())
         if (recording == null || recording.status !in SERVABLE) {
             call.respond(HttpStatusCode.NotFound)
             return
@@ -159,6 +166,18 @@ class HttpService(
         }
 
     /**
+     * Answers with the thumbnail of the recording [capId], or `404` if the recording is not served or has no
+     * thumbnail.
+     */
+    private suspend fun RoutingContext.serveThumbnail(capId: String) {
+        val thumbnail = repository[capId]?.takeIf { it.status in SERVABLE }?.let { config.thumbnail(it.demo.capId) }
+        when {
+            thumbnail != null && thumbnail.fileExists() -> call.respondFile(thumbnail.toFile())
+            else -> call.respond(HttpStatusCode.NotFound)
+        }
+    }
+
+    /**
      * Answers with the page that plays the recording [capId] and describes it to link previews, or `404` wherever
      * [serveMp4] answers `404`.
      */
@@ -174,6 +193,7 @@ class HttpService(
                 demo = recording.demo,
                 pageUrl = call.url { path("view", capId) },
                 mp4Url = call.url { path("mp4", capId) },
+                thumbnailUrl = call.url { path("thumb", capId) },
             )
         call.respondText(page, ContentType.Text.Html)
     }
@@ -192,12 +212,13 @@ class HttpService(
 
     /**
      * Returns the HTML page that plays the mp4 at [mp4Url] and carries the OpenGraph video tags of [demo], with
-     * [pageUrl] as its canonical URL.
+     * [pageUrl] as its canonical URL and the thumbnail at [thumbnailUrl] as its image.
      */
     private fun viewPage(
         demo: Demo,
         pageUrl: String,
         mp4Url: String,
+        thumbnailUrl: String,
     ): String {
         val title = "${demo.map} - ${demo.formatCapTime()} by ${demo.player}".escapeHtml()
         val mp4 = mp4Url.escapeHtml()
@@ -216,6 +237,10 @@ class HttpService(
                 <meta property="og:video:type" content="video/mp4" />
                 <meta property="og:video:width" content="${config.recorder.video.width}" />
                 <meta property="og:video:height" content="${config.recorder.video.height}" />
+                <meta property="og:image" content="${thumbnailUrl.escapeHtml()}" />
+                <meta property="og:image:type" content="image/jpeg" />
+                <meta property="og:image:width" content="${config.recorder.video.width}" />
+                <meta property="og:image:height" content="${config.recorder.video.height}" />
               </head>
               <body style="margin: 0; background: #000">
                 <video src="$mp4" controls autoplay playsinline style="display: block; width: 100vw; height: 100vh"></video>

@@ -44,8 +44,8 @@ class VideoCaptureConfig(
     reader: ConfigReader = SystemConfigReader(),
     val fps: Int = reader.get("record.fps", 60, String::toInt),
     val codec: String = reader.get("record.codec", "libsvtav1"),
-    val preset: String = reader.get("record.preset", "4"),
-    val crf: String = reader.get("record.crf", "32"),
+    val preset: String = reader.get("record.preset", "6"),
+    val crf: String = reader.get("record.crf", "31"),
     val bitrate: String = reader.get("record.bitrate", "12000k"),
     val svtav1Params: String =
         reader.get(

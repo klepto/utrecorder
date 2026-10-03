@@ -101,11 +101,10 @@ class RecordingServiceTest :
             }
 
         fun done(demo: Demo): RecorderResult {
-            val mp4 =
-                createTempDirectory(root, "workspace")
-                    .resolve("${demo.capId}.mp4")
-                    .also { it.writeText(demo.capId) }
-            return RecorderResult.Done(mp4)
+            val workspace = createTempDirectory(root, "workspace")
+            val mp4 = workspace.resolve("${demo.capId}.mp4").also { it.writeText(demo.capId) }
+            val thumbnail = workspace.resolve("${demo.capId}.jpg").also { it.writeText("${demo.capId}.jpg") }
+            return RecorderResult.Done(mp4, thumbnail)
         }
 
         fun names(directory: Path): List<String> = directory.listDirectoryEntries().map { it.name }
@@ -157,8 +156,9 @@ class RecordingServiceTest :
             }
         }
 
-        test("moves the mp4 into the recordings directory and deletes its workspace") {
+        test("moves the mp4 into the recordings directory, the thumbnail into the thumbnails directory, and deletes their workspace") {
             val recordings = createTempDirectory(root, "recordings")
+            val thumbnails = createTempDirectory(root, "thumbnails")
             val mp4s = CopyOnWriteArrayList<Path>()
             running(
                 listOf(demo("cap", 0)),
@@ -169,12 +169,14 @@ class RecordingServiceTest :
                         listOf(
                             recorder { demo, _ -> done(demo).also { mp4s.add((it as RecorderResult.Done).mp4) } },
                         ),
-                        config(recordings),
+                        ServerConfig(ConfigReader.EMPTY, directories, recordings = recordings, thumbnails = thumbnails),
                     )
                 },
             ) {
                 eventually(5.seconds) { recordings.resolve("cap.mp4").readText() shouldBe "cap" }
             }
+
+            thumbnails.resolve("cap.jpg").readText() shouldBe "cap.jpg"
 
             mp4s
                 .single()

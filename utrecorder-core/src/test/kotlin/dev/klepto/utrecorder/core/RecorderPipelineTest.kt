@@ -16,6 +16,7 @@ import dev.klepto.utrecorder.core.capture.video.VideoTrack
 import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.core.media.Muxer
+import dev.klepto.utrecorder.core.media.Thumbnailer
 import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
@@ -111,6 +112,14 @@ class RecorderPipelineTest :
             }
         }
 
+        class FakeThumbnailer : Thumbnailer {
+            override suspend fun extract(
+                video: Path,
+                time: Double,
+                target: Path,
+            ): Path = target.also { it.writeText("jpg") }
+        }
+
         fun track(file: String) =
             AudioTrack(
                 file = Path.of(file),
@@ -133,6 +142,7 @@ class RecorderPipelineTest :
                 videoCapture = FakeVideoCapture(events, choreography?.first, choreography?.second),
                 audioCapture = FakeAudioCapture(events, choreography?.first, choreography?.second, outcome, failure),
                 muxer = FakeMuxer(events),
+                thumbnailer = FakeThumbnailer(),
             )
 
         class FakeMediaTool(
@@ -159,6 +169,7 @@ class RecorderPipelineTest :
                 FakeVideoCapture(ConcurrentLinkedQueue(), null, null),
                 FakeAudioCapture(ConcurrentLinkedQueue(), null, null, track("audio.wav"), null),
                 FakeMuxer(ConcurrentLinkedQueue()),
+                FakeThumbnailer(),
             )
 
         fun demoIn(recording: Workspace): Path = recording["demo.dem"].also { it.writeBytes(byteArrayOf(1)) }
@@ -167,7 +178,7 @@ class RecorderPipelineTest :
             home.toFile().deleteRecursively()
         }
 
-        test("record returns <name>.mp4 in the workspace of the run and keeps the audio file of the audio track") {
+        test("record returns <name>.mp4 beside <name>.jpg in the workspace of the run and keeps the audio file of the audio track") {
             directories.workspace.toFile().deleteRecursively()
             val cacheAudio =
                 (directories.cache / "audio.wav").also { file ->
@@ -184,6 +195,7 @@ class RecorderPipelineTest :
             produced.fileName.toString() shouldBe "demo-file.mp4"
             produced.parent shouldBe directories.workspace.listDirectoryEntries().single()
             produced.exists() shouldBe true
+            produced.resolveSibling("demo-file.jpg").exists() shouldBe true
             cacheAudio.exists() shouldBe true
         }
 
@@ -259,6 +271,7 @@ class RecorderPipelineTest :
                     videoCapture = FakeVideoCapture(ConcurrentLinkedQueue(), null, null),
                     audioCapture = FakeAudioCapture(ConcurrentLinkedQueue(), null, null, track("audio.wav"), null),
                     muxer = capturingMuxer,
+                    thumbnailer = FakeThumbnailer(),
                 )
 
             workspace("record", config = directories) { recording ->
@@ -266,6 +279,39 @@ class RecorderPipelineTest :
             }
 
             merged shouldBe Triple(Path.of("audio.wav"), 6.5, 8.0)
+        }
+
+        test("record takes the thumbnail of the mp4 one second into it") {
+            var extracted: Triple<Path, Double, Path>? = null
+            val capturingThumbnailer =
+                object : Thumbnailer {
+                    override suspend fun extract(
+                        video: Path,
+                        time: Double,
+                        target: Path,
+                    ): Path {
+                        extracted = Triple(video, time, target)
+                        return target
+                    }
+                }
+            val thumbnailedPipeline =
+                RecorderPipeline(
+                    VideoCaptureConfig(ConfigReader.EMPTY),
+                    AudioCaptureConfig(ConfigReader.EMPTY),
+                    installation,
+                    directories,
+                    videoCapture = FakeVideoCapture(ConcurrentLinkedQueue(), null, null),
+                    audioCapture = FakeAudioCapture(ConcurrentLinkedQueue(), null, null, track("audio.wav"), null),
+                    muxer = FakeMuxer(ConcurrentLinkedQueue()),
+                    thumbnailer = capturingThumbnailer,
+                )
+
+            val produced =
+                workspace("record", config = directories) { recording ->
+                    thumbnailedPipeline.record(demoIn(recording), "demo-file")
+                }
+
+            extracted shouldBe Triple(produced, 1.0, produced.resolveSibling("demo-file.jpg"))
         }
 
         test("record reports the capture with the lesser progress of the two captures, then the mux") {
