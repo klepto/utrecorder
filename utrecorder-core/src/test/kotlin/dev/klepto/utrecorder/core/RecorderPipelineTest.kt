@@ -1,5 +1,9 @@
 package dev.klepto.utrecorder.core
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.Progress
@@ -12,6 +16,7 @@ import dev.klepto.utrecorder.core.capture.audio.AudioCaptureConfig
 import dev.klepto.utrecorder.core.capture.audio.AudioTrack
 import dev.klepto.utrecorder.core.capture.video.VideoCapture
 import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig
+import dev.klepto.utrecorder.core.capture.video.VideoFormat
 import dev.klepto.utrecorder.core.capture.video.VideoTrack
 import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
@@ -30,12 +35,12 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import java.io.OutputStream
 import java.nio.file.Path
 import java.util.Queue
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
-import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
@@ -63,6 +68,7 @@ class RecorderPipelineTest :
             private val events: Queue<String>,
             private val audioThreadStarted: CountDownLatch?,
             private val audioThreadReleased: CountDownLatch?,
+            private val format: VideoFormat = VideoFormat(1280, 720, 4_000_000, "slow", true),
         ) : VideoCapture {
             override suspend fun record(
                 demo: Path,
@@ -72,7 +78,7 @@ class RecorderPipelineTest :
                 onProgress(Progress(0.5))
                 events += videoCapturePlayed
                 audioThreadReleased?.countDown()
-                return VideoTrack(file = videoFile, length = 8.0, demoStart = 292.75)
+                return VideoTrack(file = videoFile, length = 8.0, format = format, demoStart = 292.75)
             }
         }
 
@@ -97,6 +103,7 @@ class RecorderPipelineTest :
 
         class FakeMuxer(
             private val events: Queue<String>,
+            private val size: Int = 1,
         ) : Muxer {
             override suspend fun merge(
                 video: Path,
@@ -107,7 +114,7 @@ class RecorderPipelineTest :
                 onProgress: ProgressListener<Unit>,
             ): Path {
                 events += muxRan
-                video.copyTo(target, overwrite = true)
+                target.writeBytes(ByteArray(size))
                 return target
             }
         }
@@ -173,6 +180,59 @@ class RecorderPipelineTest :
             )
 
         fun demoIn(recording: Workspace): Path = recording["demo.dem"].also { it.writeBytes(byteArrayOf(1)) }
+
+        suspend fun warnings(
+            size: Int,
+            targetSize: Long,
+            fitsBudget: Boolean,
+        ): Pair<Path, List<String>> {
+            val logger = LoggerFactory.getLogger(RecorderPipeline::class.java.name) as Logger
+            val appender = ListAppender<ILoggingEvent>().also { it.start() }
+            logger.addAppender(appender)
+            try {
+                val format = VideoFormat(1280, 720, 4_000_000, "slow", fitsBudget)
+                val oversizedPipeline =
+                    RecorderPipeline(
+                        VideoCaptureConfig(ConfigReader.EMPTY, targetSize = targetSize),
+                        AudioCaptureConfig(ConfigReader.EMPTY),
+                        installation,
+                        directories,
+                        videoCapture = FakeVideoCapture(ConcurrentLinkedQueue(), null, null, format),
+                        audioCapture = FakeAudioCapture(ConcurrentLinkedQueue(), null, null, track("audio.wav"), null),
+                        muxer = FakeMuxer(ConcurrentLinkedQueue(), size),
+                        thumbnailer = FakeThumbnailer(),
+                    )
+                val produced =
+                    workspace("record", config = directories) { recording ->
+                        oversizedPipeline.record(demoIn(recording), "demo-file")
+                    }
+                return produced to appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
+            } finally {
+                logger.detachAppender(appender)
+            }
+        }
+
+        test("record warns of the size against the target when the budget chose the format and the mp4 is over the target") {
+            val (produced, warned) = warnings(size = 3000, targetSize = 2000, fitsBudget = true)
+
+            produced.fileName.toString() shouldBe "demo-file.mp4"
+            produced.resolveSibling("demo-file.jpg").exists() shouldBe true
+            warned.single() shouldContain "demo-file.mp4"
+            warned.single() shouldContain "3000 bytes"
+            warned.single() shouldContain "2000 bytes"
+        }
+
+        test("record logs no warning for an mp4 over the target when the fallback chose the format") {
+            warnings(size = 3000, targetSize = 2000, fitsBudget = false).second shouldBe emptyList()
+        }
+
+        test("record logs no warning for an mp4 at the target") {
+            warnings(size = 2000, targetSize = 2000, fitsBudget = true).second shouldBe emptyList()
+        }
+
+        test("record logs no warning for an mp4 under the target") {
+            warnings(size = 1000, targetSize = 2000, fitsBudget = true).second shouldBe emptyList()
+        }
 
         afterSpec {
             home.toFile().deleteRecursively()
@@ -259,6 +319,7 @@ class RecorderPipelineTest :
                         onProgress: ProgressListener<Unit>,
                     ): Path {
                         merged = Triple(audio, offset, length)
+                        target.writeBytes(byteArrayOf(1))
                         return target
                     }
                 }

@@ -45,12 +45,14 @@ class FfmpegVideoCaptureTest :
             home.toFile().deleteRecursively()
         }
 
-        fun capture(settings: VideoCaptureConfig = config) = FfmpegVideoCapture(settings, installation, directories)
+        val format = VideoFormat(width = 1600, height = 900, bitrate = 6_512_000, preset = "6", fitsBudget = true)
+
+        fun capture(settings: VideoCaptureConfig = config) = FfmpegVideoCapture(settings, "96k", installation, directories)
 
         suspend fun launch(): Pair<UtProcessFiles, Executable> =
             workspace("video-capture", installation.systemDirectory, directories) { workspace ->
                 val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
-                val process = capture().process(description, 100, hooks)
+                val process = capture().process(description, format, 100, hooks)
                 val files = process.files(workspace)
                 files to process.executable(files)
             }
@@ -70,14 +72,14 @@ class FfmpegVideoCaptureTest :
             }
         }
 
-        test("environment holds the port, the fps and the frame size, and nothing else on Windows") {
-            val environment = capture().environment(100)
+        test("environment holds the port, the fps and the frame size of the format, and nothing else on Windows") {
+            val environment = capture().environment(100, format)
             val expected =
                 mapOf(
                     "UTRECORDER_PORT" to "100",
                     "UTRECORDER_FPS" to "120",
-                    "UTRECORDER_WIDTH" to "1280",
-                    "UTRECORDER_HEIGHT" to "720",
+                    "UTRECORDER_WIDTH" to "1600",
+                    "UTRECORDER_HEIGHT" to "900",
                 )
 
             when (UtPlatform.current()) {
@@ -87,9 +89,9 @@ class FfmpegVideoCaptureTest :
         }
 
         test("environment stops llvmpipe from presenting frames on Linux only, whichever render device is selected") {
-            val xopengl = VideoCaptureConfig(ConfigReader.EMPTY, renderDevice = DemoPlaybackRenderDevice.XOPENGL)
+            val opengl = VideoCaptureConfig(ConfigReader.EMPTY, renderDevice = DemoPlaybackRenderDevice.OPENGL)
 
-            val presents = listOf(capture(), capture(xopengl)).map { it.environment(100)["SWRAST_NO_PRESENT"] }
+            val presents = listOf(capture(), capture(opengl)).map { it.environment(100, format)["SWRAST_NO_PRESENT"] }
 
             when (UtPlatform.current()) {
                 UtPlatform.WINDOWS -> presents shouldBe listOf(null, null)
@@ -113,7 +115,7 @@ class FfmpegVideoCaptureTest :
 
             val tuning =
                 capture(tunedConfig)
-                    .environment(100)
+                    .environment(100, format)
                     .filterKeys { it in setOf("LP_NUM_THREADS", "mesa_glthread", "MESA_NO_ERROR", "LP_NATIVE_VECTOR_WIDTH") }
 
             when (UtPlatform.current()) {
@@ -134,7 +136,7 @@ class FfmpegVideoCaptureTest :
         }
 
         test("environment uses the processor count as the llvmpipe thread count when none is configured") {
-            val threads = capture().environment(100)["LP_NUM_THREADS"]
+            val threads = capture().environment(100, format)["LP_NUM_THREADS"]
 
             when (UtPlatform.current()) {
                 UtPlatform.WINDOWS -> threads shouldBe null
@@ -182,7 +184,7 @@ class FfmpegVideoCaptureTest :
         fun hideHud(btMod: String): List<String> {
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, listOf(UtPackage.named(btMod, "")))
             val userIni = UtIni("")
-            capture().process(description, 100, hooks).userIniEdits.forEach { userIni.it() }
+            capture().process(description, format, 100, hooks).userIniEdits.forEach { userIni.it() }
             return userIni["Botpack.ChallengeHUD", "bHideHUD"]
         }
 
@@ -206,8 +208,9 @@ class FfmpegVideoCaptureTest :
 
         test("stopReason returns null for the timing line") {
             val line =
-                "uthooks: timing over 120 frames in ms, present mean 16.67 max 20.10, read mean 0.52 max 1.30, " +
-                    "send mean 3.25 max 8.00, swap mean 0.40 max 0.90"
+                "uthooks: timing over 120 frames in ms, present mean 16.67 max 20.10, finish mean 9.80 max 70.25, " +
+                    "read mean 0.52 max 1.30, send mean 0.01 max 0.20, sender mean 3.25 max 8.00, " +
+                    "swap mean 0.40 max 0.90"
 
             capture().stopReason(line) shouldBe null
         }

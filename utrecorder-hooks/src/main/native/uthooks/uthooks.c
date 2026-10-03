@@ -97,10 +97,12 @@ static const int MONTH_DAYS[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 /* SDL_GL_GetProcAddress, through which the Linux port resolves OpenGL entry points. */
 typedef void *(*GetProcAddressFunction)(const char *);
 typedef void(GL_ENTRY *GetIntegervFunction)(unsigned int, int *);
+typedef void(GL_ENTRY *FinishFunction)(void);
 typedef void(GL_ENTRY *ReadPixelsFunction)(int, int, int, int, unsigned int, unsigned int, void *);
 
-/* glGetIntegerv and glReadPixels, resolved on the first captured frame. */
+/* glGetIntegerv, glFinish and glReadPixels, resolved on the first captured frame. */
 static GetIntegervFunction readViewport;
+static FinishFunction finishRendering;
 static ReadPixelsFunction readPixels;
 
 /* The frame buffers of the ring. */
@@ -192,11 +194,13 @@ typedef struct {
 
 /*
  * The spans the timing line reports, sampled over the frames of the armed capture: the interval from one presented
- * frame to the next, the glReadPixels call, the game thread's wait for a free buffer of the ring with its handoff of
+ * frame to the next, the glFinish call that waits for the rendering queued for the frame, the glReadPixels call that
+ * copies the finished frame, the game thread's wait for a free buffer of the ring with its handoff of
  * the pending frame to the sender, the sender's send of a frame to the frame socket, and the real swap. The sender
  * writes senderTiming under the ring's lock, and finishCapture reads it once the sender has ended.
  */
 static Timing presentTiming;
+static Timing finishTiming;
 static Timing readTiming;
 static Timing sendTiming;
 static Timing senderTiming;
@@ -315,7 +319,7 @@ static int sendAll(const unsigned char *data, size_t size) {
     return 1;
 }
 
-/* Resolves readViewport and readPixels. Stops capture when either is missing. */
+/* Resolves readViewport, finishRendering and readPixels. Stops capture when any of them is missing. */
 static void resolveGl(void) {
 #ifdef _WIN32
     HMODULE library = GetModuleHandleA("opengl32.dll");
@@ -325,6 +329,7 @@ static void resolveGl(void) {
         return;
     }
     readViewport = (GetIntegervFunction) GetProcAddress(library, "glGetIntegerv");
+    finishRendering = (FinishFunction) GetProcAddress(library, "glFinish");
     readPixels = (ReadPixelsFunction) GetProcAddress(library, "glReadPixels");
 #else
     GetProcAddressFunction lookup = (GetProcAddressFunction) dlsym(RTLD_NEXT, "SDL_GL_GetProcAddress");
@@ -333,9 +338,12 @@ static void resolveGl(void) {
         return;
     }
     readViewport = (GetIntegervFunction) lookup("glGetIntegerv");
+    finishRendering = (FinishFunction) lookup("glFinish");
     readPixels = (ReadPixelsFunction) lookup("glReadPixels");
 #endif
-    if (!readViewport || !readPixels) stopCapture("glGetIntegerv or glReadPixels not found");
+    if (!readViewport || !finishRendering || !readPixels) {
+        stopCapture("glGetIntegerv, glFinish or glReadPixels not found");
+    }
 }
 
 /*
@@ -519,8 +527,9 @@ static void rejectFrameSize(int width, int height) {
 }
 
 /*
- * Waits for a free buffer of the ring and hands the pending frame to the sender, then reads the current viewport into
- * the free buffer and makes it the pending frame. Times the wait with the handoff, and the read.
+ * Waits for a free buffer of the ring and hands the pending frame to the sender, then waits for the rendering queued
+ * for the current viewport, reads the viewport into the free buffer and makes it the pending frame. Times the wait with
+ * the handoff, the wait for the rendering, and the read.
  */
 static void captureFrame(void) {
     int viewport[4];
@@ -540,6 +549,8 @@ static void captureFrame(void) {
     frame = handFrame();
     start = addTimingSince(&sendTiming, start);
     if (!frame) return;
+    finishRendering();
+    start = addTimingSince(&finishTiming, start);
     readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_BYTE, frame);
     addTimingSince(&readTiming, start);
     ringPending = 1;
@@ -1399,17 +1410,20 @@ static int demoPlaying(void) {
 /* Prints the timing line: the mean and the largest sample of each span over the frames of the armed capture. */
 static void reportTiming(void) {
     char presentFigures[64];
+    char finishFigures[64];
     char readFigures[64];
     char sendFigures[64];
     char senderFigures[64];
     char swapFigures[64];
     formatTiming(&presentTiming, presentFigures, sizeof presentFigures);
+    formatTiming(&finishTiming, finishFigures, sizeof finishFigures);
     formatTiming(&readTiming, readFigures, sizeof readFigures);
     formatTiming(&sendTiming, sendFigures, sizeof sendFigures);
     formatTiming(&senderTiming, senderFigures, sizeof senderFigures);
     formatTiming(&swapTiming, swapFigures, sizeof swapFigures);
-    fprintf(stderr, "uthooks: timing over %lld frames in ms, present %s, read %s, send %s, sender %s, swap %s\n",
-            demoFrames, presentFigures, readFigures, sendFigures, senderFigures, swapFigures);
+    fprintf(stderr,
+            "uthooks: timing over %lld frames in ms, present %s, finish %s, read %s, send %s, sender %s, swap %s\n",
+            demoFrames, presentFigures, finishFigures, readFigures, sendFigures, senderFigures, swapFigures);
 }
 
 /*

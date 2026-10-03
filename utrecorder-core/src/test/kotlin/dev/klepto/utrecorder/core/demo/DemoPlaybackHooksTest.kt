@@ -17,8 +17,9 @@ class DemoPlaybackHooksTest :
 
         test("message returns the timing line") {
             val line =
-                "uthooks: timing over 120 frames in ms, present mean 16.67 max 20.10, read mean 0.52 max 1.30, " +
-                    "send mean 3.25 max 8.00, swap mean 0.40 max 0.90"
+                "uthooks: timing over 120 frames in ms, present mean 16.67 max 20.10, finish mean 9.80 max 70.25, " +
+                    "read mean 0.52 max 1.30, send mean 0.01 max 0.20, sender mean 3.25 max 8.00, " +
+                    "swap mean 0.40 max 0.90"
 
             DemoPlaybackHooks.message(line) shouldBe line
         }

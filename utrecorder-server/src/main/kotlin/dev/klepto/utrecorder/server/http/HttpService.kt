@@ -233,12 +233,12 @@ class HttpService(
                 <meta property="og:url" content="${pageUrl.escapeHtml()}" />
                 <meta property="og:video" content="$mp4" />
                 <meta property="og:video:type" content="video/mp4" />
-                <meta property="og:video:width" content="${config.recorder.video.width}" />
-                <meta property="og:video:height" content="${config.recorder.video.height}" />
+                <meta property="og:video:width" content="${config.recorder.video.tiers.first().width}" />
+                <meta property="og:video:height" content="${config.recorder.video.tiers.first().height}" />
                 <meta property="og:image" content="${thumbnailUrl.escapeHtml()}" />
                 <meta property="og:image:type" content="image/jpeg" />
-                <meta property="og:image:width" content="${config.recorder.video.width}" />
-                <meta property="og:image:height" content="${config.recorder.video.height}" />
+                <meta property="og:image:width" content="${config.recorder.video.tiers.first().width}" />
+                <meta property="og:image:height" content="${config.recorder.video.tiers.first().height}" />
               </head>
               <body style="margin: 0; background: #000">
                 <video src="$mp4" controls autoplay playsinline style="display: block; width: 100vw; height: 100vh"></video>

@@ -50,8 +50,9 @@ private val log = logger<FrameEncoder>()
  * The capture listens for the hook library itself and relays its frames to the standard input of ffmpeg. Run it
  * through [encode].
  *
- * @property config The video capture configuration, carrying the codec, the frame size, the backpressure bound, the
- * port and the finish timeout.
+ * @property config The video capture configuration, carrying the codec, the backpressure bound, the port and the finish
+ * timeout.
+ * @property format The format of the run, carrying the frame size, the bitrate and the preset of the encode.
  * @property listenTimeout How long the capture waits for the hook library to connect.
  * @property target The file the capture encodes into, already in the final codec.
  * @property ffmpeg The ffmpeg the capture process is started from.
@@ -62,6 +63,7 @@ private val log = logger<FrameEncoder>()
  */
 class FrameEncoder(
     private val config: VideoCaptureConfig,
+    private val format: VideoFormat,
     private val listenTimeout: Duration,
     val target: Path,
     private val ffmpeg: MediaTool = FfmpegMediaTool(),
@@ -177,16 +179,15 @@ class FrameEncoder(
     fun captureArguments(): List<String> =
         buildList {
             this += listOf("-y", "-f", "rawvideo", "-pix_fmt", "bgra")
-            this += listOf("-s", "${config.width}x${config.height}")
+            this += listOf("-s", "${format.width}x${format.height}")
             this += listOf("-framerate", config.renderFps().toString())
             this += listOf("-thread_queue_size", config.queue.toString())
             this += listOf("-i", "pipe:0")
             this += listOf("-vf", videoFilter())
             this += listOf("-map", "0:v:0")
             this += listOf("-c:v", config.codec)
-            this += option("-preset", config.preset)
-            this += option("-crf", config.crf)
-            this += option(bitrateFlag(), config.bitrate)
+            this += option("-preset", format.preset.orEmpty())
+            this += listOf("-b:v", "${format.bitrate / 1000}k")
             this += option("-svtav1-params", config.svtav1Params)
             this += listOf("-g", config.gop.toString())
             this += listOf("-threads", processors.toString(), "-filter_threads", processors.toString())
@@ -221,17 +222,7 @@ class FrameEncoder(
     /**
      * Returns the size in bytes of one BGRA frame.
      */
-    private fun frameSize(): Int = config.width * config.height * 4
-
-    /**
-     * Returns the flag the bitrate is passed under: the ceiling of a constant rate factor encode, the average of one
-     * without.
-     */
-    private fun bitrateFlag(): String =
-        when {
-            config.crf.isBlank() -> "-b:v"
-            else -> "-maxrate"
-        }
+    private fun frameSize(): Int = format.width * format.height * 4
 
     /**
      * Returns the extra arguments of [VideoCaptureConfig.arguments], split on spaces.

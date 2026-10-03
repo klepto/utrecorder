@@ -14,11 +14,11 @@ class ServerConfigTest :
         afterSpec { root.toFile().deleteRecursively() }
 
         test("reads the recorder configuration from its own reader") {
-            val keys = mapOf("record.width" to "640", "record.audio_bitrate" to "96k", "patch_version" to "469d")
+            val keys = mapOf("record.target_size" to "640", "record.audio_bitrate" to "96k", "patch_version" to "469d")
 
             val recorder = ServerConfig(ConfigReader(keys::get), DirectoriesConfig(ConfigReader.EMPTY, home = root)).recorder
 
-            recorder.video.width shouldBe 640
+            recorder.video.targetSize shouldBe 640L
             recorder.audio.bitrate shouldBe "96k"
             recorder.ut.patchVersion shouldBe "469d"
         }

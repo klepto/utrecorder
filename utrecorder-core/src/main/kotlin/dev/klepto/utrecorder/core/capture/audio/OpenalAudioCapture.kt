@@ -53,7 +53,7 @@ private val log = logger<OpenalAudioCapture>()
  * [AudioCaptureConfig.idleTimeout], however long the whole run takes. The wav is placed by the marks the run logged and
  * moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in the wav out of
  * [DemoPlaybackConfig.runDuration], read once a second while the run plays. Every line the hook library prints is logged
- * at INFO. A run that produces no wav, no marks, or marks outside its wav fails with an
+ * at DEBUG. A run that produces no wav, no marks, or marks outside its wav fails with an
  * [IllegalStateException].
  *
  * @property config The audio capture configuration, carrying the sound viewport, its frame rate limit and the idle
@@ -97,7 +97,7 @@ class OpenalAudioCapture(
      * Logs every line the hook library prints in the output of [run], until the output ends.
      */
     private suspend fun logHookMessages(run: UtProcess) {
-        run.drain().collect { line -> DemoPlaybackHooks.message(line)?.let { message -> log.info { message } } }
+        run.drain().collect { line -> DemoPlaybackHooks.message(line)?.let { message -> log.debug { message } } }
     }
 
     /**

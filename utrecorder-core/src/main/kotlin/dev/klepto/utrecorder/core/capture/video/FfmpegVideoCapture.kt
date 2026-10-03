@@ -42,17 +42,21 @@ private val log = logger<FfmpegVideoCapture>()
  * [VideoCaptureConfig.idleTimeout], however long the whole run takes. The frames are encoded into a video file in a
  * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number
  * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. Every line the hook library prints is logged at
- * INFO. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
- * that it stopped the frame capture fails with an [IllegalStateException] naming the reason it gave.
+ * DEBUG. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
+ * that it stopped the frame capture fails with an [IllegalStateException] naming the reason it gave. Every run renders
+ * and encodes in the [VideoFormat] that [VideoCaptureConfig.format] picks from [DemoPlaybackConfig.runDuration] and
+ * [audioBitrate].
  *
- * @property config The video capture configuration, carrying the frame size, the fps, the idle timeout and the renderer
+ * @property config The video capture configuration, carrying the tiers, the fps, the idle timeout and the renderer
  * tuning.
+ * @property audioBitrate The bitrate of the audio track the video is muxed with, in ffmpeg's notation, such as `128k`.
  * @property installation The installation the capture runs in.
  * @property directories The directories the capture's workspace is kept under.
  * @property ffmpeg The ffmpeg that encodes the frames and reads the length of the video file.
  */
 class FfmpegVideoCapture(
     private val config: VideoCaptureConfig,
+    private val audioBitrate: String,
     private val installation: UtInstallation,
     private val directories: DirectoriesConfig = DirectoriesConfig(),
     private val ffmpeg: MediaTool = FfmpegMediaTool(),
@@ -69,11 +73,12 @@ class FfmpegVideoCapture(
         workspace(VIDEO_CAPTURE, config = directories) { output ->
             val target = output[VIDEO_NAME]
             playback.play(demo, STAGED_DEMO_PREFIX, VIDEO_CAPTURE) { description, system ->
+                val format = config.format(description.runDuration(), audioBitrate)
                 val frames = MutableStateFlow(0L)
                 val onFrames = frameProgress(description, frames, onProgress)
-                val encoder = FrameEncoder(config, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
-                val marks = DemoPlaybackMarks.parse(play(description, extractHooks(system), encoder, frames))
-                track(target, marks)
+                val encoder = FrameEncoder(config, format, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
+                val marks = DemoPlaybackMarks.parse(play(description, format, extractHooks(system), encoder, frames))
+                track(target, format, marks)
             }
         }
 
@@ -94,14 +99,15 @@ class FfmpegVideoCapture(
     }
 
     /**
-     * Returns the result of the run of [description] with [hooks], launched inside [encoder]'s block. The run is
-     * killed once [frames], the frames encoded so far, has not grown for [VideoCaptureConfig.idleTimeout].
+     * Returns the result of the run of [description] in [format] with [hooks], launched inside [encoder]'s block. The
+     * run is killed once [frames], the frames encoded so far, has not grown for [VideoCaptureConfig.idleTimeout].
      *
      * @throws java.util.concurrent.TimeoutException if no new frame is encoded for [VideoCaptureConfig.idleTimeout].
      * @throws IllegalStateException if the hook library reports that it stopped the frame capture, naming its reason.
      */
     private suspend fun play(
         description: DemoPlaybackConfig,
+        format: VideoFormat,
         hooks: List<Path>,
         encoder: FrameEncoder,
         frames: StateFlow<Long>,
@@ -109,7 +115,7 @@ class FfmpegVideoCapture(
         val stop = MutableStateFlow<String?>(null)
         val (result, _) =
             try {
-                encoder.encode { launchWatched(process(description, port, hooks), frames, stop) }
+                encoder.encode { launchWatched(process(description, format, port, hooks), frames, stop) }
             } catch (failure: Exception) {
                 throw stopFailure(failure, stop.value)
             }
@@ -146,7 +152,7 @@ class FfmpegVideoCapture(
         stop: MutableStateFlow<String?>,
     ) {
         run.drain().collect { line ->
-            DemoPlaybackHooks.message(line)?.let { message -> log.info { message } }
+            DemoPlaybackHooks.message(line)?.let { message -> log.debug { message } }
             stopReason(line)?.let { stop.value = it }
         }
     }
@@ -165,15 +171,17 @@ class FfmpegVideoCapture(
         }
 
     /**
-     * Returns the video track in [videoFile], starting at the spawn mark of [marks].
+     * Returns the video track in [videoFile] recorded in [format], starting at the spawn mark of [marks].
      */
     private suspend fun track(
         videoFile: Path,
+        format: VideoFormat,
         marks: DemoPlaybackMarks,
     ): VideoTrack =
         VideoTrack(
             file = videoFile,
             length = ffmpeg.duration(videoFile),
+            format = format,
             demoStart = marks.spawn?.demoTime?.toDouble(DurationUnit.SECONDS),
         )
 
@@ -184,15 +192,18 @@ class FfmpegVideoCapture(
     suspend fun extractHooks(system: Workspace): List<Path> = DemoPlaybackHooks.extract(system)
 
     /**
-     * Returns the environment the video capture runs under: the port, the render fps and the frame size the hook library
-     * reads, plus the Linux environment on Linux.
+     * Returns the environment the video capture runs under: the port, the render fps and the frame size of [format] the
+     * hook library reads, plus the Linux environment on Linux.
      */
-    fun environment(port: Int): Map<String, String> =
+    fun environment(
+        port: Int,
+        format: VideoFormat,
+    ): Map<String, String> =
         buildMap {
             this["UTRECORDER_PORT"] = port.toString()
             this["UTRECORDER_FPS"] = config.renderFps().toString()
-            this["UTRECORDER_WIDTH"] = config.width.toString()
-            this["UTRECORDER_HEIGHT"] = config.height.toString()
+            this["UTRECORDER_WIDTH"] = format.width.toString()
+            this["UTRECORDER_HEIGHT"] = format.height.toString()
             if (installation.platform.operatingSystem != WINDOWS) putAll(linuxEnvironment())
         }
 
@@ -219,20 +230,21 @@ class FfmpegVideoCapture(
         }
 
     /**
-     * Returns the unstarted run that plays [description]: without sound, and playing the exec script. On Windows the
-     * injector of [hooks] starts the game executable copy, and on Linux the copy starts directly. The HUD is hidden
-     * when the demo loads a Bunny Track mod older than `UTBT_BTMod_v18`.
+     * Returns the unstarted run that plays [description] at the frame size of [format]: without sound, and playing the
+     * exec script. On Windows the injector of [hooks] starts the game executable copy, and on Linux the copy starts
+     * directly. The HUD is hidden when the demo loads a Bunny Track mod older than `UTBT_BTMod_v18`.
      */
     fun process(
         description: DemoPlaybackConfig,
+        format: VideoFormat,
         port: Int,
         hooks: List<Path>,
     ): UtProcess =
-        playback.process(VIDEO_CAPTURE, description, config.viewport()) {
+        playback.process(VIDEO_CAPTURE, description, config.viewport(format)) {
             DemoPlaybackHooks.inject(this, hooks)
             exec += execScript(description)
             sound = false
-            environment += this@FfmpegVideoCapture.environment(port)
+            environment += this@FfmpegVideoCapture.environment(port, format)
             if (hidesHud(description)) userIni { this["Botpack.ChallengeHUD", "bHideHUD"] = "True" }
         }
 

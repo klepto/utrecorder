@@ -6,6 +6,7 @@ import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldNotContain
 import io.kotest.matchers.collections.shouldNotContainAnyOf
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -39,31 +40,21 @@ class FrameEncoderTest :
         val target = home / "video.mp4"
 
         fun videoConfig(
-            preset: String = "4",
-            crf: String = "28",
-            bitrate: String = "4800k",
             svtav1Params: String = "tune=0",
             pixelFormat: String = "yuv420p",
             arguments: String = "",
             motionBlur: Boolean = true,
             motionBlurSamples: Int = 2,
             finishTimeout: Duration = 2.minutes,
-            width: Int = 960,
-            height: Int = 540,
         ): VideoCaptureConfig =
             VideoCaptureConfig(
                 ConfigReader.EMPTY,
                 port = 0,
                 fps = 60,
                 codec = "libsvtav1",
-                preset = preset,
-                crf = crf,
-                bitrate = bitrate,
                 svtav1Params = svtav1Params,
                 pixelFormat = pixelFormat,
                 gop = 300,
-                width = width,
-                height = height,
                 queue = 32,
                 arguments = arguments,
                 motionBlur = motionBlur,
@@ -72,6 +63,8 @@ class FrameEncoderTest :
             )
 
         val defaultConfig = videoConfig()
+
+        val defaultFormat = VideoFormat(width = 960, height = 540, bitrate = 4_800_000, preset = "4", fitsBudget = true)
 
         fun standIn(
             failure: String? = null,
@@ -93,33 +86,36 @@ class FrameEncoderTest :
 
         fun encoder(
             config: VideoCaptureConfig = defaultConfig,
+            format: VideoFormat = defaultFormat,
             captureTarget: Path = target,
             ffmpeg: MediaTool = standIn(),
             operatingSystem: OperatingSystem = OperatingSystem.current(),
             processors: Int = 6,
-        ): FrameEncoder = FrameEncoder(config, 5.seconds, captureTarget, ffmpeg, operatingSystem = operatingSystem, processors = processors)
+        ): FrameEncoder =
+            FrameEncoder(config, format, 5.seconds, captureTarget, ffmpeg, operatingSystem = operatingSystem, processors = processors)
 
         fun arguments(
             config: VideoCaptureConfig = defaultConfig,
+            format: VideoFormat = defaultFormat,
             processors: Int = 6,
-        ): List<String> = encoder(config, processors = processors).captureArguments()
+        ): List<String> = encoder(config, format, processors = processors).captureArguments()
 
         test("captureArguments reads the frames from standard input") {
             val read = arguments()
-            read.size shouldBe 45
+            read.size shouldBe 43
             read[11] shouldBe "-i"
             read[12] shouldBe "pipe:0"
         }
 
-        test("captureArguments describes the raw 8-bit BGRA input by the frame size, render fps and frame queue of the config") {
-            val read = arguments()
+        test("captureArguments describes the raw 8-bit BGRA input by the frame size of the format and the fps and queue of the config") {
+            val read = arguments(format = VideoFormat(width = 1600, height = 900, bitrate = 6_512_000, preset = "6", fitsBudget = true))
             read[0] shouldBe "-y"
             read[1] shouldBe "-f"
             read[2] shouldBe "rawvideo"
             read[3] shouldBe "-pix_fmt"
             read[4] shouldBe "bgra"
             read[5] shouldBe "-s"
-            read[6] shouldBe "960x540"
+            read[6] shouldBe "1600x900"
             read[7] shouldBe "-framerate"
             read[8] shouldBe "120"
             read[9] shouldBe "-thread_queue_size"
@@ -136,46 +132,55 @@ class FrameEncoderTest :
             read[16] shouldBe "0:v:0"
             read[17] shouldBe "-c:v"
             read[18] shouldBe "libsvtav1"
-            read[19] shouldBe "-preset"
-            read[20] shouldBe "4"
-            read[21] shouldBe "-crf"
-            read[22] shouldBe "28"
-            read[23] shouldBe "-maxrate"
-            read[24] shouldBe "4800k"
-            read[25] shouldBe "-svtav1-params"
-            read[26] shouldBe "tune=0"
-            read[27] shouldBe "-g"
-            read[28] shouldBe "300"
+            read[23] shouldBe "-svtav1-params"
+            read[24] shouldBe "tune=0"
+            read[25] shouldBe "-g"
+            read[26] shouldBe "300"
+        }
+
+        test("captureArguments encodes at the preset and the average bitrate of the format") {
+            val read = arguments(format = VideoFormat(width = 1920, height = 1080, bitrate = 8_348_000, preset = "6", fitsBudget = true))
+            read.subList(19, 23) shouldBe listOf("-preset", "6", "-b:v", "8348k")
+        }
+
+        test("captureArguments passes no preset for a format without one") {
+            val read = arguments(format = VideoFormat(width = 1280, height = 720, bitrate = 6_000_000, preset = null, fitsBudget = false))
+            read shouldNotContain "-preset"
+            read.subList(17, 23) shouldBe listOf("-c:v", "libsvtav1", "-b:v", "6000k", "-svtav1-params", "tune=0")
+        }
+
+        test("captureArguments never passes a constant rate factor or a bitrate ceiling") {
+            arguments() shouldNotContainAnyOf listOf("-crf", "-maxrate")
         }
 
         test("captureArguments sizes the threads of the encoder and the filters by the processors the JVM sees") {
             val read = arguments(processors = 4)
-            read[29] shouldBe "-threads"
+            read[27] shouldBe "-threads"
+            read[28] shouldBe "4"
+            read[29] shouldBe "-filter_threads"
             read[30] shouldBe "4"
-            read[31] shouldBe "-filter_threads"
-            read[32] shouldBe "4"
         }
 
         test("captureArguments passes the thread options as output options, before the record arguments, so a user's own win") {
             val read = arguments(videoConfig(arguments = "-threads 2 -filter_threads 1"), processors = 4)
             read[12] shouldBe "pipe:0"
-            read.subList(29, 37) shouldBe listOf("-threads", "4", "-filter_threads", "4", "-threads", "2", "-filter_threads", "1")
+            read.subList(27, 35) shouldBe listOf("-threads", "4", "-filter_threads", "4", "-threads", "2", "-filter_threads", "1")
         }
 
         test("captureArguments tags the output BT.709 limited range and ends with the yuv420p pixel format, no audio and the target") {
             val read = arguments()
-            read[33] shouldBe "-colorspace"
+            read[31] shouldBe "-colorspace"
+            read[32] shouldBe "bt709"
+            read[33] shouldBe "-color_primaries"
             read[34] shouldBe "bt709"
-            read[35] shouldBe "-color_primaries"
+            read[35] shouldBe "-color_trc"
             read[36] shouldBe "bt709"
-            read[37] shouldBe "-color_trc"
-            read[38] shouldBe "bt709"
-            read[39] shouldBe "-color_range"
-            read[40] shouldBe "tv"
-            read[41] shouldBe "-pix_fmt"
-            read[42] shouldBe "yuv420p"
-            read[43] shouldBe "-an"
-            read[44] shouldBe target.absolutePathString()
+            read[37] shouldBe "-color_range"
+            read[38] shouldBe "tv"
+            read[39] shouldBe "-pix_fmt"
+            read[40] shouldBe "yuv420p"
+            read[41] shouldBe "-an"
+            read[42] shouldBe target.absolutePathString()
         }
 
         test("captureArguments leaves out the frame blend when motion blur is off") {
@@ -189,7 +194,7 @@ class FrameEncoderTest :
             val read = arguments(videoConfig(pixelFormat = "yuv420p10le", motionBlur = false))
             read[14] shouldBe
                 "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
-            read[42] shouldBe "yuv420p10le"
+            read[40] shouldBe "yuv420p10le"
         }
 
         test("captureArguments blends as many frames as the motion blur samples") {
@@ -200,27 +205,12 @@ class FrameEncoderTest :
                 "tmix=frames=5:weights='1 4 4 4 1',framestep=4"
         }
 
-        test("captureArguments passes the bitrate as the average when the rate factor is blank") {
-            val read = arguments(videoConfig(crf = ""))
-            read shouldNotContainAnyOf listOf("-crf", "28", "-maxrate")
-            read[21] shouldBe "-b:v"
-            read[22] shouldBe "4800k"
-        }
-
         test("captureArguments leaves out the flags of blank options and appends the record arguments") {
-            val config =
-                videoConfig(
-                    preset = "",
-                    crf = "",
-                    bitrate = "",
-                    svtav1Params = "",
-                    arguments = "-tune vq",
-                )
-            val read = arguments(config)
-            read shouldNotContainAnyOf listOf("-preset", "4", "-crf", "28", "-b:v", "-maxrate", "4800k", "-svtav1-params", "tune=0")
-            read[19] shouldBe "-g"
-            read[25] shouldBe "-tune"
-            read[26] shouldBe "vq"
+            val read = arguments(videoConfig(svtav1Params = "", arguments = "-tune vq"))
+            read shouldNotContainAnyOf listOf("-svtav1-params", "tune=0")
+            read[23] shouldBe "-g"
+            read[29] shouldBe "-tune"
+            read[30] shouldBe "vq"
         }
 
         test("captureArguments holds no trim, time scale or keyframe flags") {
@@ -300,7 +290,7 @@ class FrameEncoderTest :
 
                         override suspend fun duration(file: Path): Double = 0.0
                     }
-                return encoder(config = videoConfig(width = 1, height = 1), captureTarget = captureTarget, ffmpeg = ffmpeg)
+                return encoder(format = defaultFormat.copy(width = 1, height = 1), captureTarget = captureTarget, ffmpeg = ffmpeg)
             }
 
             test("relays the bytes the hook library sends to the standard input of ffmpeg") {

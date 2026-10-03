@@ -7,10 +7,12 @@ import java.nio.file.Path
  *
  * @property file The video file that holds the frames.
  * @property length How many seconds [file] runs.
+ * @property format The format the frames of [file] were recorded in.
  * @property demoStart The demo time, in seconds, the first frame of [file] shows. If it is not known, it is `null`.
  */
 data class VideoTrack(
     val file: Path,
     val length: Double,
+    val format: VideoFormat,
     val demoStart: Double?,
 )

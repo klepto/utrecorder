@@ -3,6 +3,7 @@ package dev.klepto.utrecorder.core
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.SystemConfigReader
+import dev.klepto.utrecorder.core.capture.video.VideoTier
 import dev.klepto.utrecorder.ut99.UtConfig
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -22,13 +23,10 @@ class RecorderConfigTest :
                 mapOf(
                     "utrecorder.record.fps" to "90",
                     "utrecorder.record.codec" to "libx264",
-                    "utrecorder.record.preset" to "7",
-                    "utrecorder.record.crf" to "35",
-                    "utrecorder.record.bitrate" to "8192k",
+                    "utrecorder.record.tiers" to "640x360:500k-1000k",
+                    "utrecorder.record.target_size" to "50000000",
                     "utrecorder.record.svtav1_params" to "tune=1",
                     "utrecorder.record.gop" to "240",
-                    "utrecorder.record.width" to "1920",
-                    "utrecorder.record.height" to "1080",
                     "utrecorder.record.frame_queue" to "16",
                     "utrecorder.record.frame_port" to "12345",
                     "utrecorder.record.frame_idle_timeout" to "PT20M",
@@ -55,13 +53,10 @@ class RecorderConfigTest :
             with(config.video) {
                 fps shouldBe 90
                 codec shouldBe "libx264"
-                preset shouldBe "7"
-                crf shouldBe "35"
-                bitrate shouldBe "8192k"
+                tiers shouldBe listOf(VideoTier(640, 360, 500_000, 1_000_000, null))
+                targetSize shouldBe 50_000_000
                 svtav1Params shouldBe "tune=1"
                 gop shouldBe 240
-                width shouldBe 1920
-                height shouldBe 1080
                 queue shouldBe 16
                 port shouldBe 12345
                 idleTimeout shouldBe 20.minutes
@@ -93,13 +88,15 @@ class RecorderConfigTest :
             with(config.video) {
                 fps shouldBe 60
                 codec shouldBe "libsvtav1"
-                preset shouldBe "6"
-                crf shouldBe "31"
-                bitrate shouldBe "12000k"
+                tiers shouldBe
+                    listOf(
+                        VideoTier(1920, 1080, 8_000_000, 10_000_000, "6"),
+                        VideoTier(1600, 900, 6_000_000, 8_000_000, "6"),
+                        VideoTier(1280, 720, 2_700_000, 6_000_000, "4"),
+                    )
+                targetSize shouldBe 76_000_000
                 svtav1Params shouldBe "tune=0:color-primaries=1:transfer-characteristics=1:matrix-coefficients=1:color-range=0"
                 gop shouldBe 300
-                width shouldBe 1280
-                height shouldBe 720
                 queue shouldBe 32
                 port shouldBe 0
                 idleTimeout shouldBe 300.seconds
@@ -114,7 +111,7 @@ class RecorderConfigTest :
                 noError shouldBe false
             }
             with(config.audio) {
-                bitrate shouldBe "192k"
+                bitrate shouldBe "128k"
                 filter shouldBe "aresample=async=1"
                 offset shouldBe 0.0
                 render shouldBe true

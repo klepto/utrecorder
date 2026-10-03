@@ -27,7 +27,7 @@ dependencies {
     implementation(lib("kotlin.logging"))
     testImplementation(lib("kotlin.test"))
     testImplementation(bundle("kotest"))
-    testRuntimeOnly(lib("logback.classic"))
+    testImplementation(lib("logback.classic"))
 }
 
 tasks.withType<Test>().configureEach {

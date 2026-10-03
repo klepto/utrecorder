@@ -306,12 +306,12 @@ class HttpServiceTest :
                 body shouldContain "<meta property=\"og:url\" content=\"https://recorder.example.com/view/local\" />"
                 body shouldContain "<meta property=\"og:video\" content=\"https://recorder.example.com/mp4/local\" />"
                 body shouldContain "<meta property=\"og:video:type\" content=\"video/mp4\" />"
-                body shouldContain "<meta property=\"og:video:width\" content=\"1280\" />"
-                body shouldContain "<meta property=\"og:video:height\" content=\"720\" />"
+                body shouldContain "<meta property=\"og:video:width\" content=\"1920\" />"
+                body shouldContain "<meta property=\"og:video:height\" content=\"1080\" />"
                 body shouldContain "<meta property=\"og:image\" content=\"https://recorder.example.com/thumb/local\" />"
                 body shouldContain "<meta property=\"og:image:type\" content=\"image/jpeg\" />"
-                body shouldContain "<meta property=\"og:image:width\" content=\"1280\" />"
-                body shouldContain "<meta property=\"og:image:height\" content=\"720\" />"
+                body shouldContain "<meta property=\"og:image:width\" content=\"1920\" />"
+                body shouldContain "<meta property=\"og:image:height\" content=\"1080\" />"
                 body shouldContain "<video src=\"https://recorder.example.com/mp4/local\""
                 repository["local"]?.views shouldBe 0
             }

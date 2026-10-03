@@ -26,7 +26,7 @@ import kotlin.time.Duration.Companion.seconds
  */
 class AudioCaptureConfig(
     reader: ConfigReader = SystemConfigReader(),
-    val bitrate: String = reader.get("record.audio_bitrate", "192k"),
+    val bitrate: String = reader.get("record.audio_bitrate", "128k"),
     val filter: String = reader.get("record.audio_filter", "aresample=async=1"),
     val offset: Double = reader.get("record.audio_offset", 0.0, String::toDouble),
     val render: Boolean = reader.get("record.sound_render", true, String::toBoolean),
