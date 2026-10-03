@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.core.demo
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.OperatingSystem.LINUX
 import dev.klepto.utrecorder.common.TimestampId
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.copy
@@ -82,8 +83,9 @@ class DemoPlayback(
      * Returns the unstarted run named [name] that plays [description] windowed at [viewport].
      *
      * The run starts from the playback inis of [DemoPlaybackResources] on the `Entry` map, with the values of
-     * [description] in its game ini, and its exec script plays the demo on its own clock with `?timebased`.
-     * [configure] sets the rest of the run after that. Lines it adds to `exec` run after the line that plays the demo.
+     * [description] in its game ini, and its exec script plays the demo on its own clock with `?timebased`. On Linux,
+     * the run starts through `nice -n 10`, at a lower CPU priority. [configure] sets the rest of the run after that.
+     * Lines it adds to `exec` run after the line that plays the demo.
      */
     fun process(
         name: String,
@@ -98,6 +100,7 @@ class DemoPlayback(
             baseGameIni = DemoPlaybackResources.gameIni
             baseUserIni = DemoPlaybackResources.userIni
             gameIni { setGameValues(description, viewport) }
+            lowerPriority()
             configure()
         }
 
@@ -118,6 +121,15 @@ class DemoPlayback(
          * The source of the ids that keep the names of staged demos apart.
          */
         val IDS = TimestampId()
+
+        /**
+         * Makes the run start through `nice -n 10` on Linux. On Windows, leaves the run unchanged.
+         */
+        fun UtProcessBuilder.lowerPriority() {
+            if (installation.platform.operatingSystem != LINUX) return
+            program = Path.of("nice")
+            programArguments += listOf("-n", "10")
+        }
 
         /**
          * Sets [values], given by section.

@@ -106,7 +106,7 @@ class OpenalAudioCaptureTest :
             capture().environment() shouldBe mapOf("UTRECORDER_AUDIO_RATE" to "44100", "UTRECORDER_AUDIO_PERIOD" to "512")
         }
 
-        test("process loads the hook library through the injector on Windows and preloads it on Linux") {
+        test("process loads the hook library through the injector on Windows, and preloads it under nice on Linux") {
             val hookLibrary = systemDirectory / "uthooks.dll"
             val injector = systemDirectory / "utinject.exe"
             val (files, executable) =
@@ -126,7 +126,8 @@ class OpenalAudioCaptureTest :
                 }
 
                 UtPlatform.LINUX -> {
-                    executable.executablePath shouldBe files.executable
+                    executable.executablePath shouldBe Path.of("nice")
+                    executable.arguments.take(3) shouldBe listOf("-n", "10", files.executable.absolutePathString())
                     executable.environment["LD_PRELOAD"] shouldBe hookLibrary.absolutePathString()
                 }
             }

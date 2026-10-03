@@ -1,6 +1,8 @@
 package dev.klepto.utrecorder.core.media
 
 import dev.klepto.utrecorder.common.OperatingSystem
+import dev.klepto.utrecorder.common.OperatingSystem.LINUX
+import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
 import dev.klepto.utrecorder.common.io.Executable
 import dev.klepto.utrecorder.common.io.ExecutableProcess
 import dev.klepto.utrecorder.common.io.ExecutableResult
@@ -14,6 +16,7 @@ import kotlinx.coroutines.withContext
 import org.bytedeco.ffmpeg.ffmpeg
 import org.bytedeco.ffmpeg.ffprobe
 import org.bytedeco.javacpp.Loader
+import java.io.IOException
 import java.io.OutputStream
 import java.nio.file.Path
 import kotlin.time.Duration
@@ -40,11 +43,14 @@ class FfmpegMediaTool : MediaTool {
         vararg arguments: String,
         input: (suspend (OutputStream) -> Unit)?,
         onProgress: ((MediaProgress) -> Unit)?,
-    ): Boolean =
-        when (onProgress) {
-            null -> execute(ffmpegPath, arguments.toList(), input) {}
-            else -> execute(ffmpegPath, PROGRESS_ARGUMENTS + arguments, input) { report(drain(), onProgress) }
-        }.isSuccess
+    ) {
+        val result =
+            when (onProgress) {
+                null -> execute(ffmpegPath, arguments.toList(), input) {}
+                else -> execute(ffmpegPath, PROGRESS_ARGUMENTS + arguments, input) { report(drain(), onProgress) }
+            }
+        if (!result.isSuccess) throw failure(result)
+    }
 
     /**
      * Returns the length of [file] in seconds. If ffprobe reports no duration, returns `0.0` instead.
@@ -63,8 +69,8 @@ class FfmpegMediaTool : MediaTool {
 
     /**
      * Returns the executable that runs the program at [path] with [arguments] from [libraryDirectory], with
-     * [libraryDirectory] put in front of the library path. If [operatingSystem] is not provided, uses the current
-     * operating system instead.
+     * [libraryDirectory] put in front of the library path. On Linux, the program starts through `nice -n 10`, at a
+     * lower CPU priority. If [operatingSystem] is not provided, uses the current operating system instead.
      */
     fun executable(
         path: Path,
@@ -72,7 +78,22 @@ class FfmpegMediaTool : MediaTool {
         arguments: List<String> = emptyList(),
         operatingSystem: OperatingSystem = OperatingSystem.current(),
     ): Executable =
-        Executable.build(path) {
+        when (operatingSystem) {
+            LINUX -> executable(Path.of("nice"), listOf("-n", "10", "$path") + arguments, libraryDirectory, operatingSystem)
+            WINDOWS -> executable(path, arguments, libraryDirectory, operatingSystem)
+        }
+
+    /**
+     * Returns the executable that runs [command] with [arguments] from [libraryDirectory], with [libraryDirectory] put
+     * in front of the library path of [operatingSystem].
+     */
+    private fun executable(
+        command: Path,
+        arguments: List<String>,
+        libraryDirectory: Path,
+        operatingSystem: OperatingSystem,
+    ): Executable =
+        Executable.build(command) {
             this.arguments += arguments
             workingDirectory = libraryDirectory
             prependLibraryPath(libraryDirectory, operatingSystem)
@@ -119,9 +140,18 @@ class FfmpegMediaTool : MediaTool {
 
     /**
      * Passes the standard input of this process to [input], and closes it once [input] returns.
+     *
+     * @throws IllegalStateException if [input] fails because the process exited with a code other than `0`, with the
+     * failure of [input] as its cause.
      */
     private suspend fun ExecutableProcess.write(input: suspend (OutputStream) -> Unit) {
-        withContext(Dispatchers.IO) { standardInput.use { input(it) } }
+        try {
+            withContext(Dispatchers.IO) { standardInput.use { input(it) } }
+        } catch (cause: IOException) {
+            val result = await()
+            if (result.isSuccess) throw cause
+            throw failure(result, cause)
+        }
     }
 
     companion object {
@@ -129,6 +159,27 @@ class FfmpegMediaTool : MediaTool {
          * The arguments that make ffmpeg write progress blocks to standard out instead of its statistics line.
          */
         private val PROGRESS_ARGUMENTS = listOf("-progress", "pipe:1", "-nostats")
+
+        /**
+         * A `key=value` line of a progress block.
+         */
+        private val PROGRESS_LINE = Regex("[a-z0-9_]+=\\S*")
+
+        /**
+         * Returns the failure of the run that ended in [result], with [cause] as its cause. The message holds the last
+         * ten output lines of the run that are not part of a progress block.
+         */
+        private fun failure(
+            result: ExecutableResult,
+            cause: Throwable? = null,
+        ): IllegalStateException {
+            val lines =
+                result.output
+                    .filterNot { PROGRESS_LINE.matches(it) }
+                    .takeLast(10)
+                    .joinToString("\n")
+            return IllegalStateException("Process ${result.executable} exited with code ${result.exitCode}:\n$lines", cause)
+        }
 
         /**
          * Returns the path the loader extracts the bundled program [type] to.

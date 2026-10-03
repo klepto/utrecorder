@@ -76,18 +76,17 @@ class FrameEncoder(
         }
 
     /**
-     * Runs ffmpeg until the capture ends, relaying the frames of the first connection [listener] accepts, and returns
-     * whether ffmpeg exited with code `0`. Once [ended] completes, no connection is waited for any more. Use [encode]
-     * instead of calling this function directly.
+     * Runs ffmpeg until the capture ends, relaying the frames of the first connection [listener] accepts. Once [ended]
+     * completes, no connection is waited for any more. Use [encode] instead of calling this function directly.
      *
      * @throws TimeoutException if the hook library does not connect within [listenTimeout].
-     * @throws IllegalStateException if the hook library has not connected when [ended] completes, or closes the
-     * connection inside a frame.
+     * @throws IllegalStateException if the hook library has not connected when [ended] completes, closes the
+     * connection inside a frame, or if ffmpeg exits with a code other than `0`.
      */
     suspend fun capture(
         listener: ServerSocketChannel,
         ended: Job,
-    ): Boolean = ffmpeg.run(*captureArguments().toTypedArray(), input = { relay(listener, ended, it) }, onProgress = onProgress)
+    ): Unit = ffmpeg.run(*captureArguments().toTypedArray(), input = { relay(listener, ended, it) }, onProgress = onProgress)
 
     /**
      * Copies every byte of the first connection [listener] accepts to [input], until the hook library closes it.
@@ -141,12 +140,11 @@ class FrameEncoder(
     }
 
     /**
-     * Returns the result of [worker], the running [capture], once it finishes. Use [encode] instead of calling this
-     * function directly.
+     * Waits for [worker], the running [capture], to finish. Use [encode] instead of calling this function directly.
      *
      * @throws TimeoutException if [worker] does not finish within [VideoCaptureConfig.finishTimeout].
      */
-    suspend fun finish(worker: Deferred<Boolean>): Boolean =
+    suspend fun finish(worker: Deferred<Unit>): Unit =
         try {
             withTimeout(config.finishTimeout) { worker.await() }
         } catch (timedOut: TimeoutCancellationException) {
@@ -185,18 +183,19 @@ class FrameEncoder(
             this += listOf("-g", config.gop.toString())
             this += recordArguments()
             this += listOf("-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv")
-            this += listOf("-pix_fmt", "yuv420p10le")
+            this += listOf("-pix_fmt", config.pixelFormat)
             this += "-an"
             this += target.absolutePathString()
         }
 
     /**
-     * Returns the `-vf` filter chain: a vertical flip, a BT.709 limited-range conversion to the encoder's 10-bit 4:2:0 pixel format with accurate chroma downsampling,
-     * and, when [VideoCaptureConfig.motionBlur] is on, a motion blur of the converted frames.
+     * Returns the `-vf` filter chain: a vertical flip, a BT.709 limited-range conversion to
+     * [VideoCaptureConfig.pixelFormat] with accurate chroma downsampling, and, when [VideoCaptureConfig.motionBlur] is
+     * on, a motion blur of the converted frames.
      */
     private fun videoFilter(): String {
         val blend = if (config.motionBlur) ",${motionBlur()}" else ""
-        return "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le" +
+        return "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=${config.pixelFormat}" +
             blend
     }
 
@@ -279,7 +278,7 @@ suspend fun <T> FrameEncoder.encode(block: suspend FrameEncoder.Connection.() ->
             log.debug { "Capturing rendered frames to ${target.fileName}, listening on $STREAM_HOST:$port" }
             val value = FrameEncoder.Connection(port).block()
             ended.complete(Unit)
-            check(finish(worker)) { "Frame capture was not finalised by ffmpeg" }
+            finish(worker)
             checkCapture()
             value to target
         }

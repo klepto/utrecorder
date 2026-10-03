@@ -39,6 +39,7 @@ class FrameEncoderTest :
             crf: String = "28",
             bitrate: String = "4800k",
             svtav1Params: String = "tune=0",
+            pixelFormat: String = "yuv420p",
             arguments: String = "",
             motionBlur: Boolean = true,
             motionBlurSamples: Int = 2,
@@ -55,6 +56,7 @@ class FrameEncoderTest :
                 crf = crf,
                 bitrate = bitrate,
                 svtav1Params = svtav1Params,
+                pixelFormat = pixelFormat,
                 gop = 300,
                 width = width,
                 height = height,
@@ -68,7 +70,7 @@ class FrameEncoderTest :
         val defaultConfig = videoConfig()
 
         fun standIn(
-            finalised: Boolean = true,
+            failure: String? = null,
             frames: Int = 0,
         ): MediaTool =
             object : MediaTool {
@@ -76,7 +78,9 @@ class FrameEncoderTest :
                     vararg arguments: String,
                     input: (suspend (OutputStream) -> Unit)?,
                     onProgress: ((MediaProgress) -> Unit)?,
-                ): Boolean = finalised
+                ) {
+                    failure?.let { throw IllegalStateException(it) }
+                }
 
                 override suspend fun frames(file: Path): Int = frames
 
@@ -113,11 +117,11 @@ class FrameEncoderTest :
             read[10] shouldBe "32"
         }
 
-        test("captureArguments flips and converts the frames to BT.709 limited-range yuv420p10le, then blends them") {
+        test("captureArguments flips and converts the frames to BT.709 limited-range yuv420p, then blends them") {
             val read = arguments()
             read[13] shouldBe "-vf"
             read[14] shouldBe
-                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
+                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p," +
                 "tmix=frames=3:weights='1 4 1',framestep=2"
             read[15] shouldBe "-map"
             read[16] shouldBe "0:v:0"
@@ -135,7 +139,7 @@ class FrameEncoderTest :
             read[28] shouldBe "300"
         }
 
-        test("captureArguments tags the output BT.709 limited range and ends with the yuv420p10le pixel format, no audio and the target") {
+        test("captureArguments tags the output BT.709 limited range and ends with the yuv420p pixel format, no audio and the target") {
             val read = arguments()
             read[29] shouldBe "-colorspace"
             read[30] shouldBe "bt709"
@@ -146,7 +150,7 @@ class FrameEncoderTest :
             read[35] shouldBe "-color_range"
             read[36] shouldBe "tv"
             read[37] shouldBe "-pix_fmt"
-            read[38] shouldBe "yuv420p10le"
+            read[38] shouldBe "yuv420p"
             read[39] shouldBe "-an"
             read[40] shouldBe target.absolutePathString()
         }
@@ -154,15 +158,22 @@ class FrameEncoderTest :
         test("captureArguments leaves out the frame blend when motion blur is off") {
             val read = arguments(videoConfig(motionBlur = false))
             read[14] shouldBe
-                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
+                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p"
             read[8] shouldBe "60"
+        }
+
+        test("captureArguments converts the frames to and encodes them in the pixel format of the config") {
+            val read = arguments(videoConfig(pixelFormat = "yuv420p10le", motionBlur = false))
+            read[14] shouldBe
+                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
+            read[38] shouldBe "yuv420p10le"
         }
 
         test("captureArguments blends as many frames as the motion blur samples") {
             val read = arguments(videoConfig(motionBlurSamples = 4))
             read[8] shouldBe "240"
             read[14] shouldBe
-                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le," +
+                "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p," +
                 "tmix=frames=5:weights='1 4 4 4 1',framestep=4"
         }
 
@@ -194,12 +205,12 @@ class FrameEncoderTest :
         }
 
         context("record") {
-            test("fails when ffmpeg does not finalise the capture") {
-                val failing = encoder(ffmpeg = standIn(finalised = false))
+            test("fails with the failure of ffmpeg") {
+                val failing = encoder(ffmpeg = standIn(failure = "Process ffmpeg exited with code 1"))
 
                 shouldThrow<IllegalStateException> {
                     failing.encode { }
-                }.message shouldBe "Frame capture was not finalised by ffmpeg"
+                }.message shouldBe "Process ffmpeg exited with code 1"
             }
 
             test("fails when ffmpeg produces no capture file") {
@@ -242,9 +253,8 @@ class FrameEncoderTest :
                             vararg arguments: String,
                             input: (suspend (OutputStream) -> Unit)?,
                             onProgress: ((MediaProgress) -> Unit)?,
-                        ): Boolean {
+                        ) {
                             input?.invoke(relayed)
-                            return true
                         }
 
                         override suspend fun frames(file: Path): Int = 1
@@ -299,7 +309,7 @@ class FrameEncoderTest :
                             vararg arguments: String,
                             input: (suspend (OutputStream) -> Unit)?,
                             onProgress: ((MediaProgress) -> Unit)?,
-                        ): Boolean =
+                        ): Unit =
                             try {
                                 workerStarted.complete(Unit)
                                 awaitCancellation()
@@ -330,7 +340,7 @@ class FrameEncoderTest :
                             vararg arguments: String,
                             input: (suspend (OutputStream) -> Unit)?,
                             onProgress: ((MediaProgress) -> Unit)?,
-                        ): Boolean =
+                        ): Unit =
                             try {
                                 awaitCancellation()
                             } finally {

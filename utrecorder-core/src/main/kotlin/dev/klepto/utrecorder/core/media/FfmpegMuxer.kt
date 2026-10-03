@@ -32,10 +32,7 @@ class FfmpegMuxer(
     ): Path {
         withContext(Dispatchers.IO) { target.toFile().delete() }
         val arguments = arguments(video, audio, offset, length, target)
-        val merged = ffmpeg.run(*arguments.toTypedArray()) { onProgress(Progress(it.time.toDouble(SECONDS) / length)) }
-        check(merged) {
-            "Merging ${video.fileName} with ${audio.fileName} failed"
-        }
+        ffmpeg.run(*arguments.toTypedArray()) { onProgress(Progress(it.time.toDouble(SECONDS) / length)) }
         onProgress(Progress(1.0))
         return target
     }

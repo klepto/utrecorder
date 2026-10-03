@@ -142,7 +142,7 @@ class RecorderPipelineTest :
                 vararg arguments: String,
                 input: (suspend (OutputStream) -> Unit)?,
                 onProgress: ((MediaProgress) -> Unit)?,
-            ): Boolean = true
+            ) = Unit
 
             override suspend fun duration(file: Path): Double = length
 

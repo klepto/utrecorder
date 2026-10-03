@@ -1,8 +1,10 @@
 package dev.klepto.utrecorder.core.media
 
 import dev.klepto.utrecorder.common.OperatingSystem
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
@@ -36,12 +38,35 @@ class FfmpegMediaToolTest :
         }
 
         context("run") {
-            test("returns true when ffmpeg exits with code 0") {
-                FfmpegMediaTool().run("-version") shouldBe true
+            test("returns when ffmpeg exits with code 0") {
+                FfmpegMediaTool().run("-version")
             }
 
-            test("returns false when ffmpeg exits with a nonzero code") {
-                FfmpegMediaTool().run("-bogus-flag", "no-such-input-file") shouldBe false
+            test("fails with the output of ffmpeg when ffmpeg exits with a nonzero code") {
+                shouldThrow<IllegalStateException> {
+                    FfmpegMediaTool().run("-bogus-flag", "no-such-input-file")
+                }.message shouldContain "Unrecognized option 'bogus-flag'"
+            }
+
+            test("fails with the output of ffmpeg when ffmpeg exits while its input is written") {
+                shouldThrow<IllegalStateException> {
+                    FfmpegMediaTool().run(
+                        "-f",
+                        "rawvideo",
+                        "-pix_fmt",
+                        "bgra",
+                        "-s",
+                        "16x16",
+                        "-i",
+                        "pipe:0",
+                        "-c:v",
+                        "no-such-encoder",
+                        "-f",
+                        "null",
+                        "-",
+                        input = { stream -> repeat(4096) { stream.write(ByteArray(16 * 16 * 4)) } },
+                    )
+                }.message shouldContain "Unknown encoder 'no-such-encoder'"
             }
         }
 
@@ -54,8 +79,33 @@ class FfmpegMediaToolTest :
                         operatingSystem = OperatingSystem.LINUX,
                     )
 
-                executable.executablePath shouldBe Path.of("bundled", "ffmpeg.exe")
                 executable.environment["LD_LIBRARY_PATH"] shouldBe "${Path.of("bundled")}"
+            }
+
+            test("starts the program through nice -n 10 on Linux") {
+                val executable =
+                    FfmpegMediaTool().executable(
+                        Path.of("bundled", "ffmpeg"),
+                        Path.of("bundled"),
+                        listOf("-version"),
+                        operatingSystem = OperatingSystem.LINUX,
+                    )
+
+                executable.executablePath shouldBe Path.of("nice")
+                executable.arguments shouldBe listOf("-n", "10", "${Path.of("bundled", "ffmpeg")}", "-version")
+            }
+
+            test("starts the program itself on Windows") {
+                val executable =
+                    FfmpegMediaTool().executable(
+                        Path.of("bundled", "ffmpeg.exe"),
+                        Path.of("bundled"),
+                        listOf("-version"),
+                        operatingSystem = OperatingSystem.WINDOWS,
+                    )
+
+                executable.executablePath shouldBe Path.of("bundled", "ffmpeg.exe")
+                executable.arguments shouldBe listOf("-version")
             }
         }
 
@@ -72,7 +122,7 @@ class FfmpegMediaToolTest :
                     "-c:v",
                     "mpeg4",
                     "${file.toAbsolutePath()}",
-                ) { reports += it } shouldBe true
+                ) { reports += it }
 
                 reports.last().frames shouldBe 7
             }
@@ -96,7 +146,7 @@ class FfmpegMediaToolTest :
                     "mpeg4",
                     "${file.toAbsolutePath()}",
                     input = { it.write(ByteArray(16 * 16 * 4 * 3)) },
-                ) { reports += it } shouldBe true
+                ) { reports += it }
 
                 reports.last().frames shouldBe 3
             }

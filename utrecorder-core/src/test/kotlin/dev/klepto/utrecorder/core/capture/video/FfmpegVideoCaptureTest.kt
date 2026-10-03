@@ -15,6 +15,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldStartWith
+import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
@@ -129,7 +130,7 @@ class FfmpegVideoCaptureTest :
             }
         }
 
-        test("process starts the game executable copy through the injector on Windows and preloads the hook library on Linux") {
+        test("process starts the game through the injector on Windows, and through nice with the hook library preloaded on Linux") {
             val (files, executable) = launch()
 
             when (UtPlatform.current()) {
@@ -140,7 +141,8 @@ class FfmpegVideoCaptureTest :
                 }
 
                 UtPlatform.LINUX -> {
-                    executable.executablePath shouldBe files.executable
+                    executable.executablePath shouldBe Path.of("nice")
+                    executable.arguments.take(3) shouldBe listOf("-n", "10", files.executable.absolutePathString())
                     executable.environment["LD_PRELOAD"] shouldBe hookLibrary.absolutePathString()
                 }
             }

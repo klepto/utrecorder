@@ -22,6 +22,7 @@ import kotlin.time.Duration.Companion.seconds
  * @property svtav1Params The `-svtav1-params` handed to the encoder, blank for none. Tags the AV1 bitstream BT.709
  * limited range by default, since a generic `-color_primaries`/`-color_trc` does not reach the bitstream through
  * `libsvtav1`.
+ * @property pixelFormat The ffmpeg pixel format the frames are converted to and encoded in.
  * @property gop How many frames lie between the keyframes of the encode.
  * @property width The viewport width of the video capture, which is also the width of the captured frames.
  * @property height The viewport height of the video capture, which is also the height of the captured frames.
@@ -51,6 +52,7 @@ class VideoCaptureConfig(
             "record.svtav1_params",
             "tune=0:color-primaries=1:transfer-characteristics=1:matrix-coefficients=1:color-range=0",
         ),
+    val pixelFormat: String = reader.get("record.pixel_format", "yuv420p"),
     val gop: Int = reader.get("record.gop", 300, String::toInt),
     val width: Int = reader.get("record.width", 1280, String::toInt),
     val height: Int = reader.get("record.height", 720, String::toInt),
