@@ -1,10 +1,10 @@
 #!/bin/sh
 # Rebuilds the CLI image from the current working tree and, given a demo URL, records it in a CLI container beside the
-# server. Everything in the CLI home volume is deleted first, so every run provisions Unreal Tournament again from the
-# downloads the cache volume, shared with the server, already has. Both volumes are then given to the image's
-# unprivileged user, so volumes an older image filled as root stay writable. The log of the run goes to
-# .utrecorder/docker/cli.log, its standard out to .utrecorder/docker/cli.out, and the mp4 is copied to
-# .utrecorder/docker/.
+# server. Everything in the CLI home volume except installs/ is deleted first, so every run starts from an empty
+# workspace but reuses the Unreal Tournament installation an earlier run provisioned, and the wall time of a run does
+# not include provisioning. Both volumes are then given to the image's unprivileged user, so volumes an older image
+# filled as root stay writable. The log of the run goes to .utrecorder/docker/cli.log, its standard out to
+# .utrecorder/docker/cli.out, and the mp4 is copied to .utrecorder/docker/.
 #
 # Usage: record.sh [demo-url]
 set -e
@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 
 docker compose build cli
 docker compose run --rm --no-deps --user root --entrypoint sh cli -c '
-    find "$UTRECORDER_HOME" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    find "$UTRECORDER_HOME" -mindepth 1 -maxdepth 1 ! -name installs -exec rm -rf {} +
     chown -R utrecorder:utrecorder "$UTRECORDER_HOME" "$UTRECORDER_CACHE"'
 
 if [ $# -eq 0 ]; then

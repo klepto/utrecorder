@@ -141,7 +141,8 @@ ENV DISPLAY=:99 \
     LIBGL_ALWAYS_SOFTWARE=1 \
     GALLIUM_DRIVER=llvmpipe \
     UTRECORDER_HOME=/var/lib/utrecorder \
-    UTRECORDER_CACHE=/var/cache/utrecorder
+    UTRECORDER_CACHE=/var/cache/utrecorder \
+    MESA_SHADER_CACHE_DIR=/var/cache/utrecorder/mesa
 
 # Game packages no redirect serves, maintained by hand in the repository. The home is a volume that starts empty, so
 # the packages directory is moved out of it into the image.
@@ -159,7 +160,9 @@ RUN groupadd --gid 10001 utrecorder \
     && install -d -o utrecorder -g utrecorder /var/lib/utrecorder /var/cache/utrecorder \
     && install -d -m 1777 /tmp/.X11-unix
 
-# The cache is a volume of its own, outside the home, so that containers sharing nothing else can share downloads.
+# The cache is a volume of its own, outside the home, so that containers sharing nothing else can share downloads and
+# Mesa's shader cache, which MESA_SHADER_CACHE_DIR above puts in its mesa/ directory. Mesa creates that directory and
+# bounds its size itself.
 VOLUME /var/lib/utrecorder /var/cache/utrecorder
 
 USER utrecorder

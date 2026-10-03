@@ -1,10 +1,10 @@
 /*
  * Hook library loaded into the Unreal Tournament process. It hooks the presented frame, SwapBuffers on Windows and
  * SDL_GL_SwapWindow on Linux, and steps the engine clocks by a fixed amount per presented frame. Once execSetSpeed arms
- * the capture, it reads each frame back with glReadPixels and sends it to the frame socket in UTRECORDER_PORT as raw
- * 8-bit BGRA pixels, until the demo ends. In audio mode it steps the engine clocks by one mixer period of the OpenAL
- * wave output per presented frame instead, lets the mixer render exactly that period before the next frame, and sends
- * no frames.
+ * the capture, it reads each frame back with glReadPixels and a sender thread sends it to the frame socket in
+ * UTRECORDER_PORT as raw 8-bit BGRA pixels, until the demo ends. In audio mode it steps the engine clocks by one mixer
+ * period of the OpenAL wave output per presented frame instead, lets the mixer render exactly that period before the
+ * next frame, and sends no frames.
  */
 
 #ifdef _WIN32
@@ -103,32 +103,69 @@ typedef void(GL_ENTRY *ReadPixelsFunction)(int, int, int, int, unsigned int, uns
 static GetIntegervFunction readViewport;
 static ReadPixelsFunction readPixels;
 
-/* The frame read last, and the frame read before it that waits to be sent, each pixelWidth by pixelHeight 8-bit BGRA. */
-static unsigned char *pixels;
-static unsigned char *pending;
-static size_t pendingSize;
+/* The frame buffers of the ring. */
+#define RING_FRAMES 3
+
+/*
+ * The ring of frame buffers, each pixelWidth by pixelHeight 8-bit BGRA, frameSize bytes. The sender sends the
+ * ringQueued buffers from ringHead on in order, the one it is sending included, and the buffer after them holds the
+ * pending frame while ringPending is set. Every other buffer is free. The game thread alone writes ringPending, the
+ * buffers it reads into and, while the sender holds no buffer, the ring itself.
+ */
+static unsigned char *ring[RING_FRAMES];
+static size_t frameSize;
 static int pixelWidth;
 static int pixelHeight;
+static int ringHead;
+static int ringQueued;
+static int ringPending;
 
-/* Set once capture cannot go on. No frame is read or sent after that. */
+/* Set by finishCapture once the sender is to send the frames queued and end. */
+static int ringClosing;
+
+/* Set once capture cannot go on. No frame is read or sent after that. Written under the ring's lock. */
 static int captureDisabled;
+
+/* Whether the sender thread runs and has yet to be joined. */
+static int senderStarted;
 
 /* The loopback port of the frame socket in UTRECORDER_PORT, read on the first frame of the armed capture. */
 static int streamPort;
 
-/* The connection to the frame socket. */
+/*
+ * The connection to the frame socket, which the sender opens and closes, the lock of the ring, which the game thread
+ * and the sender hold, the signal each side waits on, and the sender thread.
+ */
 #ifdef _WIN32
-static SOCKET stream = INVALID_SOCKET;
+typedef SOCKET StreamHandle;
+static StreamHandle stream = INVALID_SOCKET;
 #define STREAM_CLOSED INVALID_SOCKET
 #define closeStream(handle) closesocket(handle)
+#define shutdownStream(handle) shutdown(handle, SD_BOTH)
 #define sleepMillis(millis) Sleep(millis)
 #define sendInterrupted() 0
+static SRWLOCK ringLock = SRWLOCK_INIT;
+static CONDITION_VARIABLE ringSignal = CONDITION_VARIABLE_INIT;
+static HANDLE senderThread;
+#define lockRing() AcquireSRWLockExclusive(&ringLock)
+#define unlockRing() ReleaseSRWLockExclusive(&ringLock)
+#define waitRing() SleepConditionVariableSRW(&ringSignal, &ringLock, INFINITE, 0)
+#define wakeRing() WakeAllConditionVariable(&ringSignal)
 #else
-static int stream = -1;
+typedef int StreamHandle;
+static StreamHandle stream = -1;
 #define STREAM_CLOSED (-1)
 #define closeStream(handle) close(handle)
+#define shutdownStream(handle) shutdown(handle, SHUT_RDWR)
 #define sleepMillis(millis) usleep((millis) * 1000)
 #define sendInterrupted() (errno == EINTR)
+static pthread_mutex_t ringLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ringSignal = PTHREAD_COND_INITIALIZER;
+static pthread_t senderThread;
+#define lockRing() pthread_mutex_lock(&ringLock)
+#define unlockRing() pthread_mutex_unlock(&ringLock)
+#define waitRing() pthread_cond_wait(&ringSignal, &ringLock)
+#define wakeRing() pthread_cond_broadcast(&ringSignal)
 #endif
 
 /* Returns the seconds of a monotonic real clock. */
@@ -155,11 +192,14 @@ typedef struct {
 
 /*
  * The spans the timing line reports, sampled over the frames of the armed capture: the interval from one presented
- * frame to the next, the glReadPixels call, the handoff of a frame to the frame socket, and the real swap.
+ * frame to the next, the glReadPixels call, the game thread's wait for a free buffer of the ring with its handoff of
+ * the pending frame to the sender, the sender's send of a frame to the frame socket, and the real swap. The sender
+ * writes senderTiming under the ring's lock, and finishCapture reads it once the sender has ended.
  */
 static Timing presentTiming;
 static Timing readTiming;
 static Timing sendTiming;
+static Timing senderTiming;
 static Timing swapTiming;
 
 /* The real seconds at which the previous frame of the armed capture was presented, or 0 before the first one. */
@@ -210,28 +250,32 @@ static int startSockets(void) {
 }
 
 /*
- * Reports the reason, a printf format and its arguments, as a capture stopped line on standard error, drops the pending
- * frame, closes stream and disables capture.
+ * Reports the reason, a printf format and its arguments, as a capture stopped line on standard error and disables
+ * capture, unless capture is disabled already. Safe on the game thread and on the sender: the line prints once, the
+ * pending frame is never handed over, and the sender drops the frames queued and closes stream. Shuts stream down,
+ * which on Linux ends a send the sender is blocked in.
  */
 static void stopCapture(const char *format, ...) {
     va_list arguments;
-    fputs("uthooks: ", stderr);
-    va_start(arguments, format);
-    vfprintf(stderr, format, arguments);
-    va_end(arguments);
-    fputs(", capture stopped\n", stderr);
-    fflush(stderr);
-    pendingSize = 0;
-    if (stream != STREAM_CLOSED) {
-        closeStream(stream);
-        stream = STREAM_CLOSED;
+    lockRing();
+    if (!captureDisabled) {
+        fputs("uthooks: ", stderr);
+        va_start(arguments, format);
+        vfprintf(stderr, format, arguments);
+        va_end(arguments);
+        fputs(", capture stopped\n", stderr);
+        fflush(stderr);
+        captureDisabled = 1;
+        if (stream != STREAM_CLOSED) shutdownStream(stream);
+        wakeRing();
     }
-    captureDisabled = 1;
+    unlockRing();
 }
 
 /* Connects stream to the frame socket on streamPort. Stops capture when that fails. */
 static void openStream(void) {
     struct sockaddr_in address;
+    StreamHandle handle;
     int attempt;
     int nodelay = 1;
     if (!startSockets()) {
@@ -243,14 +287,16 @@ static void openStream(void) {
     address.sin_port = htons((unsigned short) streamPort);
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     for (attempt = 0; attempt < CONNECT_ATTEMPTS; attempt++) {
-        stream = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (stream == STREAM_CLOSED) break;
-        if (connect(stream, (struct sockaddr *) &address, sizeof(address)) == 0) {
-            setsockopt(stream, IPPROTO_TCP, TCP_NODELAY, (const char *) &nodelay, sizeof(nodelay));
+        handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (handle == STREAM_CLOSED) break;
+        if (connect(handle, (struct sockaddr *) &address, sizeof(address)) == 0) {
+            setsockopt(handle, IPPROTO_TCP, TCP_NODELAY, (const char *) &nodelay, sizeof(nodelay));
+            lockRing();
+            stream = handle;
+            unlockRing();
             return;
         }
-        closeStream(stream);
-        stream = STREAM_CLOSED;
+        closeStream(handle);
         sleepMillis(CONNECT_DELAY_MS);
     }
     stopCapture("could not connect to the frame socket on port %d", streamPort);
@@ -292,28 +338,167 @@ static void resolveGl(void) {
     if (!readViewport || !readPixels) stopCapture("glGetIntegerv or glReadPixels not found");
 }
 
-/* Sends the pending frame, opening stream first if needed. Stops capture when the send fails. */
-static void sendPending(void) {
-    if (!pendingSize) return;
-    if (stream == STREAM_CLOSED) openStream();
-    if (captureDisabled) return;
-    if (!sendAll(pending, pendingSize)) stopCapture("a frame send to the frame socket failed");
+/*
+ * The sender thread's work: connects stream, sends the frames handed over in order until capture stops or finishCapture
+ * has it end once the frames queued are sent, then drops the frames left and closes stream. Times each send under the
+ * ring's lock, and stops capture when a send fails.
+ */
+static void sendFrames(void) {
+    const unsigned char *frame;
+    size_t size;
+    double start;
+    int sent;
+    openStream();
+    lockRing();
+    for (;;) {
+        while (!captureDisabled && !ringQueued && !ringClosing) waitRing();
+        if (captureDisabled || !ringQueued) break;
+        frame = ring[ringHead];
+        size = frameSize;
+        unlockRing();
+        start = readRealSeconds();
+        sent = sendAll(frame, size);
+        lockRing();
+        addTimingSince(&senderTiming, start);
+        if (!sent) {
+            unlockRing();
+            stopCapture("a frame send to the frame socket failed");
+            lockRing();
+            break;
+        }
+        ringHead = (ringHead + 1) % RING_FRAMES;
+        ringQueued--;
+        wakeRing();
+    }
+    ringQueued = 0;
+    if (stream != STREAM_CLOSED) {
+        closeStream(stream);
+        stream = STREAM_CLOSED;
+    }
+    wakeRing();
+    unlockRing();
+}
+
+#ifdef _WIN32
+
+/* The sender thread. */
+static DWORD WINAPI runSender(LPVOID parameter) {
+    (void) parameter;
+    sendFrames();
+    return 0;
+}
+
+/* Starts senderThread. Returns whether it started. */
+static int startThread(void) {
+    senderThread = CreateThread(NULL, 0, runSender, NULL, 0, NULL);
+    return senderThread != NULL;
+}
+
+/* Waits for senderThread to end. */
+static void joinThread(void) {
+    WaitForSingleObject(senderThread, INFINITE);
+    CloseHandle(senderThread);
+}
+
+#else
+
+/* The sender thread. */
+static void *runSender(void *parameter) {
+    (void) parameter;
+    sendFrames();
+    return NULL;
+}
+
+/* Starts senderThread with every signal blocked, so that the game's signals reach the game's threads. */
+static int startThread(void) {
+    sigset_t blocked;
+    sigset_t previous;
+    int started;
+    sigfillset(&blocked);
+    pthread_sigmask(SIG_SETMASK, &blocked, &previous);
+    started = pthread_create(&senderThread, NULL, runSender, NULL) == 0;
+    pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    return started;
+}
+
+/* Waits for senderThread to end. */
+static void joinThread(void) {
+    pthread_join(senderThread, NULL);
+}
+
+#endif
+
+/* Starts the sender thread. Stops capture when it does not start. */
+static void startSender(void) {
+    if (startThread()) {
+        senderStarted = 1;
+    } else {
+        stopCapture("the frame sender thread could not be started");
+    }
+}
+
+/* Has the sender send the frames queued, then waits for it to close stream and end. */
+static void endSender(void) {
+    if (!senderStarted) return;
+    lockRing();
+    ringClosing = 1;
+    wakeRing();
+    unlockRing();
+    joinThread();
+    senderStarted = 0;
 }
 
 /*
- * Reallocates both frame buffers for a width by height viewport and drops the pending frame. Stops capture when either
- * allocation fails.
+ * Waits for a free buffer of the ring, hands the pending frame to the sender, starting the sender on the first frame
+ * handed over, and returns the free buffer. Returns NULL once capture is disabled.
+ */
+static unsigned char *handFrame(void) {
+    unsigned char *frame = NULL;
+    int handed = 0;
+    lockRing();
+    while (!captureDisabled && ringQueued + ringPending >= RING_FRAMES) waitRing();
+    if (!captureDisabled) {
+        if (ringPending) {
+            ringQueued++;
+            ringPending = 0;
+            handed = 1;
+            wakeRing();
+        }
+        frame = ring[(ringHead + ringQueued) % RING_FRAMES];
+    }
+    unlockRing();
+    if (handed && !senderStarted) {
+        startSender();
+        if (!senderStarted) return NULL;
+    }
+    return frame;
+}
+
+/*
+ * Waits for the sender to send the frames queued, then reallocates the ring for a width by height viewport and drops
+ * the pending frame. Stops capture when an allocation fails.
  */
 static void resizeFrames(int width, int height) {
     size_t size = (size_t) width * height * 4;
-    free(pixels);
-    free(pending);
+    int disabled;
+    int index;
+    lockRing();
+    while (!captureDisabled && ringQueued) waitRing();
+    disabled = captureDisabled;
+    unlockRing();
+    if (disabled) return;
+    for (index = 0; index < RING_FRAMES; index++) free(ring[index]);
     pixelWidth = width;
     pixelHeight = height;
-    pendingSize = 0;
-    pixels = malloc(size);
-    pending = malloc(size);
-    if (!pixels || !pending) stopCapture("frame buffers for %dx%d could not be allocated", width, height);
+    frameSize = size;
+    ringPending = 0;
+    for (index = 0; index < RING_FRAMES; index++) ring[index] = malloc(size);
+    for (index = 0; index < RING_FRAMES; index++) {
+        if (!ring[index]) {
+            stopCapture("frame buffers for %dx%d could not be allocated", width, height);
+            return;
+        }
+    }
 }
 
 /*
@@ -334,13 +519,12 @@ static void rejectFrameSize(int width, int height) {
 }
 
 /*
- * Reads the current viewport into pixels, sends the pending frame, then makes the frame just read the pending one.
- * Times the read and the send.
+ * Waits for a free buffer of the ring and hands the pending frame to the sender, then reads the current viewport into
+ * the free buffer and makes it the pending frame. Times the wait with the handoff, and the read.
  */
 static void captureFrame(void) {
     int viewport[4];
-    size_t size;
-    unsigned char *sent;
+    unsigned char *frame;
     double start;
     readViewport(GL_VIEWPORT, viewport);
     if (viewport[2] <= 0 || viewport[3] <= 0) return;
@@ -352,17 +536,13 @@ static void captureFrame(void) {
         resizeFrames(viewport[2], viewport[3]);
     }
     if (captureDisabled) return;
-    size = (size_t) pixelWidth * pixelHeight * 4;
     start = readRealSeconds();
-    readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
-    start = addTimingSince(&readTiming, start);
-    sendPending();
-    addTimingSince(&sendTiming, start);
-    if (captureDisabled) return;
-    sent = pending;
-    pending = pixels;
-    pixels = sent;
-    pendingSize = size;
+    frame = handFrame();
+    start = addTimingSince(&sendTiming, start);
+    if (!frame) return;
+    readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_BYTE, frame);
+    addTimingSince(&readTiming, start);
+    ringPending = 1;
 }
 
 /* The values each patched clock function returned when it was patched. The hooks count on from them. */
@@ -1221,31 +1401,32 @@ static void reportTiming(void) {
     char presentFigures[64];
     char readFigures[64];
     char sendFigures[64];
+    char senderFigures[64];
     char swapFigures[64];
     formatTiming(&presentTiming, presentFigures, sizeof presentFigures);
     formatTiming(&readTiming, readFigures, sizeof readFigures);
     formatTiming(&sendTiming, sendFigures, sizeof sendFigures);
+    formatTiming(&senderTiming, senderFigures, sizeof senderFigures);
     formatTiming(&swapTiming, swapFigures, sizeof swapFigures);
-    fprintf(stderr, "uthooks: timing over %lld frames in ms, present %s, read %s, send %s, swap %s\n", demoFrames,
-            presentFigures, readFigures, sendFigures, swapFigures);
+    fprintf(stderr, "uthooks: timing over %lld frames in ms, present %s, read %s, send %s, sender %s, swap %s\n",
+            demoFrames, presentFigures, readFigures, sendFigures, senderFigures, swapFigures);
 }
 
 /*
  * Ends the capture: releases the cycle sites to the real counter when they have not released themselves already,
- * releases the engine clocks and the mixer to the real clock, drops the pending frame, closes stream and reports the
- * frame count.
+ * releases the engine clocks and the mixer to the real clock, drops the pending frame, waits for the sender to send
+ * the frames queued, close stream and end, and reports the frame count.
  */
 static void finishCapture(void) {
     clockFinished = 1;
     releaseCycles();
     releaseClock();
     releaseMixer("the demo ended");
-    pendingSize = 0;
-    if (stream != STREAM_CLOSED) {
-        closeStream(stream);
-        stream = STREAM_CLOSED;
-    }
+    ringPending = 0;
+    endSender();
+    lockRing();
     captureDisabled = 1;
+    unlockRing();
     fprintf(stderr, "uthooks: demo ended after %lld frames, kept %lld\n", demoFrames,
             demoFrames > 2 ? demoFrames - 2 : 0);
     reportTiming();
@@ -1378,7 +1559,10 @@ static void advanceClock(void) {
 /* Reads streamPort, and disables capture when UTRECORDER_PORT is unset or out of range. */
 static void resolvePort(void) {
     streamPort = environmentNumber("UTRECORDER_PORT", 65535);
-    if (!streamPort) captureDisabled = 1;
+    if (streamPort) return;
+    lockRing();
+    captureDisabled = 1;
+    unlockRing();
 }
 
 /*

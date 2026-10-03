@@ -1,7 +1,8 @@
 #!/bin/sh
 # Records one demo URL in a CLI container the way record.sh does, and measures the run. The CLI image is rebuilt from the
-# working tree this script runs in and the CLI home volume is wiped first, by record.sh itself. Every -e option is passed
-# on to the container. While the recording runs, the processes of the container are sampled every 5 seconds.
+# working tree this script runs in and the CLI home volume, except installs/, is wiped first, by record.sh itself. Every
+# -e option is passed on to the container. While the recording runs, the processes of the container are sampled every 5
+# seconds.
 #
 # Everything the run leaves goes to .utrecorder/docker/profile/<label>/ of the main checkout, found through git's common
 # directory, so a run from a workflow worktree or from a temporary checkout of another commit writes beside the others.

@@ -15,6 +15,7 @@ import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.core.demo.DemoPlaybackHooks
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMark
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
+import dev.klepto.utrecorder.core.demo.DemoPlaybackRenderDevice
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.ut99.UtInstallation
@@ -147,13 +148,27 @@ class OpenalAudioCapture(
 
     /**
      * Returns the environment the run adds on Linux: `SWRAST_NO_PRESENT`, which stops llvmpipe from presenting frames to
-     * Xvfb.
+     * Xvfb, and `LP_NUM_THREADS` of `0`, which makes llvmpipe rasterize on the game thread instead of waking a raster
+     * thread for each host core.
      */
-    fun linuxEnvironment(): Map<String, String> = mapOf("SWRAST_NO_PRESENT" to "1")
+    fun linuxEnvironment(): Map<String, String> = mapOf("SWRAST_NO_PRESENT" to "1", "LP_NUM_THREADS" to "0")
+
+    /**
+     * Returns the values the run sets in the section of [DemoPlaybackRenderDevice.OPENGL] on top of the viewport's: the
+     * render quality settings that change no actor, all off.
+     */
+    private fun renderQualityValues(): Map<String, String> =
+        mapOf(
+            "UseAA" to "False",
+            "DetailTextures" to "False",
+            "UseHDTextures" to "False",
+            "UseTrilinear" to "False",
+        )
 
     /**
      * Returns the unstarted run that plays [description] under [openAlEnvironment] with the hook library of [hooks]
-     * loaded: with sound, and playing the exec script. On Linux the run also gets [linuxEnvironment].
+     * loaded: with sound, and playing the exec script. On Linux the run also gets [linuxEnvironment], and the run's game
+     * ini gets [renderQualityValues] in the section of the audio capture's render device.
      */
     fun process(
         description: DemoPlaybackConfig,
@@ -164,6 +179,9 @@ class OpenalAudioCapture(
             DemoPlaybackHooks.inject(this, hooks)
             exec += execScript(description)
             sound = true
+            gameIni {
+                renderQualityValues().forEach { (key, value) -> this[DemoPlaybackRenderDevice.OPENGL.section, key] = value }
+            }
             environment += openAlEnvironment
             environment += this@OpenalAudioCapture.environment()
             if (installation.platform.operatingSystem != WINDOWS) environment += this@OpenalAudioCapture.linuxEnvironment()

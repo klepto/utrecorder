@@ -1,12 +1,14 @@
 package dev.klepto.utrecorder.core.capture.video
 
 import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.OperatingSystem
 import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldNotContainAnyOf
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -18,6 +20,8 @@ import java.net.BindException
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.StandardSocketOptions
+import java.nio.channels.ServerSocketChannel
 import java.nio.file.Path
 import java.util.concurrent.TimeoutException
 import kotlin.io.path.absolutePathString
@@ -91,13 +95,18 @@ class FrameEncoderTest :
             config: VideoCaptureConfig = defaultConfig,
             captureTarget: Path = target,
             ffmpeg: MediaTool = standIn(),
-        ): FrameEncoder = FrameEncoder(config, 5.seconds, captureTarget, ffmpeg)
+            operatingSystem: OperatingSystem = OperatingSystem.current(),
+            processors: Int = 6,
+        ): FrameEncoder = FrameEncoder(config, 5.seconds, captureTarget, ffmpeg, operatingSystem = operatingSystem, processors = processors)
 
-        fun arguments(config: VideoCaptureConfig = defaultConfig): List<String> = encoder(config).captureArguments()
+        fun arguments(
+            config: VideoCaptureConfig = defaultConfig,
+            processors: Int = 6,
+        ): List<String> = encoder(config, processors = processors).captureArguments()
 
         test("captureArguments reads the frames from standard input") {
             val read = arguments()
-            read.size shouldBe 41
+            read.size shouldBe 45
             read[11] shouldBe "-i"
             read[12] shouldBe "pipe:0"
         }
@@ -139,20 +148,34 @@ class FrameEncoderTest :
             read[28] shouldBe "300"
         }
 
+        test("captureArguments sizes the threads of the encoder and the filters by the processors the JVM sees") {
+            val read = arguments(processors = 4)
+            read[29] shouldBe "-threads"
+            read[30] shouldBe "4"
+            read[31] shouldBe "-filter_threads"
+            read[32] shouldBe "4"
+        }
+
+        test("captureArguments passes the thread options as output options, before the record arguments, so a user's own win") {
+            val read = arguments(videoConfig(arguments = "-threads 2 -filter_threads 1"), processors = 4)
+            read[12] shouldBe "pipe:0"
+            read.subList(29, 37) shouldBe listOf("-threads", "4", "-filter_threads", "4", "-threads", "2", "-filter_threads", "1")
+        }
+
         test("captureArguments tags the output BT.709 limited range and ends with the yuv420p pixel format, no audio and the target") {
             val read = arguments()
-            read[29] shouldBe "-colorspace"
-            read[30] shouldBe "bt709"
-            read[31] shouldBe "-color_primaries"
-            read[32] shouldBe "bt709"
-            read[33] shouldBe "-color_trc"
+            read[33] shouldBe "-colorspace"
             read[34] shouldBe "bt709"
-            read[35] shouldBe "-color_range"
-            read[36] shouldBe "tv"
-            read[37] shouldBe "-pix_fmt"
-            read[38] shouldBe "yuv420p"
-            read[39] shouldBe "-an"
-            read[40] shouldBe target.absolutePathString()
+            read[35] shouldBe "-color_primaries"
+            read[36] shouldBe "bt709"
+            read[37] shouldBe "-color_trc"
+            read[38] shouldBe "bt709"
+            read[39] shouldBe "-color_range"
+            read[40] shouldBe "tv"
+            read[41] shouldBe "-pix_fmt"
+            read[42] shouldBe "yuv420p"
+            read[43] shouldBe "-an"
+            read[44] shouldBe target.absolutePathString()
         }
 
         test("captureArguments leaves out the frame blend when motion blur is off") {
@@ -166,7 +189,7 @@ class FrameEncoderTest :
             val read = arguments(videoConfig(pixelFormat = "yuv420p10le", motionBlur = false))
             read[14] shouldBe
                 "vflip,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p10le"
-            read[38] shouldBe "yuv420p10le"
+            read[42] shouldBe "yuv420p10le"
         }
 
         test("captureArguments blends as many frames as the motion blur samples") {
@@ -196,12 +219,28 @@ class FrameEncoderTest :
             val read = arguments(config)
             read shouldNotContainAnyOf listOf("-preset", "4", "-crf", "28", "-b:v", "-maxrate", "4800k", "-svtav1-params", "tune=0")
             read[19] shouldBe "-g"
-            read[21] shouldBe "-tune"
-            read[22] shouldBe "vq"
+            read[25] shouldBe "-tune"
+            read[26] shouldBe "vq"
         }
 
         test("captureArguments holds no trim, time scale or keyframe flags") {
             arguments() shouldNotContainAnyOf listOf("-ss", "-t", "-itsscale", "-force_key_frames")
+        }
+
+        context("listen") {
+            val systemBuffer = ServerSocketChannel.open().use { it.getOption(StandardSocketOptions.SO_RCVBUF) }
+
+            test("sizes the receive buffer of the listener on Windows") {
+                encoder(operatingSystem = OperatingSystem.WINDOWS).listen().use {
+                    it.getOption(StandardSocketOptions.SO_RCVBUF) shouldNotBe systemBuffer
+                }
+            }
+
+            test("leaves the receive buffer of the listener at the system default on Linux") {
+                encoder(operatingSystem = OperatingSystem.LINUX).listen().use {
+                    it.getOption(StandardSocketOptions.SO_RCVBUF) shouldBe systemBuffer
+                }
+            }
         }
 
         context("record") {

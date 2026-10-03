@@ -5,6 +5,7 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.ut99.UtConfig
+import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
 import io.kotest.assertions.throwables.shouldThrow
@@ -106,6 +107,10 @@ class OpenalAudioCaptureTest :
             capture().environment() shouldBe mapOf("UTRECORDER_AUDIO_RATE" to "44100", "UTRECORDER_AUDIO_PERIOD" to "512")
         }
 
+        test("linuxEnvironment stops llvmpipe from presenting frames and keeps its rasterizing on the game thread") {
+            capture().linuxEnvironment() shouldBe mapOf("SWRAST_NO_PRESENT" to "1", "LP_NUM_THREADS" to "0")
+        }
+
         test("process stops llvmpipe from presenting frames on Linux only") {
             val hookLibrary = systemDirectory / "uthooks.dll"
             val executable =
@@ -119,6 +124,43 @@ class OpenalAudioCaptureTest :
                 UtPlatform.WINDOWS -> executable.environment["SWRAST_NO_PRESENT"] shouldBe null
                 UtPlatform.LINUX -> executable.environment["SWRAST_NO_PRESENT"] shouldBe "1"
             }
+        }
+
+        test("process makes llvmpipe rasterize on the game thread on Linux only") {
+            val hookLibrary = systemDirectory / "uthooks.dll"
+            val executable =
+                workspace("audio-capture", installation.systemDirectory, directories) { workspace ->
+                    val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
+                    val process = capture().process(description, emptyMap(), listOf(hookLibrary))
+                    process.executable(process.files(workspace))
+                }
+
+            when (UtPlatform.current()) {
+                UtPlatform.WINDOWS -> executable.environment["LP_NUM_THREADS"] shouldBe null
+                UtPlatform.LINUX -> executable.environment["LP_NUM_THREADS"] shouldBe "0"
+            }
+        }
+
+        test("process lowers the render quality of the OpenGL render device and keeps the viewport values and the actor detail") {
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
+            val gameIni = UtIni("")
+
+            capture(AudioCaptureConfig(ConfigReader.EMPTY, fps = 30))
+                .process(description, emptyMap(), listOf(systemDirectory / "uthooks.dll"))
+                .gameIniEdits
+                .forEach { gameIni.it() }
+
+            val section = "OpenGLDrv.OpenGLRenderDevice"
+            gameIni[section, "UseAA"] shouldBe listOf("False")
+            gameIni[section, "DetailTextures"] shouldBe listOf("False")
+            gameIni[section, "UseHDTextures"] shouldBe listOf("False")
+            gameIni[section, "UseTrilinear"] shouldBe listOf("False")
+            gameIni[section, "FrameRateLimit"] shouldBe listOf("30.000000")
+            gameIni["Engine.Engine", "GameRenderDevice"] shouldBe listOf(section)
+            gameIni[section, "HighDetailActors"] shouldBe emptyList()
+            gameIni[section, "SelectedContextType"] shouldBe emptyList()
+            gameIni[section, "ContextType"] shouldBe emptyList()
+            gameIni[section, "MaxAnisotropy"] shouldBe emptyList()
         }
 
         test("process loads the hook library through the injector on Windows, and preloads it under nice on Linux") {

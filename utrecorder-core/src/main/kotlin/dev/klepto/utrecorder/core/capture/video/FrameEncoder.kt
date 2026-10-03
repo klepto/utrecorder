@@ -1,5 +1,7 @@
 package dev.klepto.utrecorder.core.capture.video
 
+import dev.klepto.utrecorder.common.OperatingSystem
+import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.MediaProgress
@@ -54,6 +56,9 @@ private val log = logger<FrameEncoder>()
  * @property target The file the capture encodes into, already in the final codec.
  * @property ffmpeg The ffmpeg the capture process is started from.
  * @property onProgress Receives the progress ffmpeg reports while it encodes. It is called from any thread.
+ * @property operatingSystem The operating system the frame socket is configured for.
+ * @property processors The processors ffmpeg may spread its encoder and filter threads over. Defaults to the processors
+ * the JVM sees, which on Linux follows the CPU quota of a container.
  */
 class FrameEncoder(
     private val config: VideoCaptureConfig,
@@ -61,16 +66,19 @@ class FrameEncoder(
     val target: Path,
     private val ffmpeg: MediaTool = FfmpegMediaTool(),
     private val onProgress: (MediaProgress) -> Unit = {},
+    private val operatingSystem: OperatingSystem = OperatingSystem.current(),
+    private val processors: Int = Runtime.getRuntime().availableProcessors(),
 ) {
     /**
      * Returns a non-blocking loopback listener for the hook library, bound to [VideoCaptureConfig.port], or to a free
-     * port if it is `0`. Use [encode] instead of calling this function directly.
+     * port if it is `0`. On Windows, its receive buffer holds one frame. On Linux, its receive buffer is left at the
+     * system default. Use [encode] instead of calling this function directly.
      */
     suspend fun listen(): ServerSocketChannel =
         withContext(Dispatchers.IO) {
             ServerSocketChannel
                 .open()
-                .setOption(StandardSocketOptions.SO_RCVBUF, frameSize())
+                .apply { if (operatingSystem == WINDOWS) setOption(StandardSocketOptions.SO_RCVBUF, frameSize()) }
                 .bind(InetSocketAddress(STREAM_HOST, config.port))
                 .apply { configureBlocking(false) }
         }
@@ -181,6 +189,7 @@ class FrameEncoder(
             this += option(bitrateFlag(), config.bitrate)
             this += option("-svtav1-params", config.svtav1Params)
             this += listOf("-g", config.gop.toString())
+            this += listOf("-threads", processors.toString(), "-filter_threads", processors.toString())
             this += recordArguments()
             this += listOf("-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv")
             this += listOf("-pix_fmt", config.pixelFormat)
