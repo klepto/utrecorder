@@ -62,7 +62,7 @@ import kotlin.time.Instant
  * - `GET /thumb/{capId}`: the thumbnail of a recording `/mp4/{capId}` would serve, if it is in
  *   [ServerConfig.thumbnails]. Every other request answers `404`.
  * - `GET /view/{capId}`: an HTML page that plays `/mp4/{capId}` and carries OpenGraph video tags for link previews: the
- *   title of the cap, the video size of [ServerConfig.recorder], `/thumb/{capId}` as its image, and absolute URLs
+ *   title of the cap as its site name and no title of its own, the video size of [ServerConfig.recorder], `/thumb/{capId}` as its image, and absolute URLs
  *   built from the origin of the request. The origin honours the `X-Forwarded-*` headers only if
  *   [ServerConfig.trustForwardedHeaders] is enabled. Answers `404` wherever `/mp4/{capId}` answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
@@ -220,7 +220,7 @@ class HttpService(
         mp4Url: String,
         thumbnailUrl: String,
     ): String {
-        val title = "${demo.map} - ${demo.formatCapTime()} by ${demo.player}".escapeHtml()
+        val title = demo.title().escapeHtml()
         val mp4 = mp4Url.escapeHtml()
         return """
             <!doctype html>
@@ -228,10 +228,8 @@ class HttpService(
               <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                <title>$title</title>
-                <meta property="og:site_name" content="utrecorder" />
+                <meta property="og:site_name" content="$title" />
                 <meta property="og:type" content="video.other" />
-                <meta property="og:title" content="$title" />
                 <meta property="og:url" content="${pageUrl.escapeHtml()}" />
                 <meta property="og:video" content="$mp4" />
                 <meta property="og:video:type" content="video/mp4" />
@@ -352,6 +350,11 @@ class HttpService(
                 "/web/assets/" in path -> "public, max-age=31536000, immutable"
                 else -> "no-cache"
             }
+
+        /**
+         * Returns the title of this cap, `<map> - <capTime> by <player>`.
+         */
+        fun Demo.title(): String = "$map - ${formatCapTime()} by $player"
 
         /**
          * Returns this text with the characters that HTML gives a meaning escaped, so it reads as text in an element

@@ -7,6 +7,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.capture.withProgressTimeout
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
@@ -28,6 +29,11 @@ import java.util.Locale
 import kotlin.time.DurationUnit
 
 /**
+ * The logger of the video capture.
+ */
+private val log = logger<FfmpegVideoCapture>()
+
+/**
  * The video capture of a recording: Unreal Tournament run with the hook library loaded, its clock stepped one frame at
  * a time, sending every rendered frame to a [FrameEncoder] on the loopback.
  *
@@ -35,7 +41,8 @@ import kotlin.time.DurationUnit
  * demo windowed and without sound. The run is killed once ffmpeg has encoded no new frame for
  * [VideoCaptureConfig.idleTimeout], however long the whole run takes. The frames are encoded into a video file in a
  * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number
- * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
+ * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. Every line the hook library prints is logged at
+ * INFO. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
  * that it stopped the frame capture fails with an [IllegalStateException] naming the reason it gave.
  *
  * @property config The video capture configuration, carrying the frame size, the fps, the idle timeout and the renderer
@@ -131,14 +138,17 @@ class FfmpegVideoCapture(
     fun stopReason(line: String): String? = HOOK_STOP.matchEntire(line.trim())?.groupValues?.get(1)
 
     /**
-     * Records in [stop] the reason of the last line of the output of [run] that reports a frame capture stop, until the
-     * output ends.
+     * Logs every line the hook library prints in the output of [run], and records in [stop] the reason of the last line
+     * that reports a frame capture stop, until the output ends.
      */
     private suspend fun watchStop(
         run: UtProcess,
         stop: MutableStateFlow<String?>,
     ) {
-        run.drain().collect { line -> stopReason(line)?.let { stop.value = it } }
+        run.drain().collect { line ->
+            DemoPlaybackHooks.message(line)?.let { message -> log.info { message } }
+            stopReason(line)?.let { stop.value = it }
+        }
     }
 
     /**
@@ -187,10 +197,12 @@ class FfmpegVideoCapture(
         }
 
     /**
-     * Returns the Linux part of the environment: the llvmpipe tuning of a software-rendered capture.
+     * Returns the Linux part of the environment: `SWRAST_NO_PRESENT`, which stops llvmpipe from presenting frames to
+     * Xvfb, and the llvmpipe tuning of a software-rendered capture.
      */
     private fun linuxEnvironment(): Map<String, String> =
         buildMap {
+            this["SWRAST_NO_PRESENT"] = "1"
             this["LP_NUM_THREADS"] = threads().toString()
             if (config.linuxMesa.glthread) this["mesa_glthread"] = "true"
             if (config.linuxMesa.noError) this["MESA_NO_ERROR"] = "1"

@@ -24,6 +24,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import io.ktor.client.request.get
 import io.ktor.client.request.head
 import io.ktor.client.request.header
@@ -299,8 +300,9 @@ class HttpServiceTest :
 
                 response.status shouldBe HttpStatusCode.OK
                 response.contentType()?.withoutParameters() shouldBe ContentType.Text.Html
-                body shouldContain "<title>CTF-BT-Maverick - 10.000 by klepto</title>"
-                body shouldContain "<meta property=\"og:title\" content=\"CTF-BT-Maverick - 10.000 by klepto\" />"
+                body shouldContain "<meta property=\"og:site_name\" content=\"CTF-BT-Maverick - 10.000 by klepto\" />"
+                body shouldNotContain "<title>"
+                body shouldNotContain "og:title"
                 body shouldContain "<meta property=\"og:url\" content=\"https://recorder.example.com/view/local\" />"
                 body shouldContain "<meta property=\"og:video\" content=\"https://recorder.example.com/mp4/local\" />"
                 body shouldContain "<meta property=\"og:video:type\" content=\"video/mp4\" />"

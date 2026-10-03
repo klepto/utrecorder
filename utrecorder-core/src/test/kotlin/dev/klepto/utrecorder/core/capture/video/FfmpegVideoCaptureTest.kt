@@ -5,6 +5,7 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.Executable
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
+import dev.klepto.utrecorder.core.demo.DemoPlaybackRenderDevice
 import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtInstallation
@@ -82,6 +83,17 @@ class FfmpegVideoCaptureTest :
             when (UtPlatform.current()) {
                 UtPlatform.WINDOWS -> environment shouldBe expected
                 UtPlatform.LINUX -> environment.filterKeys { it in expected } shouldBe expected
+            }
+        }
+
+        test("environment stops llvmpipe from presenting frames on Linux only, whichever render device is selected") {
+            val xopengl = VideoCaptureConfig(ConfigReader.EMPTY, renderDevice = DemoPlaybackRenderDevice.XOPENGL)
+
+            val presents = listOf(capture(), capture(xopengl)).map { it.environment(100)["SWRAST_NO_PRESENT"] }
+
+            when (UtPlatform.current()) {
+                UtPlatform.WINDOWS -> presents shouldBe listOf(null, null)
+                UtPlatform.LINUX -> presents shouldBe listOf("1", "1")
             }
         }
 
@@ -190,6 +202,20 @@ class FfmpegVideoCaptureTest :
 
         test("stopReason returns null for a line that reports no stop") {
             capture().stopReason("uthooks: demo ended after 120 frames, kept 118") shouldBe null
+        }
+
+        test("stopReason returns null for the timing line") {
+            val line =
+                "uthooks: timing over 120 frames in ms, present mean 16.67 max 20.10, read mean 0.52 max 1.30, " +
+                    "send mean 3.25 max 8.00, swap mean 0.40 max 0.90"
+
+            capture().stopReason(line) shouldBe null
+        }
+
+        test("stopReason returns null for the context restore line") {
+            val line = "uthooks: made the GL context current again after a window was destroyed"
+
+            capture().stopReason(line) shouldBe null
         }
 
         test("execScript seeks to the run start, trims the demo to the configured fps, hides messages and smooths the recorder") {

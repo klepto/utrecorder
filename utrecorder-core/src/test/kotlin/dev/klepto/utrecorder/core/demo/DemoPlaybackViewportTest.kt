@@ -54,7 +54,24 @@ class DemoPlaybackViewportTest :
                 mapOf(
                     "WinDrv.WindowsClient" to clientValues,
                     "SDLDrv.SDLClient" to clientValues,
+                    "Engine.Engine" to mapOf("GameRenderDevice" to "OpenGLDrv.OpenGLRenderDevice"),
                     "OpenGLDrv.OpenGLRenderDevice" to mapOf("FrameRateLimit" to "60.000000"),
+                )
+        }
+
+        test("gameIniValues selects the XOpenGL render device and sets the limit in its section") {
+            val viewport =
+                DemoPlaybackViewport(
+                    width = 64,
+                    height = 48,
+                    frameRateLimit = 0.0,
+                    renderDevice = DemoPlaybackRenderDevice.XOPENGL,
+                )
+
+            viewport.gameIniValues().filterKeys { it.contains("RenderDevice") || it == "Engine.Engine" } shouldBe
+                mapOf(
+                    "Engine.Engine" to mapOf("GameRenderDevice" to "XOpenGLDrv.XOpenGLRenderDevice"),
+                    "XOpenGLDrv.XOpenGLRenderDevice" to mapOf("FrameRateLimit" to "0.000000"),
                 )
         }
     })

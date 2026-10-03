@@ -11,11 +11,13 @@ import java.util.Locale
  * @property width The viewport width the playback renders at.
  * @property height The viewport height the playback renders at.
  * @property frameRateLimit The `FrameRateLimit` the playback holds, `0.0` for no limit.
+ * @property renderDevice The render device the playback renders with.
  */
 data class DemoPlaybackViewport(
     val width: Int,
     val height: Int,
     val frameRateLimit: Double,
+    val renderDevice: DemoPlaybackRenderDevice = DemoPlaybackRenderDevice.OPENGL,
 ) {
     /**
      * Returns the values the playback sets in each of its client sections.
@@ -30,24 +32,26 @@ data class DemoPlaybackViewport(
         )
 
     /**
-     * Returns the values the playback sets in the [RENDER_DEVICE] section.
+     * Returns the values the playback sets in the section of its [renderDevice].
      */
     fun renderDeviceValues(): Map<String, String> = mapOf("FrameRateLimit" to rate(frameRateLimit))
 
     /**
      * Returns the game ini values of the playback by section: [clientValues] in the client section of every platform,
-     * and [renderDeviceValues] in the [RENDER_DEVICE] section.
+     * [renderDevice] as the `GameRenderDevice` of [ENGINE], and [renderDeviceValues] in the section of [renderDevice].
      */
     fun gameIniValues(): Map<String, Map<String, String>> {
         val clients = UtPlatform.entries.associate { it.client to clientValues() }
-        return clients + (RENDER_DEVICE to renderDeviceValues())
+        return clients +
+            (ENGINE to mapOf("GameRenderDevice" to renderDevice.section)) +
+            (renderDevice.section to renderDeviceValues())
     }
 
     companion object {
         /**
-         * The section of the OpenGL render device.
+         * The section that names the render device of the game.
          */
-        const val RENDER_DEVICE = "OpenGLDrv.OpenGLRenderDevice"
+        const val ENGINE = "Engine.Engine"
 
         /**
          * Returns the frame rate [value] written the way the game's ini holds one.

@@ -1,12 +1,14 @@
 package dev.klepto.utrecorder.core.capture.audio
 
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
+import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.core.capture.withProgressTimeout
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
@@ -37,6 +39,11 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
 
 /**
+ * The logger of the audio capture.
+ */
+private val log = logger<OpenalAudioCapture>()
+
+/**
  * The audio capture of a recording: Unreal Tournament run with sound on and the hook library loaded, writing a wav
  * through the OpenAL wave output, its clock stepped one mixer period of the wav at a time.
  *
@@ -44,7 +51,8 @@ import kotlin.time.DurationUnit
  * workspace of its own, and plays the demo windowed and with sound. The run is killed once its wav has not grown for
  * [AudioCaptureConfig.idleTimeout], however long the whole run takes. The wav is placed by the marks the run logged and
  * moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in the wav out of
- * [DemoPlaybackConfig.runDuration], read once a second while the run plays. A run that produces no wav, no marks, or marks outside its wav fails with an
+ * [DemoPlaybackConfig.runDuration], read once a second while the run plays. Every line the hook library prints is logged
+ * at INFO. A run that produces no wav, no marks, or marks outside its wav fails with an
  * [IllegalStateException].
  *
  * @property config The audio capture configuration, carrying the sound viewport, its frame rate limit and the idle
@@ -76,12 +84,20 @@ class OpenalAudioCapture(
                 val result =
                     coroutineScope {
                         val progress = launch { reportProgress(wav, description, written, onProgress) }
+                        launch { logHookMessages(run) }
                         withProgressTimeout(written, config.idleTimeout) { run.launch() }.also { progress.cancel() }
                     }
                 val track = track(wav, result.log, ffmpeg.duration(wav))
                 track.copy(file = wav.move(output[WAVE_NAME]))
             }
         }
+
+    /**
+     * Logs every line the hook library prints in the output of [run], until the output ends.
+     */
+    private suspend fun logHookMessages(run: UtProcess) {
+        run.drain().collect { line -> DemoPlaybackHooks.message(line)?.let { message -> log.info { message } } }
+    }
 
     /**
      * Reads the size of [wav] once a second until cancelled. Publishes the size to [written], and reports the seconds
@@ -130,8 +146,14 @@ class OpenalAudioCapture(
         )
 
     /**
+     * Returns the environment the run adds on Linux: `SWRAST_NO_PRESENT`, which stops llvmpipe from presenting frames to
+     * Xvfb.
+     */
+    fun linuxEnvironment(): Map<String, String> = mapOf("SWRAST_NO_PRESENT" to "1")
+
+    /**
      * Returns the unstarted run that plays [description] under [openAlEnvironment] with the hook library of [hooks]
-     * loaded: with sound, and playing the exec script.
+     * loaded: with sound, and playing the exec script. On Linux the run also gets [linuxEnvironment].
      */
     fun process(
         description: DemoPlaybackConfig,
@@ -144,6 +166,7 @@ class OpenalAudioCapture(
             sound = true
             environment += openAlEnvironment
             environment += this@OpenalAudioCapture.environment()
+            if (installation.platform.operatingSystem != WINDOWS) environment += this@OpenalAudioCapture.linuxEnvironment()
         }
 
     /**

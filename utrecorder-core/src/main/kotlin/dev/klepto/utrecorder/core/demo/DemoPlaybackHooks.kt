@@ -12,8 +12,8 @@ import kotlin.io.path.name
 /**
  * The `uthooks` hook library and, on Windows, the `utinject` injector, which a demo playback loads into the game.
  *
- * Use [extract] to write them into the `System` directory of an installation, and [inject] to make a run load the hook
- * library.
+ * Use [extract] to write them into the `System` directory of an installation, [inject] to make a run load the hook
+ * library, and [message] to pick the lines the hook library prints out of the game output.
  */
 object DemoPlaybackHooks {
     /**
@@ -25,6 +25,11 @@ object DemoPlaybackHooks {
      * The file name of the injector.
      */
     private const val INJECTOR = "utinject.exe"
+
+    /**
+     * The prefix of every line the hook library prints.
+     */
+    private const val MESSAGE_PREFIX = "uthooks:"
 
     /**
      * The native artifacts the hooks module embeds in its jar.
@@ -53,6 +58,12 @@ object DemoPlaybackHooks {
             else -> builder.environment["LD_PRELOAD"] = library.absolutePathString()
         }
     }
+
+    /**
+     * Returns [line], one line of the game output, trimmed, when the hook library printed it. If another part of the
+     * game printed [line], returns `null` instead.
+     */
+    fun message(line: String): String? = line.trim().takeIf { it.startsWith(MESSAGE_PREFIX) }
 
     /**
      * Makes the run start through [injector], which loads [library] into the game executable copy.

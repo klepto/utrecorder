@@ -131,6 +131,64 @@ static int stream = -1;
 #define sendInterrupted() (errno == EINTR)
 #endif
 
+/* Returns the seconds of a monotonic real clock. */
+static double readRealSeconds(void) {
+#ifdef _WIN32
+    LARGE_INTEGER count;
+    LARGE_INTEGER frequency;
+    QueryPerformanceCounter(&count);
+    QueryPerformanceFrequency(&frequency);
+    return (double) count.QuadPart / (double) frequency.QuadPart;
+#else
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double) now.tv_sec + (double) now.tv_nsec / 1e9;
+#endif
+}
+
+/* The samples of one timed span of the presented frames, with their total and largest milliseconds. */
+typedef struct {
+    long long count;
+    double total;
+    double max;
+} Timing;
+
+/*
+ * The spans the timing line reports, sampled over the frames of the armed capture: the interval from one presented
+ * frame to the next, the glReadPixels call, the handoff of a frame to the frame socket, and the real swap.
+ */
+static Timing presentTiming;
+static Timing readTiming;
+static Timing sendTiming;
+static Timing swapTiming;
+
+/* The real seconds at which the previous frame of the armed capture was presented, or 0 before the first one. */
+static double presentedSeconds;
+
+/* Adds a sample of seconds to timing. */
+static void addTiming(Timing *timing, double seconds) {
+    double millis = seconds * 1000.0;
+    timing->count++;
+    timing->total += millis;
+    if (millis > timing->max) timing->max = millis;
+}
+
+/* Adds the real seconds since start to timing, and returns the real seconds it read. */
+static double addTimingSince(Timing *timing, double start) {
+    double now = readRealSeconds();
+    addTiming(timing, now - start);
+    return now;
+}
+
+/* Writes the mean and the largest sample of timing into figures with two decimals, or both as 0 without samples. */
+static void formatTiming(const Timing *timing, char *figures, size_t size) {
+    if (!timing->count) {
+        snprintf(figures, size, "mean 0 max 0");
+    } else {
+        snprintf(figures, size, "mean %.2f max %.2f", timing->total / (double) timing->count, timing->max);
+    }
+}
+
 /* Returns the environment variable name as a number from 1 to maximum, or 0 when it is unset or out of that range. */
 static int environmentNumber(const char *name, int maximum) {
     const char *value = getenv(name);
@@ -275,11 +333,15 @@ static void rejectFrameSize(int width, int height) {
                 getenv("UTRECORDER_HEIGHT"));
 }
 
-/* Reads the current viewport into pixels, sends the pending frame, then makes the frame just read the pending one. */
+/*
+ * Reads the current viewport into pixels, sends the pending frame, then makes the frame just read the pending one.
+ * Times the read and the send.
+ */
 static void captureFrame(void) {
     int viewport[4];
     size_t size;
     unsigned char *sent;
+    double start;
     readViewport(GL_VIEWPORT, viewport);
     if (viewport[2] <= 0 || viewport[3] <= 0) return;
     if (viewport[2] != pixelWidth || viewport[3] != pixelHeight) {
@@ -291,8 +353,11 @@ static void captureFrame(void) {
     }
     if (captureDisabled) return;
     size = (size_t) pixelWidth * pixelHeight * 4;
+    start = readRealSeconds();
     readPixels(0, 0, pixelWidth, pixelHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+    start = addTimingSince(&readTiming, start);
     sendPending();
+    addTimingSince(&sendTiming, start);
     if (captureDisabled) return;
     sent = pending;
     pending = pixels;
@@ -398,21 +463,6 @@ static long long clockSteps(void) {
 static long long clockStepSize(void) {
     if (audioRate) return audioPeriod;
     return clockArmed ? CLOCK_PREROLL_STEPS : 1;
-}
-
-/* Returns the seconds of a monotonic real clock. */
-static double readRealSeconds(void) {
-#ifdef _WIN32
-    LARGE_INTEGER count;
-    LARGE_INTEGER frequency;
-    QueryPerformanceCounter(&count);
-    QueryPerformanceFrequency(&frequency);
-    return (double) count.QuadPart / (double) frequency.QuadPart;
-#else
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (double) now.tv_sec + (double) now.tv_nsec / 1e9;
-#endif
 }
 
 /* Returns the real seconds since the clocks follow the real clock again, or 0 while they step. */
@@ -1166,6 +1216,20 @@ static int demoPlaying(void) {
     return demoFlag && *demoFlag;
 }
 
+/* Prints the timing line: the mean and the largest sample of each span over the frames of the armed capture. */
+static void reportTiming(void) {
+    char presentFigures[64];
+    char readFigures[64];
+    char sendFigures[64];
+    char swapFigures[64];
+    formatTiming(&presentTiming, presentFigures, sizeof presentFigures);
+    formatTiming(&readTiming, readFigures, sizeof readFigures);
+    formatTiming(&sendTiming, sendFigures, sizeof sendFigures);
+    formatTiming(&swapTiming, swapFigures, sizeof swapFigures);
+    fprintf(stderr, "uthooks: timing over %lld frames in ms, present %s, read %s, send %s, swap %s\n", demoFrames,
+            presentFigures, readFigures, sendFigures, swapFigures);
+}
+
 /*
  * Ends the capture: releases the cycle sites to the real counter when they have not released themselves already,
  * releases the engine clocks and the mixer to the real clock, drops the pending frame, closes stream and reports the
@@ -1184,6 +1248,7 @@ static void finishCapture(void) {
     captureDisabled = 1;
     fprintf(stderr, "uthooks: demo ended after %lld frames, kept %lld\n", demoFrames,
             demoFrames > 2 ? demoFrames - 2 : 0);
+    reportTiming();
     fflush(stderr);
 }
 
@@ -1334,12 +1399,30 @@ static int clockDue(void) {
     return !audioRate || captureArmed;
 }
 
-/* Runs before every presented frame: installs the clock when due, tracks the demo and captures the frame. */
+/* Returns whether the presented frame belongs to the armed capture, whose spans the timing line reports. */
+static int captureTimed(void) {
+    return captureArmed && !clockFinished;
+}
+
+/* Samples the interval since the previous frame of the armed capture was presented. */
+static void timePresent(void) {
+    double now = readRealSeconds();
+    if (presentedSeconds > 0.0) addTiming(&presentTiming, now - presentedSeconds);
+    presentedSeconds = now;
+}
+
+/*
+ * Runs before every presented frame: installs the clock when due, tracks the demo, and times and captures the frame of
+ * the armed capture.
+ */
 static void presentFrame(void) {
     if (!clockInstalled && clockDue()) installClock();
     presentCount++;
     trackDemo();
-    if (captureArmed && !clockFinished) captureDemoFrame();
+    if (captureTimed()) {
+        timePresent();
+        captureDemoFrame();
+    }
     advanceClock();
 }
 
@@ -1399,10 +1482,17 @@ static void patchImport(HMODULE module, const char *library, const char *symbol,
     }
 }
 
-/* The SwapBuffers hook. */
+/* The SwapBuffers hook. Times the real swap of a frame of the armed capture. */
 static BOOL WINAPI hookSwapBuffers(HDC context) {
+    BOOL swapped;
+    int timed;
+    double start;
     presentFrame();
-    return realSwapBuffers(context);
+    timed = captureTimed();
+    start = timed ? readRealSeconds() : 0.0;
+    swapped = realSwapBuffers(context);
+    if (timed) addTimingSince(&swapTiming, start);
+    return swapped;
 }
 
 /* The QueryPerformanceCounter hook of OpenAL32.dll. Replaces the reading with the mixer clock in audio mode. */
@@ -1534,6 +1624,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
 
 typedef void (*SwapWindowFunction)(void *);
 typedef void *(*DlopenFunction)(const char *, int);
+typedef void (*DestroyWindowFunction)(void *);
+typedef void *(*CurrentFunction)(void);
+typedef int (*MakeCurrentFunction)(void *, void *);
 
 /* The functions the hooks call on. */
 static SwapWindowFunction realSwapWindow;
@@ -1557,11 +1650,48 @@ void *dlopen(const char *path, int flags) {
     return handle;
 }
 
-/* The SDL_GL_SwapWindow interposer. */
+/*
+ * The SDL_DestroyWindow interposer. Destroys window, then makes the GL context current again that was current on
+ * another window before, when destroying window released it. The game binary destroys its splash window after the
+ * render device created its context, and the splash renderer's own context leaves no context current when it goes.
+ */
+void SDL_DestroyWindow(void *window) {
+    static DestroyWindowFunction realDestroyWindow;
+    static CurrentFunction realCurrentWindow;
+    static CurrentFunction realCurrentContext;
+    static MakeCurrentFunction realMakeCurrent;
+    void *currentWindow = 0;
+    void *currentContext = 0;
+    if (!realDestroyWindow) {
+        realDestroyWindow = (DestroyWindowFunction) dlsym(RTLD_NEXT, "SDL_DestroyWindow");
+        realCurrentWindow = (CurrentFunction) dlsym(RTLD_NEXT, "SDL_GL_GetCurrentWindow");
+        realCurrentContext = (CurrentFunction) dlsym(RTLD_NEXT, "SDL_GL_GetCurrentContext");
+        realMakeCurrent = (MakeCurrentFunction) dlsym(RTLD_NEXT, "SDL_GL_MakeCurrent");
+    }
+    if (!realDestroyWindow) return;
+    if (realCurrentWindow && realCurrentContext && realMakeCurrent) {
+        currentWindow = realCurrentWindow();
+        currentContext = realCurrentContext();
+    }
+    realDestroyWindow(window);
+    if (!currentContext || currentWindow == window || realCurrentContext() == currentContext) return;
+    if (realMakeCurrent(currentWindow, currentContext) == 0) {
+        fprintf(stderr, "uthooks: made the GL context current again after a window was destroyed\n");
+        fflush(stderr);
+    }
+}
+
+/* The SDL_GL_SwapWindow interposer. Times the real swap of a frame of the armed capture. */
 void SDL_GL_SwapWindow(void *window) {
+    int timed;
+    double start;
     if (!realSwapWindow) realSwapWindow = (SwapWindowFunction) dlsym(RTLD_NEXT, "SDL_GL_SwapWindow");
     presentFrame();
-    if (realSwapWindow) realSwapWindow(window);
+    if (!realSwapWindow) return;
+    timed = captureTimed();
+    start = timed ? readRealSeconds() : 0.0;
+    realSwapWindow(window);
+    if (timed) addTimingSince(&swapTiming, start);
 }
 
 typedef int (*NanosleepFunction)(const struct timespec *, struct timespec *);

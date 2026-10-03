@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.core.capture.video
 
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.SystemConfigReader
+import dev.klepto.utrecorder.core.demo.DemoPlaybackRenderDevice
 import dev.klepto.utrecorder.core.demo.DemoPlaybackViewport
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -38,6 +39,7 @@ import kotlin.time.Duration.Companion.seconds
  * into one at full weight, together with the rendered frame on either side of them at quarter weight. The blur softens
  * motion and helps the encode compress it.
  * @property motionBlurSamples The rendered frames of every encoded frame when [motionBlur] is on.
+ * @property renderDevice The render device the video capture renders with, `opengl` or `xopengl`.
  * @property linuxMesa The Mesa tuning of the video capture on Linux.
  */
 class VideoCaptureConfig(
@@ -64,12 +66,15 @@ class VideoCaptureConfig(
     val smoothRecorder: Boolean = reader.get("record.smooth_recorder", true, String::toBoolean),
     val motionBlur: Boolean = reader.get("record.motion_blur", true, String::toBoolean),
     val motionBlurSamples: Int = reader.get("record.motion_blur_samples", 2, String::toInt),
+    val renderDevice: DemoPlaybackRenderDevice =
+        reader.get("record.render_device", DemoPlaybackRenderDevice.OPENGL, DemoPlaybackRenderDevice::parse),
     val linuxMesa: LinuxMesaConfig = LinuxMesaConfig(reader),
 ) {
     /**
-     * Returns the viewport of the video capture: the configured resolution and no frame rate limit.
+     * Returns the viewport of the video capture: the configured resolution and render device, and no frame rate limit.
      */
-    fun viewport(): DemoPlaybackViewport = DemoPlaybackViewport(width = width, height = height, frameRateLimit = 0.0)
+    fun viewport(): DemoPlaybackViewport =
+        DemoPlaybackViewport(width = width, height = height, frameRateLimit = 0.0, renderDevice = renderDevice)
 
     /**
      * Returns the rendered frames per demo second the video capture is locked to: [fps] times [motionBlurSamples] when

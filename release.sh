@@ -9,7 +9,8 @@
 # commits nothing: release.yml passes its version to the build. Either way, tags the head of development v<version>,
 # pushes development and the tag, and starts .github/workflows/release.yml on the tag through the GitHub CLI, which
 # builds and publishes ghcr.io/klepto/utrecorder-server:<version>. A version is never reused, so a failed release is
-# fixed with a new one.
+# fixed with a new one. When the tag is already pushed to the head of development, as after a dispatch that failed,
+# only starts the workflow.
 set -eu
 
 cd "$(dirname "$0")"
@@ -43,26 +44,39 @@ tag="v$version"
 printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' ||
     fail "version $version is not <major>.<minor>.<patch>[-<pre-release>]"
 
-if git rev-parse --quiet --verify "refs/tags/$tag" >/dev/null; then
-    fail "tag $tag already exists locally"
-fi
+local_tag=$(git rev-parse --quiet --verify "refs/tags/$tag" 2>/dev/null) || local_tag=
 status=0
-git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || status=$?
+remote_tag=$(git ls-remote --exit-code --tags origin "refs/tags/$tag") || status=$?
 case "$status" in
-    0) fail "tag $tag already exists on origin" ;;
-    2) ;;
+    0) remote_tag=${remote_tag%%[[:space:]]*} ;;
+    2) remote_tag= ;;
     *) fail "could not list the tags on origin (git ls-remote exited with $status)" ;;
 esac
 
-if [ "$commit" != "$current" ]; then
-    sed -i "s/^version=.*/version=$commit/" gradle.properties
-    git commit --quiet --message "chore: set version to $commit" gradle.properties
+if [ -n "$local_tag" ] || [ -n "$remote_tag" ]; then
+    # A previous run pushed the tag but did not start the workflow: resume it, but only when both tags are the same
+    # tag of the head of development.
+    [ "$local_tag" = "$remote_tag" ] &&
+        [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse HEAD)" ] &&
+        [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/development)" ] ||
+        fail "tag $tag already exists and is not the pushed tag of the head of development"
+    echo "Tag $tag is already pushed; starting the workflow only."
+else
+    if [ "$commit" != "$current" ]; then
+        sed -i "s/^version=.*/version=$commit/" gradle.properties
+        git commit --quiet --message "chore: set version to $commit" gradle.properties
+    fi
+
+    git tag --annotate --message "$tag" "$tag"
+    git push --atomic origin development "refs/tags/$tag"
 fi
 
-git tag --annotate --message "$tag" "$tag"
-git push --atomic origin development "refs/tags/$tag"
-
-gh workflow run release.yml --ref "$tag" --field "version=$version" ||
-    fail "pushed $tag, but could not start the workflow; run: gh workflow run release.yml --ref $tag --field version=$version"
+# GitHub can reject a dispatch on a tag pushed moments ago, before it resolves the ref.
+attempt=1
+until gh workflow run release.yml --ref "$tag" --field "version=$version"; do
+    [ "$attempt" -lt 5 ] || fail "pushed $tag, but could not start the workflow; run ./release.sh again to retry"
+    attempt=$((attempt + 1))
+    sleep 5
+done
 
 echo "Started release.yml for $version; it publishes ghcr.io/klepto/utrecorder-server:$version. Follow it with: gh run watch"

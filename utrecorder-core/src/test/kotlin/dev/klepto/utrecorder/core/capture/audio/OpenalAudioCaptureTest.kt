@@ -106,6 +106,21 @@ class OpenalAudioCaptureTest :
             capture().environment() shouldBe mapOf("UTRECORDER_AUDIO_RATE" to "44100", "UTRECORDER_AUDIO_PERIOD" to "512")
         }
 
+        test("process stops llvmpipe from presenting frames on Linux only") {
+            val hookLibrary = systemDirectory / "uthooks.dll"
+            val executable =
+                workspace("audio-capture", installation.systemDirectory, directories) { workspace ->
+                    val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
+                    val process = capture().process(description, emptyMap(), listOf(hookLibrary))
+                    process.executable(process.files(workspace))
+                }
+
+            when (UtPlatform.current()) {
+                UtPlatform.WINDOWS -> executable.environment["SWRAST_NO_PRESENT"] shouldBe null
+                UtPlatform.LINUX -> executable.environment["SWRAST_NO_PRESENT"] shouldBe "1"
+            }
+        }
+
         test("process loads the hook library through the injector on Windows, and preloads it under nice on Linux") {
             val hookLibrary = systemDirectory / "uthooks.dll"
             val injector = systemDirectory / "utinject.exe"
