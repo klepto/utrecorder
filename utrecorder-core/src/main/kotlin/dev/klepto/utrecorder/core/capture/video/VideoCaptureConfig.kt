@@ -35,8 +35,8 @@ import kotlin.time.DurationUnit.SECONDS
  * @property arguments Extra arguments appended to the capture command line, split on spaces.
  * @property smoothRecorder Whether the capture smooths the movement and view of the player who recorded the demo.
  * @property motionBlur Whether the capture renders [motionBlurSamples] frames for every encoded frame and blends them
- * into one at full weight, together with the rendered frame on either side of them at quarter weight. The blur softens
- * motion and helps the encode compress it.
+ * into one. The `motionBlurSamples - 1` frames of its own time slice are at full weight, and the frame on either edge is
+ * at quarter weight, shared with the neighboring encoded frame. The blur softens motion and helps the encode compress it.
  * @property motionBlurSamples The rendered frames of every encoded frame when [motionBlur] is on.
  * @property renderDevice The render device the video capture renders with, `opengl` or `xopengl`.
  * @property linuxMesa The Mesa tuning of the video capture on Linux.

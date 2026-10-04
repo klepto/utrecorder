@@ -77,8 +77,9 @@ FROM eclipse-temurin:25-jre AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# The recorder launches Unreal Tournament's Linux port to capture footage; both it and the bundled ffmpeg are 32-bit
-# except ffmpeg's own binary, which is 64-bit and links libxcb, libasound and libpulse without shipping them.
+# The recorder launches Unreal Tournament's Linux port to capture footage, which is 32-bit and needs the i386 runtime.
+# The bundled ffmpeg is 64-bit and links libxcb, libasound and libpulse without shipping them, so those are installed
+# for the native architecture too.
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \

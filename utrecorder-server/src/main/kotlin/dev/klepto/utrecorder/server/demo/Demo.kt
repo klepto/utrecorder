@@ -31,7 +31,12 @@ data class Demo(
      * Returns the cap as `<capId>: <map> - <capTime> by <player>`, with the cap time as `mm:ss.SSS`. If the cap time is
      * under a minute, the cap time is `ss.SSS` instead.
      */
-    override fun toString(): String = "$capId: $map - ${formatCapTime()} by $player"
+    override fun toString(): String = "$capId: ${title()}"
+
+    /**
+     * Returns the title of the cap, `<map> - <capTime> by <player>`, with the cap time as [formatCapTime] returns it.
+     */
+    fun title(): String = "$map - ${formatCapTime()} by $player"
 
     /**
      * Returns [capTime] as `mm:ss.SSS`. If [capTime] is under a minute, returns `ss.SSS` instead.

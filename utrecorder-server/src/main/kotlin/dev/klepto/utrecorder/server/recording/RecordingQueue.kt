@@ -48,7 +48,7 @@ import kotlin.time.Instant
  *
  * @property demos The demos to choose from.
  * @property recordings The recordings of the chosen demos.
- * @property config The retry interval, the recent age and the backlog buffer.
+ * @property config The retry interval, the recent age, the backlog buffer and the archive delay.
  * @property clock The source of now, which the age of a demo is measured against.
  */
 class RecordingQueue(
@@ -72,8 +72,9 @@ class RecordingQueue(
     /**
      * Returns the head of the queue. Suspends until [start] has built the queue once. Suspends while the queue is empty,
      * or while the head is a backlog recording and at least [ServerConfig.recordingBacklogBuffer] recordings are
-     * [RecordingStatus.Recording] or [Recorded], until [RecordingRepository.statusChanges] signals a change after which
-     * the head may be taken.
+     * [RecordingStatus.Recording], or [Recorded] at least [ServerConfig.archiveDelay] ago, until
+     * [RecordingRepository.statusChanges] signals a change after which the head may be taken. A [Recorded] recording
+     * without [Recording.recordedAt] counts as recorded long enough ago.
      */
     suspend fun first(): Recording {
         built.await()
@@ -98,7 +99,7 @@ class RecordingQueue(
      * Sets every [RecordingStatus.Recording], [Failed] or [Unresolvable] recording of [recordings] to [Pending].
      */
     private suspend fun requeue() {
-        recordings.updateAll { if (it.status in REQUEUED) it.copy(status = Pending) else it }
+        setStatus(Pending) { it.status in REQUEUED }
     }
 
     /**
@@ -115,24 +116,40 @@ class RecordingQueue(
      * Sets every [Failed] or [Unresolvable] recording of [recordings] to [Pending].
      */
     private suspend fun retry() {
-        recordings.updateAll { if (it.status in GIVEN_UP) it.copy(status = Pending) else it }
+        setStatus(Pending) { it.status in GIVEN_UP }
     }
 
     /**
      * Stores a recording of the fastest demo of each player on each map in [recordings]. Chooses those demos, and the
-     * fastest [COMPLETED] recording of each player on each map. Removes every recording that has not been recorded and
-     * whose demo is not chosen, and sets every [COMPLETED] recording whose demo is not chosen to [Outdated].
+     * fastest [completed][RecordingStatus.isCompleted] recording of each player on each map. Removes every recording that
+     * has not been recorded and whose demo is not chosen, and sets every [completed][RecordingStatus.isCompleted]
+     * recording whose demo is not chosen to [Outdated].
      */
     private suspend fun build(): Unit =
         building.withLock {
             val fastest = fastest(demos.all())
             recordings += fastest
-            val completed = recordings.all().filter { it.status in COMPLETED }
+            val completed = recordings.all().filter { it.status.isCompleted }
             val chosen = (fastest + fastest(completed.map { it.demo })).mapTo(HashSet()) { it.capId }
             val beaten = completed.map { it.demo.capId }.filterTo(HashSet()) { it !in chosen }
             recordings.retainUnrecorded { it in chosen }
-            recordings.updateAll { if (it.demo.capId in beaten && it.status in COMPLETED) it.copy(status = Outdated) else it }
+            setStatus(Outdated) { it.demo.capId in beaten && it.status.isCompleted }
         }
+
+    /**
+     * Sets every recording of [recordings] that [filter] accepts to [status], as one transaction.
+     */
+    private suspend fun setStatus(
+        status: RecordingStatus,
+        filter: (Recording) -> Boolean,
+    ) {
+        recordings.updateAll {
+            when {
+                filter(it) -> it.copy(status = status)
+                else -> it
+            }
+        }
+    }
 
     /**
      * Returns the head of the queue, if it may be taken. If the queue is empty, or its head is a backlog recording while
@@ -141,11 +158,25 @@ class RecordingQueue(
     private suspend fun head(): Recording? {
         val all = recordings.all()
         val now = clock.now()
-        val buffered = all.count { it.status == RecordingStatus.Recording || it.status == Recorded }
+        val buffered = all.count { isBuffered(it, now) }
         return sorted(all, now)
             .firstOrNull()
             ?.takeIf { isRecent(it.demo, now) || buffered < config.recordingBacklogBuffer }
     }
+
+    /**
+     * Returns `true` if [recording] fills the backlog buffer at [now]: it is [RecordingStatus.Recording], or [Recorded]
+     * at least [ServerConfig.archiveDelay] ago. A [Recorded] recording without [Recording.recordedAt] fills it as well.
+     */
+    private fun isBuffered(
+        recording: Recording,
+        now: Instant,
+    ): Boolean =
+        when (recording.status) {
+            RecordingStatus.Recording -> true
+            Recorded -> recording.recordedAt?.let { now - it >= config.archiveDelay } ?: true
+            else -> false
+        }
 
     /**
      * Returns the [Pending] recordings of [all] in queue order, with the age of each demo measured at [now].
@@ -179,8 +210,6 @@ class RecordingQueue(
         val GIVEN_UP = setOf(Failed, Unresolvable)
 
         val REQUEUED = GIVEN_UP + RecordingStatus.Recording
-
-        val COMPLETED = setOf(Recorded, Uploaded, Archived)
 
         val FASTEST_FIRST: Comparator<Demo> =
             compareBy<Demo> { it.capTime }

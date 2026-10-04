@@ -18,6 +18,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import dev.klepto.utrecorder.server.upload.MediaMetadata
 import dev.klepto.utrecorder.server.upload.MediaUploader
@@ -451,6 +452,22 @@ class HttpServiceTest :
             }
         }
 
+        test("answers the recording of a cap whatever its status, with its error, and a JSON 404 for an unknown cap") {
+            http(mapOf("failed" to Failed, "pending" to Pending)) { repository ->
+                repository.finish("failed", Failed, "Capture timed out")
+                val failed = Json.parseToJsonElement(client.get("/api/recording/failed").bodyAsText()).jsonObject
+                val pending = Json.parseToJsonElement(client.get("/api/recording/pending").bodyAsText()).jsonObject
+                val unknown = client.get("/api/recording/unknown")
+
+                failed["demo"]!!.jsonObject["capId"]!!.jsonPrimitive.content shouldBe "failed"
+                failed["status"]!!.jsonPrimitive.content shouldBe "Failed"
+                failed["error"]!!.jsonPrimitive.content shouldBe "Capture timed out"
+                pending["status"]!!.jsonPrimitive.content shouldBe "Pending"
+                unknown.status shouldBe HttpStatusCode.NotFound
+                unknown.contentType()?.withoutParameters() shouldBe ContentType.Application.Json
+            }
+        }
+
         test("lists the 10 most recently recorded completed recordings, newest first") {
             http(emptyMap()) { repository ->
                 repository += (1..12).map { demo("recording-$it", Instant.parse("2026-09-26T00:00:00Z") - it.hours) }
@@ -490,6 +507,31 @@ class HttpServiceTest :
         test("answers 400 for a limit or offset that is not a non-negative integer") {
             http(emptyMap()) {
                 listOf("limit=-1", "limit=abc", "offset=-1", "offset=1.5", "limit=").forEach { query ->
+                    client.get("/api/recordings?$query").status shouldBe HttpStatusCode.BadRequest
+                }
+            }
+        }
+
+        test("lists every recording of the statuses named in any case, an outdated one without its mp4 included") {
+            http(mapOf("failed" to Failed, "unresolvable" to Unresolvable, "recorded" to Recorded, "outdated" to Outdated)) {
+                capIds(client.get("/api/recordings?status=failed,UNRESOLVABLE").bodyAsText()) shouldBe
+                    listOf("unresolvable", "failed")
+                capIds(client.get("/api/recordings?status=Outdated").bodyAsText()) shouldBe listOf("outdated")
+            }
+        }
+
+        test("lists the recordings of a status without a default or maximum limit") {
+            http(emptyMap()) { repository ->
+                repository += (1..60).map { demo("pending-$it") }
+
+                capIds(client.get("/api/recordings?status=pending").bodyAsText()).size shouldBe 60
+                capIds(client.get("/api/recordings?status=pending&limit=55").bodyAsText()).size shouldBe 55
+            }
+        }
+
+        test("answers 400 for a status that names no recording status") {
+            http(emptyMap()) {
+                listOf("status=unknown", "status=failed,unknown", "status=failed,", "status=").forEach { query ->
                     client.get("/api/recordings?$query").status shouldBe HttpStatusCode.BadRequest
                 }
             }

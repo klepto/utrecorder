@@ -7,6 +7,7 @@ import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.Locale
 import kotlin.io.path.absolutePathString
+import kotlin.io.path.deleteIfExists
 import kotlin.time.DurationUnit.SECONDS
 
 /**
@@ -30,7 +31,7 @@ class FfmpegMuxer(
         target: Path,
         onProgress: ProgressListener<Unit>,
     ): Path {
-        withContext(Dispatchers.IO) { target.toFile().delete() }
+        withContext(Dispatchers.IO) { target.deleteIfExists() }
         val arguments = arguments(video, audio, offset, length, target)
         ffmpeg.run(*arguments.toTypedArray()) { onProgress(Progress(it.time.toDouble(SECONDS) / length)) }
         onProgress(Progress(1.0))

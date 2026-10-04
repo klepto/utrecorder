@@ -38,13 +38,15 @@ import kotlin.time.TimeSource
  *   [Archived], one at a time. One that is still not confirmed 24 hours after it was set to [Uploaded] is set to
  *   [Recorded] again, so it is uploaded again. Then, for every [Archived] recording, the file of each [Outdated]
  *   recording of the same item is deleted, and the [Recording.itemId] of that recording is cleared.
- * - The newest [Recorded] recording whose `<capId>.mp4` is in [ServerConfig.recordings], and that was recorded at least
- *   [ServerConfig.archiveDelay] ago, is uploaded into its item, the item is described, and the recording is set to
- *   [Uploaded] with the MD5 checksum of the mp4 and the item id. If [uploader] already holds a file with that checksum,
- *   the mp4 is not uploaded, the recording is set to [Archived] instead, and the next recording is taken at once. A
- *   recording that became [Outdated] during its upload keeps its status and gets only the checksum and the item id. Two
- *   uploads start one day divided by [ServerConfig.dailyUploads] apart. When there is nothing to upload, the loop looks
- *   again after [ServerConfig.uploadInterval].
+ * - The [Recorded] recording with the oldest [Recording.recordedAt] whose `<capId>.mp4` is in [ServerConfig.recordings],
+ *   and that was recorded at least [ServerConfig.archiveDelay] ago, is uploaded into its item, the item is described,
+ *   and the recording is set to [Uploaded] with the MD5 checksum of the mp4 and the item id. If [uploader] already holds
+ *   a file with that checksum, the mp4 is not uploaded, the recording is set to [Archived] instead, and the next
+ *   recording is taken at once. A recording that became [Outdated] during its upload keeps its status and gets only the
+ *   checksum and the item id. Two uploads start one day divided by [ServerConfig.dailyUploads] apart. When there is
+ *   nothing to upload, the loop looks again after [ServerConfig.uploadInterval]. A recording whose demo has no
+ *   [Demo.userId] is never taken, and a recording whose upload failed is taken only after every recording whose upload
+ *   did not fail.
  *
  * A check, an upload, a description or a delete that fails is logged, and is tried again later. A failed upload still
  * takes its place in the daily uploads.
@@ -60,6 +62,11 @@ class UploadService(
     private val config: ServerConfig = ServerConfig(),
     private val clock: Clock = Clock.System,
 ) : Service {
+    /**
+     * Cap ids of the recordings whose last upload failed, the one that failed longest ago first.
+     */
+    private val failed: MutableList<String> = mutableListOf()
+
     override suspend fun start() {
         coroutineScope {
             launch { archiveLoop() }
@@ -80,27 +87,30 @@ class UploadService(
     }
 
     /**
-     * Uploads the newest recorded mp4, one at a time. Waits one day divided by [ServerConfig.dailyUploads] from the start
-     * of an upload to the start of the next. If there is nothing to upload, waits [ServerConfig.uploadInterval] instead.
+     * Uploads the recorded mp4 files in [uploadOrder], one at a time. Waits one day divided by
+     * [ServerConfig.dailyUploads] from the start of an upload to the start of the next. If there is nothing to upload,
+     * waits [ServerConfig.uploadInterval] instead.
      */
     private suspend fun uploadLoop() {
         while (isRunning()) {
             val start = TimeSource.Monotonic.markNow()
-            val wait = uploadNewest()
+            val wait = uploadNext()
             delay(wait - start.elapsedNow())
         }
     }
 
     /**
-     * Returns how long after its start the next upload may start, after uploading the newest recorded mp4. If there is
-     * nothing to upload, returns [ServerConfig.uploadInterval] instead. If [uploader] already held the mp4, returns
-     * [Duration.ZERO].
+     * Returns how long after its start the next upload may start, after uploading the next recorded mp4 in
+     * [uploadOrder]. If there is nothing to upload, returns [ServerConfig.uploadInterval] instead. If [uploader] already
+     * held the mp4, returns [Duration.ZERO].
      */
-    private suspend fun uploadNewest(): Duration =
-        when (val recording = newestRecorded()) {
-            null -> config.uploadInterval
-            else -> if (upload(recording)) 1.days / config.dailyUploads else Duration.ZERO
+    private suspend fun uploadNext(): Duration {
+        val recording = nextRecorded() ?: return config.uploadInterval
+        return when {
+            upload(recording) -> 1.days / config.dailyUploads
+            else -> Duration.ZERO
         }
+    }
 
     /**
      * Sets every [Uploaded] recording of [repository] that [uploader] confirms to [Archived], one at a time.
@@ -159,21 +169,47 @@ class UploadService(
         val itemId = recording.itemId ?: return
         suspendCatching { uploader.delete(itemId, config.mp4(capId).name) }
             .onSuccess {
-                repository.update(capId) { if (it.itemId == itemId) it.copy(itemId = null) else it }
+                clearItemId(capId, itemId)
                 log.info { "Deleted the outdated upload: ${recording.demo}" }
             }.onFailure { log.warn(it) { "Could not delete the outdated upload of recording $capId" } }
     }
 
     /**
-     * Returns the [Recorded] recording of [repository] with the newest demo whose mp4 exists and whose archive delay has
-     * passed. If there is none, returns `null` instead.
+     * Clears the [Recording.itemId] of the recording stored under [capId], if it is still [itemId].
      */
-    private suspend fun newestRecorded(): Recording? =
+    private suspend fun clearItemId(
+        capId: String,
+        itemId: String,
+    ) {
+        repository.update(capId) {
+            when (it.itemId) {
+                itemId -> it.copy(itemId = null)
+                else -> it
+            }
+        }
+    }
+
+    /**
+     * Returns the [Recorded] recording of [repository] that comes first in [uploadOrder] whose mp4 exists, whose demo has
+     * a [Demo.userId] and whose archive delay has passed. If there is none, returns `null` instead.
+     */
+    private suspend fun nextRecorded(): Recording? =
         repository
             .all()
             .filter { it.status == Recorded && it.demo.userId != null && isDue(it) }
-            .sortedByDescending { it.demo.timestamp }
+            .sortedWith(uploadOrder())
             .firstOrNull { config.mp4(it.demo.capId).fileExists() }
+
+    /**
+     * Returns the order recordings are uploaded in: the recordings whose last upload did not fail first, oldest
+     * [Recording.recordedAt] first, then the recordings whose last upload failed, the one that failed longest ago first.
+     * A recording without a [Recording.recordedAt] comes before one with it, and recordings recorded at the same time
+     * come oldest demo first.
+     */
+    private fun uploadOrder(): Comparator<Recording> =
+        compareBy<Recording> { failed.indexOf(it.demo.capId) }
+            .thenBy { it.recordedAt }
+            .thenBy { it.demo.timestamp }
 
     /**
      * Returns `true` if [recording] was recorded at least [ServerConfig.archiveDelay] ago, or has no
@@ -188,29 +224,49 @@ class UploadService(
      * Uploads the mp4 of [recording] into its item, describes the item, and sets [recording] to [Uploaded] with the
      * checksum of the mp4 and the item id. If [uploader] already holds a file with that checksum, sets [recording] to
      * [Archived] instead, and returns `false`. If [recording] is no longer [Recorded], stores only the checksum and the
-     * item id. If any step fails, logs it and returns `true`.
+     * item id. If any step fails, logs it, adds [recording] to the end of [failed] and returns `true`.
      */
     private suspend fun upload(recording: Recording): Boolean {
         val capId = recording.demo.capId
         val itemId = itemId(recording.demo)
+        failed -= capId
         return suspendCatching { uploadMp4(recording, itemId) }
-            .onSuccess { (md5, uploaded) ->
-                val status = if (uploaded) Uploaded else Archived
-                repository.update(capId) {
-                    if (it.status == Recorded) {
-                        it.copy(status = status, md5 = md5, itemId = itemId)
-                    } else {
-                        it.copy(md5 = md5, itemId = itemId)
-                    }
-                }
-                if (uploaded) {
-                    log.info { "Finished uploading: ${recording.demo} (${uploader.downloadUrl(itemId, config.mp4(capId).name)})" }
-                } else {
-                    log.info { "Archived without uploading, the mp4 is already uploaded: ${recording.demo}" }
-                }
-            }.onFailure { log.warn(it) { "Could not upload recording $capId" } }
-            .map { (_, uploaded) -> uploaded }
+            .onSuccess { (md5, uploaded) -> storeUpload(recording, itemId, md5, uploaded) }
+            .onFailure {
+                failed += capId
+                log.warn(it) { "Could not upload recording $capId" }
+            }.map { (_, uploaded) -> uploaded }
             .getOrDefault(true)
+    }
+
+    /**
+     * Stores the checksum [md5] and the item id [itemId] on [recording], sets it to [Uploaded], and logs the upload. If
+     * [uploaded] is `false`, sets [recording] to [Archived] instead. If [recording] is no longer [Recorded], stores only
+     * the checksum and the item id.
+     */
+    private suspend fun storeUpload(
+        recording: Recording,
+        itemId: String,
+        md5: String,
+        uploaded: Boolean,
+    ) {
+        val capId = recording.demo.capId
+        val status =
+            when {
+                uploaded -> Uploaded
+                else -> Archived
+            }
+        repository.update(capId) {
+            when (it.status) {
+                Recorded -> it.copy(status = status, md5 = md5, itemId = itemId)
+                else -> it.copy(md5 = md5, itemId = itemId)
+            }
+        }
+        if (uploaded) {
+            log.info { "Finished uploading: ${recording.demo} (${uploader.downloadUrl(itemId, config.mp4(capId).name)})" }
+        } else {
+            log.info { "Archived without uploading, the mp4 is already uploaded: ${recording.demo}" }
+        }
     }
 
     /**
@@ -239,7 +295,7 @@ class UploadService(
      */
     private fun metadata(demo: Demo): MediaMetadata =
         MediaMetadata(
-            title = "${demo.map} - ${demo.formatCapTime()} by ${demo.player}",
+            title = demo.title(),
             description =
                 """
                 Unreal Tournament 99 Speedrunning

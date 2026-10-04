@@ -285,17 +285,17 @@ class CacheService(
             compareBy<Recording> { TRIM_ORDER.indexOf(it.status) }
                 .thenBy { trimAge(it) }
 
+        val log = logger<CacheService>()
+
         /**
          * Returns the time [recording] is trimmed from: the last view, or else [Recording.lastUpdate], for [Archived];
          * [Recording.lastUpdate] alone, ignoring any view, for [Outdated].
          */
-        fun trimAge(recording: Recording) =
+        fun trimAge(recording: Recording): Instant =
             when (recording.status) {
                 Outdated -> recording.lastUpdate
                 else -> recording.lastView ?: recording.lastUpdate
             }
-
-        val log = logger<CacheService>()
 
         /**
          * Returns [recording] with the views of [view] added to it.

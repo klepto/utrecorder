@@ -1,10 +1,45 @@
 package dev.klepto.utrecorder.core.demo
 
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.common.OperatingSystem
+import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
+import dev.klepto.utrecorder.common.io.workspace
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldStartWith
+import kotlin.io.path.createDirectories
+import kotlin.io.path.createTempDirectory
+import kotlin.io.path.div
+import kotlin.io.path.exists
+import kotlin.io.path.name
 
 class DemoPlaybackHooksTest :
     FunSpec({
+        val home = createTempDirectory("utrecorder-hooks-test")
+
+        afterSpec {
+            home.toFile().deleteRecursively()
+        }
+
+        test("extract writes the hooks into the System directory under the names of the workspace") {
+            val directories = DirectoriesConfig(ConfigReader.EMPTY, home = home)
+            val systemDirectory = (home / "System").createDirectories()
+
+            workspace("hooks", systemDirectory, directories) { workspace ->
+                val paths = DemoPlaybackHooks.extract(workspace)
+
+                paths.forEach { path ->
+                    path.exists() shouldBe true
+                    path.parent shouldBe systemDirectory
+                    path.name shouldStartWith "hooks-"
+                }
+                if (OperatingSystem.current() == WINDOWS) {
+                    paths shouldBe listOf(workspace["uthooks.dll"], workspace["utinject.exe"])
+                }
+            }
+        }
+
         test("message returns a line the hook library printed, trimmed") {
             DemoPlaybackHooks.message("  uthooks: demo ended after 120 frames, kept 118\r") shouldBe
                 "uthooks: demo ended after 120 frames, kept 118"

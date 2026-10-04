@@ -65,7 +65,67 @@ operator fun Path.get(name: String): Path = resolve(name)
 /**
  * Returns the child of this path called by the segment that [name] holds.
  */
-operator fun Path.get(name: PathName): Path = get(name.pathName)
+operator fun Path.get(name: PathName): Path = this[name.pathName]
+
+/**
+ * Returns `true` if this string names a file in the directory it is resolved against, and no other location.
+ *
+ * A plain file name is not blank, is not `.` or `..`, and holds no `/`, `\`, `:` or null character.
+ */
+fun String.isPlainFileName(): Boolean = isNotBlank() && this != "." && this != ".." && none { it in UNSAFE_NAME_CHARACTERS }
+
+/**
+ * The characters a plain file name must not hold.
+ */
+private const val UNSAFE_NAME_CHARACTERS = "/\\:\u0000"
+
+/**
+ * Returns `true` if a file or directory exists at this path.
+ */
+suspend fun Path.fileExists(): Boolean = withContext(Dispatchers.IO) { exists() }
+
+/**
+ * Returns the lines of the file at this path, decoded with [charset].
+ *
+ * If the file does not exist, returns an empty list instead.
+ */
+suspend fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<String> =
+    withContext(Dispatchers.IO) {
+        when {
+            exists() -> readLines(charset)
+            else -> emptyList()
+        }
+    }
+
+/**
+ * Returns the contents of the file at this path, decoded with [charset].
+ *
+ * If the file does not exist, returns an empty string instead.
+ */
+suspend fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
+    withContext(Dispatchers.IO) {
+        when {
+            exists() -> readText(charset)
+            else -> ""
+        }
+    }
+
+/**
+ * Returns the digest of the file at this path under [algorithm], such as `MD5` or `SHA-256`, as lowercase hexadecimal.
+ */
+suspend fun Path.digest(algorithm: String): String =
+    withContext(Dispatchers.IO) {
+        val digest = MessageDigest.getInstance(algorithm)
+        inputStream().use { input ->
+            DigestInputStream(input, digest).use { it.transferTo(OutputStream.nullOutputStream()) }
+        }
+        digest.digest().toHex()
+    }
+
+/**
+ * Returns this array as lowercase hexadecimal, two digits per byte.
+ */
+private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
 /**
  * Copies the file at this path to [target], creating the parent directories of [target], and returns [target].
@@ -157,11 +217,6 @@ private fun Path.moveFileReplacing(
     }
 
 /**
- * The lock of each directory that [replaceIfChanged] has written into.
- */
-private val REPLACE_LOCKS = ConcurrentHashMap<Path, Mutex>()
-
-/**
  * Writes [bytes] to the file at this path unless the file already holds them, and returns this path.
  *
  * The bytes are written to a file of a workspace opened in the directory of this path, which then replaces this path
@@ -179,6 +234,11 @@ suspend fun Path.replaceIfChanged(
     }
     return this
 }
+
+/**
+ * The lock of each directory that [replaceIfChanged] has written into.
+ */
+private val REPLACE_LOCKS = ConcurrentHashMap<Path, Mutex>()
 
 /**
  * Returns `true` if the file at this path exists and holds exactly [bytes].
@@ -201,54 +261,6 @@ private suspend fun Path.replace(
         staged.move(this@replace)
     }
 }
-
-/**
- * Returns the lines of the file at this path, decoded with [charset].
- *
- * If the file does not exist, returns an empty list instead.
- */
-suspend fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<String> =
-    withContext(Dispatchers.IO) {
-        when {
-            exists() -> readLines(charset)
-            else -> emptyList()
-        }
-    }
-
-/**
- * Returns the contents of the file at this path, decoded with [charset].
- *
- * If the file does not exist, returns an empty string instead.
- */
-suspend fun Path.readTextOrEmpty(charset: Charset = Charsets.UTF_8): String =
-    withContext(Dispatchers.IO) {
-        when {
-            exists() -> readText(charset)
-            else -> ""
-        }
-    }
-
-/**
- * Returns `true` if a file or directory exists at this path.
- */
-suspend fun Path.fileExists(): Boolean = withContext(Dispatchers.IO) { exists() }
-
-/**
- * Returns the digest of the file at this path under [algorithm], such as `MD5` or `SHA-256`, as lowercase hexadecimal.
- */
-suspend fun Path.digest(algorithm: String): String =
-    withContext(Dispatchers.IO) {
-        val digest = MessageDigest.getInstance(algorithm)
-        inputStream().use { input ->
-            DigestInputStream(input, digest).use { it.transferTo(OutputStream.nullOutputStream()) }
-        }
-        digest.digest().toHex()
-    }
-
-/**
- * Returns this array as lowercase hexadecimal, two digits per byte.
- */
-private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
 /**
  * Returns the outcome of deleting this path and everything under it, tried up to [attempts] times with [delay] between

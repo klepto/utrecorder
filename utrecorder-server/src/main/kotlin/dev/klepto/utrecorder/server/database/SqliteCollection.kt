@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import java.sql.Connection
+import java.sql.ResultSet
 
 /**
  * [DocumentCollection] backed by one SQLite table, read and written on every call.
@@ -51,9 +52,7 @@ class SqliteCollection<T : Any>(
             execute {
                 connection.prepareStatement("SELECT document FROM $name WHERE key = ?").use { statement ->
                     statement.setString(1, key)
-                    statement.executeQuery().use { result ->
-                        if (result.next()) JSON.decodeFromString(serializer, result.getString(1)) else null
-                    }
+                    statement.executeQuery().use { nextDocument(it) }
                 }
             }
 
@@ -84,11 +83,19 @@ class SqliteCollection<T : Any>(
             execute {
                 connection.createStatement().use { statement ->
                     statement.executeQuery("SELECT document FROM $name ORDER BY rowid").use { result ->
-                        generateSequence { if (result.next()) result.getString(1) else null }
-                            .map { JSON.decodeFromString(serializer, it) }
-                            .toList()
+                        generateSequence { nextDocument(result) }.toList()
                     }
                 }
+            }
+
+        /**
+         * Returns the document in the next row of [result], after moving [result] to that row. If [result] has no next
+         * row, returns `null` instead.
+         */
+        private fun nextDocument(result: ResultSet): T? =
+            when {
+                result.next() -> JSON.decodeFromString(serializer, result.getString(1))
+                else -> null
             }
     }
 

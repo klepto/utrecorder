@@ -10,8 +10,9 @@ import java.nio.file.Path
  * The recorder's UnrealScript package, `UTRecorder.u`, in the `System` directory of an installation.
  *
  * The package holds the console that plays a demo, exits the process when the demo ends, and logs the start and end
- * marks. The console runs the exec commands of a run whether `bAutoExit` is on or not. It seeks to the run start, logs
- * the marks, unlinks the warp zones and exits only when the game ini of a run turns on its `bAutoExit`.
+ * marks. The console runs the exec commands of a run, the seek to the run start included, whether `bAutoExit` is on or
+ * not. It logs the start and end marks, unlinks the warp zones and exits only when the game ini of a run turns on its
+ * `bAutoExit`.
  *
  * Create one with the constructor.
  *
@@ -34,6 +35,6 @@ class DemoPlaybackUscript(
         /**
          * The UnrealScript artifacts embedded on the classpath.
          */
-        private val ARTIFACTS = EmbeddedArtifacts("unrealscript")
+        val ARTIFACTS = EmbeddedArtifacts("unrealscript")
     }
 }

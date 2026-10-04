@@ -764,7 +764,7 @@ static int writeCode(void *target, const unsigned char *code, size_t size) {
 /* The frame delta helper inlined into UGameEngine::Tick: rdtsc; mov esi,eax; mov edi,edx; mov ecx,esi. */
 static const unsigned char CYCLE_SITE_ENGINE[] = {0x9B, 0x0F, 0x31, 0x8B, 0xF0, 0x8B, 0xFA, 0x8B, 0xCE};
 
-/* The same helper inlined into the launcher's main loop: rdtsc; mov esi,eax; mov eax,edx; mov [ebp-1Ch],eax. */
+/* The same helper inlined into the launcher's main loop: rdtsc; mov esi,eax; mov eax,edx; mov [ebp-1Ch],eax; mov ecx,esi. */
 static const unsigned char CYCLE_SITE_LAUNCHER[] = {0x9B, 0x0F, 0x31, 0x8B, 0xF0, 0x8B, 0xC2, 0x89, 0x45, 0xE4, 0x8B, 0xCE};
 
 /* Bytes a patched site's call replaces, and the size of the thunk it calls. */
@@ -1429,7 +1429,7 @@ static void reportTiming(void) {
 /*
  * Ends the capture: releases the cycle sites to the real counter when they have not released themselves already,
  * releases the engine clocks and the mixer to the real clock, drops the pending frame, waits for the sender to send
- * the frames queued, close stream and end, and reports the frame count.
+ * the frames queued, close stream and end, and reports the frame count and the timing line.
  */
 static void finishCapture(void) {
     clockFinished = 1;
@@ -1610,8 +1610,8 @@ static void timePresent(void) {
 }
 
 /*
- * Runs before every presented frame: installs the clock when due, tracks the demo, and times and captures the frame of
- * the armed capture.
+ * Runs before every presented frame: installs the clock when due, tracks the demo, times and captures the frame of the
+ * armed capture, and advances the clocks.
  */
 static void presentFrame(void) {
     if (!clockInstalled && clockDue()) installClock();

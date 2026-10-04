@@ -5,6 +5,7 @@ import dev.klepto.utrecorder.common.io.ExecutableResult
 import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.get
+import dev.klepto.utrecorder.common.io.isPlainFileName
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.startAndAwait
 import dev.klepto.utrecorder.common.io.workspace
@@ -53,7 +54,7 @@ class UtCompiler(
     /**
      * The lock a compilation or an extraction holds while the compiler writes into [directory].
      */
-    private val lock: Mutex = locks.computeIfAbsent(directory.toAbsolutePath().normalize()) { Mutex() }
+    private val lock: Mutex = LOCKS.computeIfAbsent(directory.toAbsolutePath().normalize()) { Mutex() }
 
     init {
         check(executablePath.exists()) { "UT compiler executable not found at $executablePath" }
@@ -111,12 +112,13 @@ class UtCompiler(
      * @throws IllegalStateException if the compiler fails, or aborts on every run.
      */
     private suspend fun decompress(uzPath: Path) {
-        var attempt = 1
-        var result = run("decompress", uzPath.absolutePathString())
-        while (result.exitCode == ABORT_EXIT_CODE && attempt < DECOMPRESS_ATTEMPTS) {
-            attempt++
-            result = run("decompress", uzPath.absolutePathString())
-        }
+        val result =
+            (2..DECOMPRESS_ATTEMPTS).fold(run("decompress", uzPath.absolutePathString())) { previous, _ ->
+                when (previous.exitCode) {
+                    ABORT_EXIT_CODE -> run("decompress", uzPath.absolutePathString())
+                    else -> previous
+                }
+            }
         result.orThrow()
     }
 
@@ -135,22 +137,13 @@ class UtCompiler(
             withContext(Dispatchers.IO) {
                 uzPath.inputStream().use { it.readNBytes(UZ_HEADER_BYTES) }
             }
-        var position = Int.SIZE_BYTES
-        var length = 0
-        var bits = 0
-        var more = true
-        while (more) {
-            check(position < header.size) { "UT archive header of $uzPath ends before its file name" }
-            val next = header[position++].toUByte().toInt()
-            val first = bits == 0
-            check(!first || next and SIGN_BIT == 0) { "UT archive header of $uzPath holds a UTF-16 file name" }
-            length = length or ((next and if (first) FIRST_VALUE_MASK else VALUE_MASK) shl bits)
-            more = next and (if (first) FIRST_CONTINUATION_BIT else CONTINUATION_BIT) != 0
-            bits += if (first) FIRST_VALUE_BITS else VALUE_BITS
-        }
-        check(length in 1..header.size - position) { "UT archive header of $uzPath holds no file name" }
-        val name = String(header, position, length - 1, UtPlatform.CHARSET)
-        check(isPlainFileName(name)) { "UT archive header of $uzPath holds $name, which is not a plain file name" }
+        val length = UtCompactIndex.read(header, Int.SIZE_BYTES)
+        checkNotNull(length) { "UT archive header of $uzPath ends before its file name" }
+        check(length.value >= 0) { "UT archive header of $uzPath holds a UTF-16 file name" }
+        val start = Int.SIZE_BYTES + length.size
+        check(length.value in 1..header.size - start) { "UT archive header of $uzPath holds no file name" }
+        val name = String(header, start, length.value - 1, UtPlatform.CHARSET)
+        check(name.isPlainFileName()) { "UT archive header of $uzPath holds $name, which is not a plain file name" }
         return name
     }
 
@@ -250,33 +243,19 @@ class UtCompiler(
         /**
          * The exit code of a compiler aborted by `SIGABRT`, as a failed assertion aborts it.
          */
-        const val ABORT_EXIT_CODE = 134
+        private const val ABORT_EXIT_CODE = 134
 
         /**
          * The number of runs a decompression gets while the compiler aborts.
          */
-        const val DECOMPRESS_ATTEMPTS = 3
+        private const val DECOMPRESS_ATTEMPTS = 3
 
         private const val UZ_HEADER_BYTES = 1024
-        private const val SIGN_BIT = 0x80
-        private const val FIRST_CONTINUATION_BIT = 0x40
-        private const val FIRST_VALUE_MASK = 0x3F
-        private const val FIRST_VALUE_BITS = 6
-        private const val CONTINUATION_BIT = 0x80
-        private const val VALUE_MASK = 0x7F
-        private const val VALUE_BITS = 7
-        private const val UNSAFE_NAME_CHARACTERS = "/\\:\u0000"
         private val UZ_SUFFIX = Regex("""\.uz$""", RegexOption.IGNORE_CASE)
 
         /**
          * The lock of each `System` directory a compiler has run in.
          */
-        private val locks = ConcurrentHashMap<Path, Mutex>()
-
-        /**
-         * Returns whether [name] names a file in the directory it is resolved against, and no other location.
-         */
-        private fun isPlainFileName(name: String): Boolean =
-            name.isNotBlank() && name != "." && name != ".." && name.none { it in UNSAFE_NAME_CHARACTERS }
+        private val LOCKS = ConcurrentHashMap<Path, Mutex>()
     }
 }

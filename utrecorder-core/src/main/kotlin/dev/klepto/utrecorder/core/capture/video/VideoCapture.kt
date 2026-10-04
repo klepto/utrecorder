@@ -4,7 +4,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import java.nio.file.Path
 
 /**
- * The video capture of a recording: a demo played with every rendered frame sent to a [FrameEncoder].
+ * The video capture of a recording: a demo played with every rendered frame written to a [VideoTrack].
  *
  * [FfmpegVideoCapture] runs it through Unreal Tournament with the hook library loaded.
  */

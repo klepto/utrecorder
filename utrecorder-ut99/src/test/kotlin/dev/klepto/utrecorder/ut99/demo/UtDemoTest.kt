@@ -106,13 +106,12 @@ class UtDemoTest :
         fun header(
             time: Float,
             count: Int,
-            frame: Int = 0,
         ): ByteArray {
             val bits = time.toRawBits()
             return ByteBuffer
                 .allocate(16)
                 .order(ByteOrder.LITTLE_ENDIAN)
-                .putInt(frame)
+                .putInt(0)
                 .putInt(bits and 0x7FFFFF)
                 .putInt((bits ushr 23) shl 20)
                 .putInt(count)
@@ -122,8 +121,7 @@ class UtDemoTest :
         fun record(
             time: Float,
             packet: ByteArray,
-            frame: Int = 0,
-        ): ByteArray = header(time, packet.size, frame) + packet
+        ): ByteArray = header(time, packet.size) + packet
 
         fun controlRecord(
             time: Float,
@@ -255,12 +253,6 @@ class UtDemoTest :
                 (UtDemo.read(path).duration - 78.3621.seconds).absoluteValue shouldBeLessThanOrEqualTo 1.milliseconds
             }
 
-            test("read returns the median demo time between two demo frames as the frame interval") {
-                val frameInterval = requireNotNull(UtDemo.read(path).frameInterval)
-
-                (frameInterval - 2.998.milliseconds).absoluteValue shouldBeLessThanOrEqualTo 0.001.milliseconds
-            }
-
             test("read returns the cap that ends the run") {
                 val cap = requireNotNull(UtDemo.read(path).cap)
 
@@ -268,27 +260,6 @@ class UtDemoTest :
                 cap.id shouldBe "2ZNKJEI2Y1K05AENS6UM827L"
                 cap.runTime shouldBe 74.907.seconds
                 (cap.demoTime - 77.634.seconds).absoluteValue shouldBeLessThanOrEqualTo 1.milliseconds
-            }
-        }
-
-        context("frame interval") {
-            test("read returns the median demo time per frame between the first records of consecutive frames, up to 0.1 seconds") {
-                val bytes =
-                    demo(
-                        record(1f, packet { bunch(0, strings(welcome)) }, frame = 10),
-                        record(1.03125f, packet { }, frame = 10),
-                        record(1.0625f, packet { }, frame = 11),
-                        record(1.125f, packet { }, frame = 13),
-                        record(2f, packet { }, frame = 14),
-                    )
-
-                UtDemo.read(bytes).frameInterval shouldBe 46.875.milliseconds
-            }
-
-            test("read returns no frame interval when every record lies in one frame") {
-                val bytes = demo(controlRecord(1f, welcome), controlRecord(2f, "USES PKG=Weapon"))
-
-                UtDemo.read(bytes).frameInterval shouldBe null
             }
         }
 

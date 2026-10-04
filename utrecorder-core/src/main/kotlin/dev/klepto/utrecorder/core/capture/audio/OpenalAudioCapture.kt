@@ -40,11 +40,6 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
 
 /**
- * The logger of the audio capture.
- */
-private val log = logger<OpenalAudioCapture>()
-
-/**
  * The audio capture of a recording: Unreal Tournament run with sound on and the hook library loaded, writing a wav
  * through the OpenAL wave output, its clock stepped one mixer period of the wav at a time.
  *
@@ -167,8 +162,8 @@ class OpenalAudioCapture(
 
     /**
      * Returns the unstarted run that plays [description] under [openAlEnvironment] with the hook library of [hooks]
-     * loaded: with sound, and playing the exec script. On Linux the run also gets [linuxEnvironment], and the run's game
-     * ini gets [renderQualityValues] in the section of the audio capture's render device.
+     * loaded: with sound, and playing the exec script. The run's game ini gets [renderQualityValues] in the section of
+     * [DemoPlaybackRenderDevice.OPENGL]. On Linux, the run also gets [linuxEnvironment].
      */
     fun process(
         description: DemoPlaybackConfig,
@@ -210,8 +205,7 @@ class OpenalAudioCapture(
         val start = wavePosition(spawn)
         val end = wavePosition(marks.end)
         val span = marks.end.demoTime - spawn.demoTime
-        check(start >= 0 && end <= wavDuration) { "The audio capture's marks fall outside $WAVE_NAME" }
-        check(span > Duration.ZERO) { "The audio capture's marks fall outside $WAVE_NAME" }
+        check(start >= 0 && end <= wavDuration && span > Duration.ZERO) { "The audio capture's marks fall outside $WAVE_NAME" }
 
         return AudioTrack(
             file = wavFile,
@@ -223,22 +217,18 @@ class OpenalAudioCapture(
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo:
-     * `SeekStart`, which seeks to just before the run start, or back to the demo's start, once the ticks settle, `DemoFrames <mixer periods per
-     * second>`, which arms the hook library at the spawn and logs the spawn mark, `TimerReset <run start>`, which
-     * places the spawn where the video capture places it, `TimerStop <run stop>`, which ends the run where the video
-     * capture ends it, and `DisableRendering` when the config turns the audio capture's rendering off. If the demo
-     * shows no run start or no run stop, `TimerReset` or `TimerStop` is left out.
+     * `SeekStart`, which pauses the demo until the ticks settle, then seeks two seconds before the run start, or to the
+     * demo start without one, `DemoFrames <mixer periods per second>`, which turns on the spawn check that arms the hook
+     * library and logs the spawn mark, `TimerReset <run start>`, which makes the console signal the spawn when the demo
+     * reaches the run start, `TimerStop <run stop>`, which ends the run one second after the Bunny Track timer stops,
+     * and `DisableRendering` when the config turns the audio capture's rendering off. If the demo shows no run start or
+     * no run stop, `TimerReset` or `TimerStop` is left out.
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
             this += "SeekStart"
             this += "DemoFrames %.6f".format(Locale.ROOT, WAVE_RATE.toDouble() / WAVE_PERIOD)
-            description.runStart?.let {
-                this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
-            }
-            description.runStop?.let {
-                this += "TimerStop %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
-            }
+            this += description.timerExecLines()
             if (!config.render) this += "DisableRendering"
         }
 
@@ -277,6 +267,11 @@ class OpenalAudioCapture(
          * The date the hook library counts the position of the wav output from.
          */
         private val WAVE_EPOCH = LocalDateTime.of(2000, 1, 1, 0, 0)
+
+        /**
+         * The logger of the audio capture.
+         */
+        private val log = logger<OpenalAudioCapture>()
 
         /**
          * Returns the position of [mark] in the wav, in seconds: the time from [WAVE_EPOCH] to the date of [mark].

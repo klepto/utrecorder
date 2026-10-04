@@ -5,6 +5,7 @@ import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.http.Downloader
 import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.io.isPlainFileName
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.part
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
@@ -45,8 +46,8 @@ class Recorder(
     /**
      * Returns the marks of one playback of the demo file at [demo], at normal speed with sound off.
      *
-     * The demo is read before the game is launched. The recorder's console package is installed into the
-     * installation. The staged copy of the demo is removed afterwards, whichever way the run ends. The marks are returned even when the game exits with a nonzero exit code.
+     * The demo is read before the game is launched. The recorder's console package is installed into the installation. The staged copy of
+     * the demo is removed afterwards, whichever way the run ends. The marks are returned even when the game exits with a nonzero exit code.
      *
      * @param timeout How long the game may run before it is killed. If not provided, derives it from the length of the
      * demo.
@@ -86,9 +87,11 @@ class Recorder(
      *
      * @param name The name of the mp4 and of its thumbnail without their extensions. If not provided, uses the file name
      * of the downloaded demo without its `.dem` extension.
-     * @throws IllegalStateException If the demo cannot be fetched or resolved, if a capture fails the recording, if the
-     * length of the mp4 does not match the run time the demo reports, or if the thumbnail cannot be written. A failed
-     * audio capture always fails the recording.
+     * @throws IllegalArgumentException If [url] names no demo file.
+     * @throws java.io.IOException If the connection that downloads the demo fails or times out.
+     * @throws IllegalStateException If the server answers the demo download with a status other than success, if the demo
+     * cannot be resolved, if a capture fails the recording, if the length of the mp4 does not match the run time the demo
+     * reports, or if the thumbnail cannot be written. A failed audio capture always fails the recording.
      * @throws UtPackageException If no source serves one of the packages the demo names at the GUID it recorded.
      */
     suspend fun record(
@@ -176,11 +179,6 @@ class Recorder(
         private const val DEMO_EXTENSION = ".dem"
 
         /**
-         * The characters a demo file name must not hold.
-         */
-        private const val UNSAFE_NAME_CHARACTERS = "/\\:\u0000"
-
-        /**
          * Returns the last non-empty segment of the path of [url], URL-decoded. The query and fragment of [url] play no
          * part.
          *
@@ -195,9 +193,7 @@ class Recorder(
                     .split('/')
                     .lastOrNull(String::isNotEmpty)
                     ?.let { URLDecoder.decode(it.replace("+", "%2B"), UTF_8) }
-            require(name != null && name != "." && name != ".." && name.none { it in UNSAFE_NAME_CHARACTERS }) {
-                "Demo URL $url names no file"
-            }
+            require(name != null && name.isPlainFileName()) { "Demo URL $url names no file" }
             return name
         }
     }

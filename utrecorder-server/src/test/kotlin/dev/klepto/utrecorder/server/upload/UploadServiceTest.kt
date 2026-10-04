@@ -141,7 +141,7 @@ class UploadServiceTest :
             }
         }
 
-        test("uploads every recorded mp4 one at a time, newest demo first") {
+        test("uploads every recorded mp4 one at a time") {
             val uploads = CopyOnWriteArrayList<String>()
             val active = AtomicInteger()
             val overlapped = AtomicInteger()
@@ -153,29 +153,36 @@ class UploadServiceTest :
                     active.decrementAndGet()
                 }
             running(mapOf("b" to Recorded, "a" to Recorded), listOf("a", "b"), uploader) { repository ->
-                eventually(5.seconds) { repository["b"]?.status shouldBe Uploaded }
-                repository["a"]?.status shouldBe Uploaded
+                eventually(5.seconds) { repository["a"]?.status shouldBe Uploaded }
+                repository["b"]?.status shouldBe Uploaded
             }
 
-            uploads shouldContainExactly listOf("$item:a.mp4", "$item:b.mp4")
+            uploads shouldContainExactly listOf("$item:b.mp4", "$item:a.mp4")
             overlapped.get() shouldBe 0
         }
 
-        test("uploads a recording of a newer demo before the older ones still waiting") {
+        test("uploads the recording recorded first, whatever the age of its demo") {
             val uploads = CopyOnWriteArrayList<String>()
+            val recordedAt =
+                mapOf(
+                    "first" to Instant.parse("2026-09-27T07:00:00Z"),
+                    "second" to Instant.parse("2026-09-27T07:01:00Z"),
+                    "third" to Instant.parse("2026-09-27T07:02:00Z"),
+                )
             running(
-                mapOf("oldest" to Recorded, "older" to Recorded, "old" to Recorded),
-                listOf("oldest", "older", "old", "fresh"),
+                mapOf("second" to Recorded, "third" to Recorded, "first" to Recorded),
+                listOf("first", "second", "third", "late"),
                 uploader { _, file, _ -> uploads += file.name.removeSuffix(".mp4") },
                 dailyUploads = 432_000,
+                seed = { it.copy(recordedAt = recordedAt[it.demo.capId]) },
             ) { repository ->
-                eventually(5.seconds) { uploads shouldContainExactly listOf("old") }
-                repository += listOf(demo("fresh", 10))
-                repository.update("fresh") { it.copy(status = Recorded) }
-                eventually(5.seconds) { repository["oldest"]?.status shouldBe Uploaded }
+                eventually(5.seconds) { uploads shouldContainExactly listOf("first") }
+                repository += listOf(demo("late", -10))
+                repository.update("late") { it.copy(status = Recorded, recordedAt = Instant.parse("2026-09-27T07:03:00Z")) }
+                eventually(5.seconds) { repository["late"]?.status shouldBe Uploaded }
             }
 
-            uploads shouldContainExactly listOf("old", "fresh", "older", "oldest")
+            uploads shouldContainExactly listOf("first", "second", "third", "late")
         }
 
         test("starts two uploads one day divided by the daily uploads apart") {
@@ -187,7 +194,7 @@ class UploadServiceTest :
                 uploader,
                 dailyUploads = 432_000,
             ) { repository ->
-                eventually(5.seconds) { repository["a"]?.status shouldBe Uploaded }
+                eventually(5.seconds) { repository["c"]?.status shouldBe Uploaded }
             }
 
             // The service measures from before it picks and hashes the mp4, the uploader only sees the upload itself, so
@@ -224,14 +231,19 @@ class UploadServiceTest :
             uploads shouldContainExactly listOf("cap.mp4")
         }
 
-        test("leaves a failed upload recorded and uploads it again on a later pass") {
-            val attempts = AtomicInteger()
-            val uploader = uploader { _, _, _ -> if (attempts.incrementAndGet() == 1) throw IOException("Unavailable") }
-            running(mapOf("cap" to Recorded), listOf("cap"), uploader) { repository ->
+        test("leaves a failed upload recorded and uploads it again after the recordings whose upload did not fail") {
+            val attempts = CopyOnWriteArrayList<String>()
+            val uploader =
+                uploader { _, file, _ ->
+                    attempts += file.name
+                    if (attempts.size == 1) throw IOException("Unavailable")
+                }
+            running(mapOf("cap" to Recorded, "next" to Recorded), listOf("cap", "next"), uploader) { repository ->
                 eventually(5.seconds) { repository["cap"]?.status shouldBe Uploaded }
+                repository["next"]?.status shouldBe Uploaded
             }
 
-            attempts.get() shouldBe 2
+            attempts shouldContainExactly listOf("cap.mp4", "next.mp4", "cap.mp4")
         }
 
         test("does not upload an uploaded recording again") {
@@ -326,7 +338,7 @@ class UploadServiceTest :
                 uploader(isUploaded = { _, md5 -> md5 == "bf5f3461956c8f4ab9d7c0877c1505ad" }) { _, file, _ ->
                     uploads += file.name
                 }
-            running(mapOf("cap" to Recorded, "uploaded" to Recorded), listOf("cap", "uploaded"), uploader, dailyUploads = 1) { repository ->
+            running(mapOf("uploaded" to Recorded, "cap" to Recorded), listOf("cap", "uploaded"), uploader, dailyUploads = 1) { repository ->
                 eventually(5.seconds) { repository["cap"]?.status shouldBe Uploaded }
                 repository["uploaded"]?.status shouldBe Archived
                 repository["uploaded"]?.md5 shouldBe "bf5f3461956c8f4ab9d7c0877c1505ad"
@@ -391,9 +403,9 @@ class UploadServiceTest :
                 uploader { id, file, _ -> uploads += "$id:${file.name}" },
                 demos =
                     listOf(
-                        demo("plain", 2, "ctf-bt-maverick"),
+                        demo("plain", 0, "ctf-bt-maverick"),
                         demo("mixed", 1, "CTF-BT-Maverick"),
-                        demo("special", 0, "CTF-BT-(Joe)Fun[2]", "a b/c"),
+                        demo("special", 2, "CTF-BT-(Joe)Fun[2]", "a b/c"),
                     ),
             ) { repository ->
                 eventually(5.seconds) { repository["special"]?.status shouldBe Uploaded }
@@ -417,7 +429,7 @@ class UploadServiceTest :
                     isUploaded = { _, md5 -> md5 == "bf5f3461956c8f4ab9d7c0877c1505ad" },
                     describe = { id, metadata -> described += "$id:${metadata.title}" },
                 )
-            running(mapOf("cap" to Recorded, "uploaded" to Recorded), listOf("cap", "uploaded"), uploader) { repository ->
+            running(mapOf("uploaded" to Recorded, "cap" to Recorded), listOf("cap", "uploaded"), uploader) { repository ->
                 eventually(5.seconds) { repository["cap"]?.status shouldBe Uploaded }
                 repository["uploaded"]?.status shouldBe Archived
                 repository["uploaded"]?.itemId shouldBe item

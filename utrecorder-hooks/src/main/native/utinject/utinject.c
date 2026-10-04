@@ -2,7 +2,8 @@
  * Injector that starts a program suspended, loads a library into it, then resumes it and waits for it to exit.
  *
  * Usage: utinject <library> <executable> [arguments...]. The exit code is the program's own, or 2 when the usage is
- * wrong, the library path cannot be resolved, the program cannot be started or the library cannot be loaded into it.
+ * wrong, the library path cannot be resolved or names no file, the command line cannot be allocated, the program
+ * cannot be started or the library cannot be loaded into it.
  */
 
 #include <windows.h>

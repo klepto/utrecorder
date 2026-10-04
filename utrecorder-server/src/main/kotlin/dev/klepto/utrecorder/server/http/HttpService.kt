@@ -12,6 +12,7 @@ import dev.klepto.utrecorder.server.recording.RecordingJob
 import dev.klepto.utrecorder.server.recording.RecordingJobs
 import dev.klepto.utrecorder.server.recording.RecordingQueue
 import dev.klepto.utrecorder.server.recording.RecordingRepository
+import dev.klepto.utrecorder.server.recording.RecordingStatus
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
@@ -63,17 +64,22 @@ import kotlin.time.Instant
  * - `GET /thumb/{capId}`: the thumbnail of a recording `/mp4/{capId}` would serve, if it is in
  *   [ServerConfig.thumbnails]. Every other request answers `404`.
  * - `GET /view/{capId}`: an HTML page that plays `/mp4/{capId}` and carries OpenGraph video tags for link previews: the
- *   title of the cap as its site name and no title of its own, the video size of [ServerConfig.recorder], `/thumb/{capId}` as its image, and absolute URLs
- *   built from the origin of the request. The origin honours the `X-Forwarded-*` headers only if
- *   [ServerConfig.trustForwardedHeaders] is enabled. Answers `404` wherever `/mp4/{capId}` answers `404`.
+ *   title of the cap as its site name and no title of its own, the size of the first, largest tier of `record.tiers` as
+ *   the size of the video and the image, `/thumb/{capId}` as its image, and absolute URLs built from the origin of the
+ *   request. The origin honours the `X-Forwarded-*` headers only if [ServerConfig.trustForwardedHeaders] is enabled.
+ *   Answers `404` wherever `/mp4/{capId}` answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
  * - `GET /api/queue`: the demos of the first 10 recordings of [queue], in queue order.
- * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, plus every
- *   [Outdated] recording whose mp4 still exists, most recently recorded first. Recordings recorded at the same time
- *   are ordered by the time of their demo, then by [Demo.capId], both descending. A recording without
+ * - `GET /api/recording/{capId}`: the recording of the cap `capId`, whatever its status. A cap without a recording
+ *   answers `404` with a JSON body.
+ * - `GET /api/recordings?limit=&offset=&status=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, plus
+ *   every [Outdated] recording whose mp4 still exists, most recently recorded first. Recordings recorded at the same
+ *   time are ordered by the time of their demo, then by [Demo.capId], both descending. A recording without
  *   [Recording.recordedAt] comes after every other one. The page
  *   skips `offset` recordings, `0` by default, and holds at most `limit` recordings, `10` by default and at most `50`.
- *   A `limit` or `offset` that is not a non-negative integer answers `400`.
+ *   A `limit` or `offset` that is not a non-negative integer answers `400`. If `status` is given, the page holds every
+ *   recording of the statuses it names instead, separated by commas and in any case, such as `failed,unresolvable`,
+ *   and `limit` has neither a default nor a maximum. A `status` that names a status that does not exist answers `400`.
  * - Any other path under `/api/`: `404` with a JSON body.
  * - Every other `GET`: the web site from the `web` classpath resources. A path that names no file of the site answers
  *   its `index.html`, and the `index` of the resources answers `404`. Files under `assets/` are cached for a year;
@@ -91,7 +97,7 @@ import kotlin.time.Instant
  * @property jobs The running recordings.
  * @property cache The cache that counts the views and names the download URL of an archived mp4.
  * @property config The recordings and thumbnails directories, the port, whether the forwarded headers are trusted
- * and the size of the recorded videos.
+ * and the size of the first, largest tier of `record.tiers`.
  */
 class HttpService(
     private val repository: RecordingRepository,
@@ -129,6 +135,7 @@ class HttpService(
             get("/view/{capId}") { serveView(call.parameters["capId"].orEmpty()) }
             get("/api/jobs") { call.respond(jobs.jobs.first().map { it.toResponse() }) }
             get("/api/queue") { call.respond(queue.get(LIMIT).map { it.demo }) }
+            get("/api/recording/{capId}") { serveRecording(call.parameters["capId"].orEmpty()) }
             get("/api/recordings") { serveRecordings() }
             route("/api/{...}") { handle { call.respond(HttpStatusCode.NotFound, ErrorResponse("Not found")) } }
             get("/index") { call.respond(HttpStatusCode.NotFound) }
@@ -140,12 +147,12 @@ class HttpService(
     }
 
     /**
-     * Answers with the mp4 of the recording [capId], a redirect to its download URL, or `404`. An [Outdated] recording
+     * Answers with the mp4 of the recording [requestedCapId], a redirect to its download URL, or `404`. An [Outdated] recording
      * is never redirected: once its mp4 is gone, it answers `404`.
      */
-    private suspend fun RoutingContext.serveMp4(capId: String) {
-        val recording = cache.view(capId, counted = call.request.local.method == HttpMethod.Get && isFromStart())
-        if (recording == null || recording.status !in SERVABLE) {
+    private suspend fun RoutingContext.serveMp4(requestedCapId: String) {
+        val recording = cache.view(requestedCapId, counted = call.request.local.method == HttpMethod.Get && isFromStart())
+        if (recording == null || !recording.status.isServable) {
             call.respond(HttpStatusCode.NotFound)
             return
         }
@@ -173,7 +180,7 @@ class HttpService(
      * thumbnail.
      */
     private suspend fun RoutingContext.serveThumbnail(capId: String) {
-        val thumbnail = repository[capId]?.takeIf { it.status in SERVABLE }?.let { config.thumbnail(it.demo.capId) }
+        val thumbnail = repository[capId]?.takeIf { it.status.isServable }?.let { config.thumbnail(it.demo.capId) }
         when {
             thumbnail != null && thumbnail.fileExists() -> call.respondFile(thumbnail.toFile())
             else -> call.respond(HttpStatusCode.NotFound)
@@ -181,11 +188,11 @@ class HttpService(
     }
 
     /**
-     * Answers with the page that plays the recording [capId] and describes it to link previews, or `404` wherever
+     * Answers with the page that plays the recording [requestedCapId] and describes it to link previews, or `404` wherever
      * [serveMp4] answers `404`.
      */
-    private suspend fun RoutingContext.serveView(capId: String) {
-        val recording = repository[capId]
+    private suspend fun RoutingContext.serveView(requestedCapId: String) {
+        val recording = repository[requestedCapId]
         if (recording == null || !isPlayable(recording)) {
             call.respond(HttpStatusCode.NotFound)
             return
@@ -207,7 +214,7 @@ class HttpService(
     private suspend fun isPlayable(recording: Recording): Boolean {
         val capId = recording.demo.capId
         return when {
-            recording.status !in SERVABLE -> false
+            !recording.status.isServable -> false
             config.mp4(capId).fileExists() -> true
             else -> recording.status == Archived && cache.downloadUrl(recording) != null
         }
@@ -225,6 +232,9 @@ class HttpService(
     ): String {
         val title = demo.title().escapeHtml()
         val mp4 = mp4Url.escapeHtml()
+        val tier =
+            config.recorder.video.tiers
+                .first()
         return """
             <!doctype html>
             <html lang="en">
@@ -236,12 +246,12 @@ class HttpService(
                 <meta property="og:url" content="${pageUrl.escapeHtml()}" />
                 <meta property="og:video" content="$mp4" />
                 <meta property="og:video:type" content="video/mp4" />
-                <meta property="og:video:width" content="${config.recorder.video.tiers.first().width}" />
-                <meta property="og:video:height" content="${config.recorder.video.tiers.first().height}" />
+                <meta property="og:video:width" content="${tier.width}" />
+                <meta property="og:video:height" content="${tier.height}" />
                 <meta property="og:image" content="${thumbnailUrl.escapeHtml()}" />
                 <meta property="og:image:type" content="image/jpeg" />
-                <meta property="og:image:width" content="${config.recorder.video.tiers.first().width}" />
-                <meta property="og:image:height" content="${config.recorder.video.tiers.first().height}" />
+                <meta property="og:image:width" content="${tier.width}" />
+                <meta property="og:image:height" content="${tier.height}" />
               </head>
               <body style="margin: 0; background: #000">
                 <video src="$mp4" controls autoplay playsinline style="display: block; width: 100vw; height: 100vh"></video>
@@ -251,33 +261,66 @@ class HttpService(
     }
 
     /**
+     * Answers with the recording [capId], whatever its status. If there is none, answers `404` instead.
+     */
+    private suspend fun RoutingContext.serveRecording(capId: String) {
+        when (val recording = repository[capId]) {
+            null -> call.respond(HttpStatusCode.NotFound, ErrorResponse("Not found"))
+            else -> call.respond(recording)
+        }
+    }
+
+    /**
      * Answers with the page of recordings that the `limit` and `offset` parameters name, or `400` for a parameter that
      * is not a non-negative integer.
      */
     private suspend fun RoutingContext.serveRecordings() {
-        val limit = count(call.parameters["limit"], LIMIT)
+        val status = call.parameters["status"]
+        val statuses = status?.let { statuses(it) }
+        val defaultLimit =
+            when (status) {
+                null -> LIMIT
+                else -> Int.MAX_VALUE
+            }
+        val limit = count(call.parameters["limit"], defaultLimit)
         val offset = count(call.parameters["offset"], 0)
         if (limit == null || offset == null) {
             call.respond(HttpStatusCode.BadRequest, ErrorResponse("Limit and offset must be non-negative integers"))
             return
         }
-        call.respond(recordings(limit.coerceAtMost(MAX_LIMIT), offset))
+        if (status != null && statuses == null) {
+            call.respond(HttpStatusCode.BadRequest, ErrorResponse("Status must be recording statuses separated by commas"))
+            return
+        }
+        val recordings =
+            when (statuses) {
+                null -> recordings(limit.coerceAtMost(MAX_LIMIT), offset) { isListed(it) }
+                else -> recordings(limit, offset) { it.status in statuses }
+            }
+        call.respond(recordings)
     }
 
     /**
-     * Returns at most [limit] [Recorded], [Uploaded] or [Archived] recordings, plus every [Outdated] recording whose
-     * mp4 still exists, most recently recorded first, after skipping the first [offset] of them.
+     * Returns at most [limit] of the recordings that [filter] accepts, most recently recorded first, after skipping the
+     * first [offset] of them.
      */
     private suspend fun recordings(
         limit: Int,
         offset: Int,
+        filter: suspend (Recording) -> Boolean,
     ): List<Recording> =
         repository
             .all()
-            .filter { it.status in COMPLETED || (it.status == Outdated && config.mp4(it.demo.capId).fileExists()) }
+            .filter { filter(it) }
             .sortedWith(NEWEST_RECORDED)
             .drop(offset)
             .take(limit)
+
+    /**
+     * Returns `true` if [recording] is [Recorded], [Uploaded] or [Archived], or [Outdated] while its mp4 still exists.
+     */
+    private suspend fun isListed(recording: Recording): Boolean =
+        recording.status.isCompleted || (recording.status == Outdated && config.mp4(recording.demo.capId).fileExists())
 
     /**
      * One running recording, as `/api/jobs` lists it.
@@ -321,16 +364,18 @@ class HttpService(
                 ContentType.Application.Json,
             )
 
-        val COMPLETED = setOf(Recorded, Uploaded, Archived)
-
-        val SERVABLE = COMPLETED + Outdated
-
         val NEWEST_RECORDED: Comparator<Recording> =
             compareByDescending<Recording> { it.recordedAt }
                 .thenByDescending { it.demo.timestamp }
                 .thenByDescending { it.demo.capId }
 
         val log = logger<HttpService>()
+
+        /**
+         * `true` if a recording with this status is served: it is [completed][RecordingStatus.isCompleted] or [Outdated].
+         */
+        val RecordingStatus.isServable: Boolean
+            get() = isCompleted || this == Outdated
 
         /**
          * Returns [value] as a non-negative integer, or `null` if it is not one. If [value] is `null`, returns [default]
@@ -346,6 +391,16 @@ class HttpService(
             }
 
         /**
+         * Returns the statuses that [value] names, separated by commas, in any case. If a name is not a
+         * [RecordingStatus], returns `null` instead.
+         */
+        fun statuses(value: String): Set<RecordingStatus>? =
+            value
+                .split(',')
+                .map { name -> RecordingStatus.entries.find { it.name.equals(name, ignoreCase = true) } ?: return null }
+                .toSet()
+
+        /**
          * Returns the `Cache-Control` header of the site resource at [path].
          */
         fun cacheControl(path: String): String =
@@ -353,11 +408,6 @@ class HttpService(
                 "/web/assets/" in path -> "public, max-age=31536000, immutable"
                 else -> "no-cache"
             }
-
-        /**
-         * Returns the title of this cap, `<map> - <capTime> by <player>`.
-         */
-        fun Demo.title(): String = "$map - ${formatCapTime()} by $player"
 
         /**
          * Returns this text with the characters that HTML gives a meaning escaped, so it reads as text in an element

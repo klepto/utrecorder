@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.ut99.demo
 
+import dev.klepto.utrecorder.common.io.isPlainFileName
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.ut99.UtPackage
 import kotlinx.coroutines.Dispatchers
@@ -21,21 +22,16 @@ import kotlin.time.Duration.Companion.seconds
  * package named more than once appears once, as its first entry, with names compared ignoring case. An entry that names
  * no package, or a name that is not a plain file name, is left out.
  * @property duration The demo time of the last record. It can overshoot the played length by a fraction of a second.
- * @property frameInterval The median demo time between two demo frames. If the demo holds no two frames less than
- * 0.1 seconds apart, it is `null` instead.
  * @property cap The cap that ends the run the demo records. If the demo holds no cap, it is `null` instead.
  */
 data class UtDemo(
     val map: String,
     val packages: List<UtPackage>,
     val duration: Duration,
-    val frameInterval: Duration?,
     val cap: UtDemoCap?,
 ) {
     companion object {
         private val TOLERANCE = 50.milliseconds
-        private val MAX_FRAME_INTERVAL = 100.milliseconds
-        private const val UNSAFE_NAME_CHARACTERS = "/\\:\u0000"
 
         private val SPAWN_MARKER = Regex("""BTPOG_SPAWN_MARKER:(\S+)""")
         private val CAP_MARKER = Regex("""BTPOG_CAP_MARKER:(\S+)""")
@@ -64,33 +60,7 @@ data class UtDemo(
                     .mapNotNull(::packageOf)
                     .distinctBy { it.name.lowercase() }
             val duration = records.lastOrNull()?.time ?: Duration.ZERO
-            return UtDemo(map, packages, duration, frameIntervalOf(records), capOf(records))
-        }
-
-        /**
-         * Returns the median demo time between two demo frames of [records], leaving out any interval longer than
-         * [MAX_FRAME_INTERVAL]. If no interval is left, returns `null` instead.
-         */
-        private fun frameIntervalOf(records: List<UtDemoRecord>): Duration? =
-            records
-                .filter { it.time > Duration.ZERO }
-                .distinctBy { it.frame }
-                .zipWithNext(::intervalOf)
-                .filterNotNull()
-                .sorted()
-                .takeIf { it.isNotEmpty() }
-                ?.let { (it[(it.size - 1) / 2] + it[it.size / 2]) / 2 }
-
-        /**
-         * Returns the demo time per demo frame between [first] and [second]. If [second] is not a later frame at a later
-         * time, or the interval is longer than [MAX_FRAME_INTERVAL], returns `null` instead.
-         */
-        private fun intervalOf(
-            first: UtDemoRecord,
-            second: UtDemoRecord,
-        ): Duration? {
-            if (second.frame <= first.frame || second.time <= first.time) return null
-            return ((second.time - first.time) / (second.frame - first.frame)).takeIf { it <= MAX_FRAME_INTERVAL }
+            return UtDemo(map, packages, duration, capOf(records))
         }
 
         /**
@@ -106,18 +76,12 @@ data class UtDemo(
         private fun packageOf(line: String): UtPackage? {
             val fields = fieldsOf(line, "USES") ?: return null
             val name = fields["PKG"].orEmpty()
-            if (!isPlainFileName(name)) {
+            if (!name.isPlainFileName()) {
                 log.warn { "Skipping package \"$name\", which is not a plain file name" }
                 return null
             }
             return UtPackage.named(name, fields["GUID"].orEmpty())
         }
-
-        /**
-         * Returns whether [name] names a file in the directory it is resolved against, and no other location.
-         */
-        private fun isPlainFileName(name: String): Boolean =
-            name.isNotBlank() && name != "." && name != ".." && name.none { it in UNSAFE_NAME_CHARACTERS }
 
         /**
          * Returns the `KEY=VALUE` fields of a [line] opening with [command]. If the line opens with another command,

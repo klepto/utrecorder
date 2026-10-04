@@ -28,7 +28,5 @@ suspend fun <T> withProgressTimeout(
                     throw TimeoutException("No progress for $idle, last progress $it")
                 }
             }
-        val result = block()
-        watchdog.cancel()
-        result
+        block().also { watchdog.cancel() }
     }

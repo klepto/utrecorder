@@ -70,6 +70,15 @@ class PathsTest :
             }
         }
 
+        context("isPlainFileName") {
+            test("accepts a file name and rejects a blank name, a dot segment, a separator, a drive and a null") {
+                val rejected = listOf("", " ", ".", "..", "../Escape.unr", "Maps\\Escape.unr", "C:Escape.unr", "Escape\u0000.unr")
+
+                "DM-Deck16][.unr".isPlainFileName() shouldBe true
+                rejected.filter(String::isPlainFileName) shouldBe emptyList()
+            }
+        }
+
         context("copy") {
             test("copies the content and keeps the source") {
                 val source = file("copy-source", sample)

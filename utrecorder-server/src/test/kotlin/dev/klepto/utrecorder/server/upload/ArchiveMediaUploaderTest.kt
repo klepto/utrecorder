@@ -136,10 +136,17 @@ class ArchiveMediaUploaderTest :
                 """{"op":"replace","path":"/description","value":"Line &lt;1&gt;<br />Line 2"}]"""
         }
 
-        test("throws when the metadata POST fails") {
-            val uploader = ArchiveMediaUploader(config, engine(status = HttpStatusCode.ServiceUnavailable))
+        test("treats a metadata POST that changes nothing as done") {
+            val body = """{"success":false,"error":"no changes to _meta.xml"}"""
 
-            shouldThrow<ServerResponseException> { uploader.describe(id, metadata) }
+            ArchiveMediaUploader(config, engine(body, HttpStatusCode.BadRequest)).describe(id, metadata)
+        }
+
+        test("throws when the metadata POST fails") {
+            val body = """{"success":false,"error":"invalid patch"}"""
+            val uploader = ArchiveMediaUploader(config, engine(body, HttpStatusCode.BadRequest))
+
+            shouldThrow<IllegalStateException> { uploader.describe(id, metadata) }
         }
 
         test("deletes a file with one DELETE that cascades and keeps no old version") {

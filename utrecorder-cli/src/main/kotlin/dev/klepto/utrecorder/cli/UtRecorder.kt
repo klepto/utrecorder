@@ -159,9 +159,10 @@ object UtRecorder {
      * the stage finishes. Each stage and whole percent is logged once.
      *
      * @throws IllegalArgumentException If [url] holds a malformed percent escape, or if [url] names no demo file.
-     * @throws java.io.IOException If the demo cannot be downloaded.
-     * @throws IllegalStateException If the demo cannot be resolved, if a capture fails the recording, or if the length
-     * of the mp4 does not match the run time the demo reports.
+     * @throws java.io.IOException If the connection that downloads the demo fails or times out.
+     * @throws IllegalStateException If the server answers the demo download with a status other than success, if the demo
+     * cannot be resolved, if a capture fails the recording, if the length of the mp4 does not match the run time the demo
+     * reports, or if the thumbnail cannot be written.
      * @throws dev.klepto.utrecorder.ut99.UtPackageException If no source serves one of the packages the demo names.
      */
     suspend fun main(

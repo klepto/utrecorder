@@ -67,4 +67,16 @@ class DemoPlaybackConfigTest :
             DemoPlaybackConfig.of("demo", 190.seconds, runStart = 166.seconds).runDuration() shouldBe 24.seconds
             DemoPlaybackConfig.of("demo", 190.seconds, runStop = 22.seconds).runDuration() shouldBe 22.seconds
         }
+
+        test("timerExecLines resets the timer at the run start and stops it at the run stop, in seconds") {
+            val description = DemoPlaybackConfig.of("demo", 190.seconds, runStart = 10_120.milliseconds, runStop = 64.seconds)
+
+            description.timerExecLines() shouldBe listOf("TimerReset 10.120000", "TimerStop 64.000000")
+        }
+
+        test("timerExecLines leaves out the line of a run start or a run stop the demo does not show") {
+            DemoPlaybackConfig.of("demo", 190.seconds).timerExecLines() shouldBe emptyList()
+            DemoPlaybackConfig.of("demo", 190.seconds, runStart = 166.seconds).timerExecLines() shouldBe listOf("TimerReset 166.000000")
+            DemoPlaybackConfig.of("demo", 190.seconds, runStop = 22.seconds).timerExecLines() shouldBe listOf("TimerStop 22.000000")
+        }
     })

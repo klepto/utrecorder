@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.ut99.demo
 
 import dev.klepto.utrecorder.common.logger
+import dev.klepto.utrecorder.ut99.UtCompactIndex
 import dev.klepto.utrecorder.ut99.UtPlatform
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -12,11 +13,9 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Use [read] to read every record of a demo.
  *
- * @property frame The demo frame the packet was recorded in. Records of one frame share its number.
  * @property time The demo time the packet was sent at.
  */
 class UtDemoRecord private constructor(
-    val frame: Int,
     val time: Duration,
     private val bunches: List<Bunch>,
 ) {
@@ -93,7 +92,7 @@ class UtDemoRecord private constructor(
                 data: ByteArray,
                 index: Int,
             ): String? {
-                val length = compactIndexAt(data, index) ?: return null
+                val length = UtCompactIndex.read(data, index) ?: return null
                 val start = index + length.size
                 val framed =
                     length.value in MIN_STRING_BYTES..data.size - start &&
@@ -221,7 +220,7 @@ class UtDemoRecord private constructor(
          * many bytes ending in a null. If the payload holds no such string, returns `null` instead.
          */
         private fun string(): String? {
-            val length = compactIndexAt(data, position) ?: return null
+            val length = UtCompactIndex.read(data, position) ?: return null
             val start = position + length.size
             if (length.value !in 1..data.size - start) return null
 
@@ -243,17 +242,6 @@ class UtDemoRecord private constructor(
         val bytes: ByteArray,
     )
 
-    /**
-     * A compact index read out of a payload.
-     *
-     * @property value The signed value the index holds.
-     * @property size The number of bytes the index takes up.
-     */
-    private class CompactIndex(
-        val value: Int,
-        val size: Int,
-    )
-
     companion object {
         private const val CONTROL_CHANNEL = 0
         private const val HEADER_BYTES = 16
@@ -265,13 +253,6 @@ class UtDemoRecord private constructor(
         private const val TIME_HIGH_SHIFT = 20
         private const val FLOAT_MANTISSA_BITS = 23
         private const val TERMINATOR = Char.MIN_VALUE
-        private const val SIGN_BIT = 0x80
-        private const val FIRST_CONTINUATION_BIT = 0x40
-        private const val FIRST_VALUE_BITMASK = 0x3F
-        private const val FIRST_VALUE_BITS = 6
-        private const val CONTINUATION_BIT = 0x80
-        private const val VALUE_BITMASK = 0x7F
-        private const val VALUE_BITS = 7
         private val log = logger<UtDemoRecord>()
 
         /**
@@ -318,7 +299,7 @@ class UtDemoRecord private constructor(
                 log.warn { "Skipping the demo record of frame ${packet.frame}, whose packet does not decode" }
                 return null
             }
-            return UtDemoRecord(packet.frame, packet.time, bunches)
+            return UtDemoRecord(packet.time, bunches)
         }
 
         /**
@@ -342,7 +323,7 @@ class UtDemoRecord private constructor(
             return buildList {
                 while (reader.remaining > 0) {
                     // A set bit opens an acknowledgement of a packet id rather than a bunch.
-                    if (reader.bit() == 1) reader.int(MAX_PACKET_ID) else add(readBunch(reader) ?: return null)
+                    if (reader.bit() == 1) reader.int(MAX_PACKET_ID) else this += readBunch(reader) ?: return null
                 }
             }
         }
@@ -363,37 +344,6 @@ class UtDemoRecord private constructor(
             if (count > reader.remaining) return null
 
             return Bunch(channel, reader.bits(count))
-        }
-
-        /**
-         * Returns the compact index at [index] of [data]. If [data] ends before the compact index does, returns `null`
-         * instead.
-         *
-         * The first byte of a compact index holds a sign bit, a continuation bit and 6 bits of the value. Each further
-         * byte holds 7 more bits of the value and its own continuation bit. A byte follows while the byte before it
-         * sets its continuation bit.
-         */
-        private fun compactIndexAt(
-            data: ByteArray,
-            index: Int,
-        ): CompactIndex? {
-            val first = data.getOrNull(index)?.toUByte()?.toInt() ?: return null
-            var value = first and FIRST_VALUE_BITMASK
-            var more = first and FIRST_CONTINUATION_BIT != 0
-            var bits = FIRST_VALUE_BITS
-            var size = 1
-            while (more && bits < Int.SIZE_BITS) {
-                val next = data.getOrNull(index + size)?.toUByte()?.toInt() ?: return null
-                value = value or ((next and VALUE_BITMASK) shl bits)
-                more = next and CONTINUATION_BIT != 0
-                bits += VALUE_BITS
-                size++
-            }
-
-            return when {
-                first and SIGN_BIT != 0 -> CompactIndex(-value, size)
-                else -> CompactIndex(value, size)
-            }
         }
 
         /**

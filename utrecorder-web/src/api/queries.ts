@@ -75,8 +75,8 @@ export interface RecordingPages {
 /**
  * Pages through the finished recordings, `RECORDINGS_PAGE_SIZE` at a time. Each page asks for one recording more
  * than it shows, and another page follows only when that recording came back. The next page starts at the number of
- * recordings shown so far. `query.data` holds every shown recording, skipping one whose `capId` is already present.
- * It is `undefined` until the first page arrives.
+ * pages loaded times `RECORDINGS_PAGE_SIZE`, which still counts the recordings skipped below. `query.data` holds every
+ * shown recording, skipping one whose `capId` is already present. It is `undefined` until the first page arrives.
  */
 export const useRecordingPages = (): RecordingPages => {
   const query = useInfiniteQuery({

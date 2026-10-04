@@ -18,8 +18,8 @@ import kotlin.time.Instant
  * @property recordedAt The time the mp4 was stored, or `null` if it was not recorded by the server.
  * @property processingTime The time the last attempt took to produce the mp4, or `null` if it was not recorded by
  * the server.
- * @property itemId The id passed to `MediaUploader` for the item the mp4 was uploaded into, or `null` if the mp4 is not
- * in the Archive, or its file there has been deleted.
+ * @property itemId The id of the item in remote storage the mp4 was uploaded into, or `null` if the mp4 is not in remote
+ * storage, or its file there has been deleted.
  */
 @Serializable
 data class Recording(
@@ -37,37 +37,45 @@ data class Recording(
 
 /**
  * State of a [Recording].
+ *
+ * @property isCompleted `true` if the recording has been recorded and has not been beaten since. Only [Recorded],
+ * [Uploaded] and [Archived] are completed.
  */
 @Serializable
-enum class RecordingStatus {
+enum class RecordingStatus(
+    val isCompleted: Boolean,
+) {
     /** Waiting for a recorder. */
-    Pending,
+    Pending(isCompleted = false),
 
-    /** Taken by a recorder. Set to [Pending] again when a [RecordingService] starts. */
-    Recording,
+    /** Taken by a recorder. Set to [Pending] again when the server starts. */
+    Recording(isCompleted = false),
 
     /** Stored as an mp4. */
-    Recorded,
+    Recorded(isCompleted = true),
 
     /** Stored as an mp4 and uploaded to remote storage. */
-    Uploaded,
+    Uploaded(isCompleted = true),
 
     /** Uploaded, and confirmed by remote storage to hold an mp4 with the same checksum. */
-    Archived,
+    Archived(isCompleted = true),
 
     /**
      * Recorded, uploaded or archived, then beaten by a faster recording of the same player on the same map that has an
      * mp4. Kept as a tombstone, with every other field unchanged. Its [Recording.lastUpdate] is the time it became
      * outdated.
      */
-    Outdated,
-
-    /** Given up on after its last capture failed. Set to [Pending] again when a [RecordingService] starts. */
-    Failed,
+    Outdated(isCompleted = false),
 
     /**
-     * Given up on because its demo names a package that no source holds. Set to [Pending] again when a
-     * [RecordingService] starts.
+     * Given up on after its last capture failed. Set to [Pending] again when the server starts, and once every
+     * `server.recording.retry_interval` while the server runs.
      */
-    Unresolvable,
+    Failed(isCompleted = false),
+
+    /**
+     * Given up on because its demo names a package that no source holds. Set to [Pending] again when the server starts,
+     * and once every `server.recording.retry_interval` while the server runs.
+     */
+    Unresolvable(isCompleted = false),
 }

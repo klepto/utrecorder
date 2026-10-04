@@ -15,14 +15,11 @@ import dev.klepto.utrecorder.ut99.UtProcessFiles
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldStartWith
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
-import kotlin.io.path.exists
-import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -56,21 +53,6 @@ class FfmpegVideoCaptureTest :
                 val files = process.files(workspace)
                 files to process.executable(files)
             }
-
-        test("extractHooks writes the hooks into the System directory under the names of the workspace") {
-            workspace("video-capture", installation.systemDirectory, directories) { workspace ->
-                val paths = capture().extractHooks(workspace)
-
-                paths.forEach { path ->
-                    path.exists() shouldBe true
-                    path.parent shouldBe installation.systemDirectory
-                    path.name shouldStartWith "video-capture-"
-                }
-                if (UtPlatform.current() == UtPlatform.WINDOWS) {
-                    paths shouldBe listOf(workspace["uthooks.dll"], workspace["utinject.exe"])
-                }
-            }
-        }
 
         test("environment holds the port, the fps and the frame size of the format, and nothing else on Windows") {
             val environment = capture().environment(100, format)

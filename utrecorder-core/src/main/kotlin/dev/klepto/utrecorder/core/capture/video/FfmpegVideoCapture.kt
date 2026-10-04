@@ -4,7 +4,6 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
-import dev.klepto.utrecorder.common.io.Workspace
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.logger
@@ -29,11 +28,6 @@ import java.util.Locale
 import kotlin.time.DurationUnit
 
 /**
- * The logger of the video capture.
- */
-private val log = logger<FfmpegVideoCapture>()
-
-/**
  * The video capture of a recording: Unreal Tournament run with the hook library loaded, its clock stepped one frame at
  * a time, sending every rendered frame to a [FrameEncoder] on the loopback.
  *
@@ -42,10 +36,10 @@ private val log = logger<FfmpegVideoCapture>()
  * [VideoCaptureConfig.idleTimeout], however long the whole run takes. The frames are encoded into a video file in a
  * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number
  * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. Every line the hook library prints is logged at
- * DEBUG. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A run whose hook library reports
- * that it stopped the frame capture fails with an [IllegalStateException] naming the reason it gave. Every run renders
- * and encodes in the [VideoFormat] that [VideoCaptureConfig.format] picks from [DemoPlaybackConfig.runDuration] and
- * [audioBitrate].
+ * DEBUG. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A
+ * run whose hook library reports that it stopped the frame capture fails with an [IllegalStateException] naming the
+ * reason it gave. Every run renders and encodes in the [VideoFormat] that [VideoCaptureConfig.format] picks from
+ * [DemoPlaybackConfig.runDuration] and [audioBitrate].
  *
  * @property config The video capture configuration, carrying the tiers, the fps, the idle timeout and the renderer
  * tuning.
@@ -77,7 +71,8 @@ class FfmpegVideoCapture(
                 val frames = MutableStateFlow(0L)
                 val onFrames = frameProgress(description, frames, onProgress)
                 val encoder = FrameEncoder(config, format, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
-                val marks = DemoPlaybackMarks.parse(play(description, format, extractHooks(system), encoder, frames))
+                val hooks = DemoPlaybackHooks.extract(system)
+                val marks = DemoPlaybackMarks.parse(play(description, format, hooks, encoder, frames))
                 track(target, format, marks)
             }
         }
@@ -186,12 +181,6 @@ class FfmpegVideoCapture(
         )
 
     /**
-     * Extracts the `uthooks` hook library and, on Windows, the `utinject` injector into [system], and returns their
-     * paths. [system] names the files in the installation's `System` directory.
-     */
-    suspend fun extractHooks(system: Workspace): List<Path> = DemoPlaybackHooks.extract(system)
-
-    /**
      * Returns the environment the video capture runs under: the port, the render fps and the frame size of [format] the
      * hook library reads, plus the Linux environment on Linux.
      */
@@ -231,8 +220,8 @@ class FfmpegVideoCapture(
 
     /**
      * Returns the unstarted run that plays [description] at the frame size of [format]: without sound, and playing the
-     * exec script. On Windows the injector of [hooks] starts the game executable copy, and on Linux the copy starts
-     * directly. The HUD is hidden when the demo loads a Bunny Track mod older than `UTBT_BTMod_v18`.
+     * exec script. On Windows the injector of [hooks] starts the game executable copy, and on Linux the hook library of
+     * [hooks] is preloaded. The HUD is hidden when the demo loads a Bunny Track mod older than `UTBT_BTMod_v18`.
      */
     fun process(
         description: DemoPlaybackConfig,
@@ -250,24 +239,19 @@ class FfmpegVideoCapture(
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo:
-     * `SeekStart`, which skips the demo ahead to just before the run start once the ticks settle, the console's trim
-     * command `DemoFrames <render fps>`, `TimerReset <run start>`, which starts the trim at the Bunny Track
-     * timer reset nearest the run start, `TimerStop <run stop>`, which ends the run one second after the Bunny Track
-     * timer stops, `HideMessages`, which keeps chat and progress messages off the recorded HUD,
-     * and `SmoothRecorder`, which smooths the movement and view of the player who recorded the demo, when
-     * [VideoCaptureConfig.smoothRecorder] is on. If the demo shows
-     * no run start or no run stop, `TimerReset` or `TimerStop` is left out.
+     * `SeekStart`, which pauses the demo until the ticks settle, then seeks two seconds before the run start, or to the
+     * demo start without one, `DemoFrames <render fps>`, which turns on the spawn check, `TimerReset <run start>`, which
+     * makes the console signal the spawn when the demo reaches the run start, `TimerStop <run stop>`, which ends the run
+     * one second after the Bunny Track timer stops, `HideMessages`, which keeps chat and progress messages off the
+     * recorded HUD, and `SmoothRecorder`, which smooths the movement and view of the player who recorded the demo, when
+     * [VideoCaptureConfig.smoothRecorder] is on. If the demo shows no run start or no run stop, `TimerReset` or
+     * `TimerStop` is left out.
      */
     fun execScript(description: DemoPlaybackConfig): List<String> =
         buildList {
             this += "SeekStart"
             this += "DemoFrames %.6f".format(Locale.ROOT, config.renderFps().toDouble())
-            description.runStart?.let {
-                this += "TimerReset %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
-            }
-            description.runStop?.let {
-                this += "TimerStop %.6f".format(Locale.ROOT, it.toDouble(DurationUnit.SECONDS))
-            }
+            this += description.timerExecLines()
             this += "HideMessages"
             if (config.smoothRecorder) this += "SmoothRecorder"
         }
@@ -302,6 +286,11 @@ class FfmpegVideoCapture(
          * A line of the hook library that reports a frame capture stop, capturing its reason.
          */
         private val HOOK_STOP = Regex("""uthooks: (.*, capture stopped)""")
+
+        /**
+         * The logger of the video capture.
+         */
+        private val log = logger<FfmpegVideoCapture>()
 
         /**
          * Returns whether the demo of [description] loads a Bunny Track mod older than [BT_MOD_HUD_VERSION].

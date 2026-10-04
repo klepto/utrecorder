@@ -50,8 +50,8 @@ import kotlin.time.Duration.Companion.seconds
  * @property recordingRetryInterval How long the server waits between two passes that record again every recording it gave
  * up on.
  * @property recordingRecentAge The age up to which a demo is recent. An older demo is a backlog demo.
- * @property recordingBacklogBuffer The most recordings that may be recording or recorded without being uploaded when a
- * backlog demo is taken.
+ * @property recordingBacklogBuffer The most recordings that may be recording, or recorded at least [archiveDelay] ago
+ * without being uploaded, when a backlog demo is taken.
  * @property utbtApiUrl The base URL of the UTBT API that serves the cap list.
  * @property utbtDemoUrl The base URL a demo downloads from, followed by its cap id.
  * @property utbtCooldown How long the sync waits between two reads of the cap list.

@@ -42,7 +42,7 @@ class RecordingRepository(
     private val clock: Clock = Clock.System,
 ) {
     private val collection: CachedCollection<StoredRecording> = store.cachedCollection("recordings") { it.capId }
-    private val demoIndex = ConcurrentHashMap<String, Demo>()
+    private val demosByCapId = ConcurrentHashMap<String, Demo>()
     private val statusRevision = MutableStateFlow(0L)
 
     /**
@@ -194,8 +194,8 @@ class RecordingRepository(
      * changes and every demo added later is added to the index by [plusAssign].
      */
     private suspend fun demoIndex(): MutableMap<String, Demo> {
-        if (demoIndex.isEmpty()) demos.all().associateByTo(demoIndex) { it.capId }
-        return demoIndex
+        if (demosByCapId.isEmpty()) demos.all().associateByTo(demosByCapId) { it.capId }
+        return demosByCapId
     }
 
     /**

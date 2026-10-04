@@ -77,27 +77,18 @@ class FfmpegMediaTool : MediaTool {
         libraryDirectory: Path,
         arguments: List<String> = emptyList(),
         operatingSystem: OperatingSystem = OperatingSystem.current(),
-    ): Executable =
-        when (operatingSystem) {
-            LINUX -> executable(Path.of("nice"), listOf("-n", "10", "$path") + arguments, libraryDirectory, operatingSystem)
-            WINDOWS -> executable(path, arguments, libraryDirectory, operatingSystem)
-        }
-
-    /**
-     * Returns the executable that runs [command] with [arguments] from [libraryDirectory], with [libraryDirectory] put
-     * in front of the library path of [operatingSystem].
-     */
-    private fun executable(
-        command: Path,
-        arguments: List<String>,
-        libraryDirectory: Path,
-        operatingSystem: OperatingSystem,
-    ): Executable =
-        Executable.build(command) {
-            this.arguments += arguments
+    ): Executable {
+        val (program, leadingArguments) =
+            when (operatingSystem) {
+                LINUX -> Path.of("nice") to listOf("-n", "10", "$path")
+                WINDOWS -> path to emptyList<String>()
+            }
+        return Executable.build(program) {
+            this.arguments += leadingArguments + arguments
             workingDirectory = libraryDirectory
             prependLibraryPath(libraryDirectory, operatingSystem)
         }
+    }
 
     /**
      * Returns the output lines of ffprobe run on [file] with [arguments], printing each value without its key.

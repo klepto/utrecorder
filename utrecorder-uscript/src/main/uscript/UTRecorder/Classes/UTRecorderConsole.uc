@@ -50,7 +50,7 @@ const SEEK_MIN_DISTANCE = 0.5;
 // Seconds of demo time the end mark follows the stop of the Bunny Track timer.
 const TIMER_END_DELAY = 1.0;
 
-// Turns on the marks, the exit and the warp-zone unlinking.
+// Turns on the start and end marks, the exit and the warp-zone unlinking.
 // Off by default.
 var config bool  bAutoExit;
 
@@ -77,7 +77,8 @@ var config float PlaybackFrameRate;
 // Health at which a dead followed player counts as spawned.
 var config int SpawnHealth;
 
-// Seconds of playback after which the spawn is signalled anyway. 0 disables.
+// Seconds of playback after which the spawn is signalled anyway when TimerReset
+// was not run. 0 disables.
 var config float SpawnTimeout;
 
 var bool bNoRendering;    // DisableRendering was run

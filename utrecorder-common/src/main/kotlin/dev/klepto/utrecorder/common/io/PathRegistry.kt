@@ -32,7 +32,7 @@ class PathRegistry(
         }
 
     /**
-     * Returns the absolute paths roots of the registered paths that exist.
+     * Returns the registered paths that exist and lie under no other of them, as absolute normalized paths.
      */
     suspend fun getRoots(): Set<Path> {
         val existing = getAll().map { it.toAbsolutePath().normalize() }

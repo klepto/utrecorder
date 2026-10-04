@@ -66,8 +66,8 @@ class FrameEncoder(
      *
      * @throws IllegalStateException if the hook library does not connect before [block] returns or closes the connection
      * inside a frame, if ffmpeg fails the capture, or if the capture does not exist or holds no frames.
-     * @throws TimeoutException if ffmpeg does not finish within [VideoCaptureConfig.finishTimeout] after [block] returns.
-     * ffmpeg is killed first.
+     * @throws TimeoutException if the hook library does not connect within [listenTimeout], or if ffmpeg does not finish
+     * within [VideoCaptureConfig.finishTimeout] after [block] returns. ffmpeg is killed first.
      */
     suspend fun <T> encode(block: suspend Connection.() -> T): Pair<T, Path> =
         listen().use { listener ->
@@ -225,8 +225,9 @@ class FrameEncoder(
     }
 
     /**
-     * Returns the motion blur step: every [VideoCaptureConfig.motionBlurSamples] rendered frames blended into one, at
-     * full weight, with the rendered frame on either side of them at quarter weight.
+     * Returns the motion blur step: one encoded frame for every [VideoCaptureConfig.motionBlurSamples] rendered frames.
+     * Each encoded frame blends the `motionBlurSamples - 1` rendered frames of its own time slice at full weight with the
+     * rendered frame on either edge at quarter weight. Each edge frame is shared with the neighboring encoded frame.
      */
     private fun motionBlur(): String {
         val samples = config.motionBlurSamples

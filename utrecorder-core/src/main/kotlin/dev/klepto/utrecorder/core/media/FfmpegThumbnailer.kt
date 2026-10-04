@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.Locale
 import kotlin.io.path.absolutePathString
+import kotlin.io.path.deleteIfExists
 
 /**
  * Thumbnail of a recording: ffmpeg writing one frame of a finished mp4 as a JPEG.
@@ -19,7 +20,7 @@ class FfmpegThumbnailer(
         time: Double,
         target: Path,
     ): Path {
-        withContext(Dispatchers.IO) { target.toFile().delete() }
+        withContext(Dispatchers.IO) { target.deleteIfExists() }
         ffmpeg.run(*arguments(video, time, target).toTypedArray())
         return target
     }

@@ -90,8 +90,14 @@ class ArchiveMediaUploader(
                 append("-target", "metadata")
                 append("-patch", metadataPatch(metadata).toString())
             }
-        client.submitForm("https://archive.org/metadata/${identifier(id)}", form) {
-            header(HttpHeaders.Authorization, authorization)
+        val response =
+            client.submitForm("https://archive.org/metadata/${identifier(id)}", form) {
+                expectSuccess = false
+                header(HttpHeaders.Authorization, authorization)
+            }
+        val body = response.bodyAsText()
+        check(response.status.isSuccess() || isUnchanged(response.status, body)) {
+            "The Archive refused to describe ${identifier(id)}: ${response.status} $body"
         }
     }
 
@@ -143,6 +149,16 @@ class ArchiveMediaUploader(
     private companion object {
         val JSON: Json = Json { ignoreUnknownKeys = true }
         const val IDENTIFIER_MAX_LENGTH: Int = 100
+        const val UNCHANGED_METADATA_ERROR: String = "no changes to _meta.xml"
+
+        /**
+         * Returns `true` if the Metadata API answered [status] with [body] because the item already holds the metadata it
+         * was sent.
+         */
+        fun isUnchanged(
+            status: HttpStatusCode,
+            body: String,
+        ): Boolean = status == HttpStatusCode.BadRequest && UNCHANGED_METADATA_ERROR in body
 
         /**
          * Returns [value] as an Archive metadata header value: `uri(<value>)`, with [value] percent-encoded as UTF-8.

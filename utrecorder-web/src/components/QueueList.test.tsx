@@ -15,7 +15,7 @@ const Connected = () => {
   );
 };
 
-/** Renders the queue with the jobs `running`, fetched `age` milliseconds ago. */
+/** Returns the queue with the jobs `running`, fetched `age` milliseconds ago, for the test to render. */
 const listWith = (running: Job[] | undefined, age = 0) => {
   return (
     <MantineProvider forceColorScheme="dark">
