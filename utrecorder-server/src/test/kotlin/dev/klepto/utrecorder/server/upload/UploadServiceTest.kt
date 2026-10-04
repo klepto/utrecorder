@@ -43,6 +43,7 @@ import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 class UploadServiceTest :
@@ -116,6 +117,7 @@ class UploadServiceTest :
             archiveDelay: Duration = Duration.ZERO,
             demos: List<Demo> = statuses.keys.mapIndexed { minute, capId -> demo(capId, minute) },
             seed: (Recording) -> Recording = { it },
+            timeSource: TimeSource = TimeSource.Monotonic,
             block: suspend (RecordingRepository) -> Unit,
         ) {
             val recordings = createTempDirectory(root, "recordings")
@@ -134,7 +136,7 @@ class UploadServiceTest :
                 repository += demos
                 statuses.forEach { (capId, status) -> repository.update(capId) { seed(it.copy(status = status, md5 = md5s[capId])) } }
                 coroutineScope {
-                    val job = launch { UploadService(repository, uploader, config, clock).start() }
+                    val job = launch { UploadService(repository, uploader, config, clock, timeSource).start() }
                     block(repository)
                     job.cancelAndJoin()
                 }
@@ -186,22 +188,27 @@ class UploadServiceTest :
         }
 
         test("starts two uploads one day divided by the daily uploads apart") {
-            val starts = CopyOnWriteArrayList<TimeSource.Monotonic.ValueTimeMark>()
-            val uploader = uploader { _, _, _ -> starts += TimeSource.Monotonic.markNow() }
+            val marks = CopyOnWriteArrayList<TimeSource.Monotonic.ValueTimeMark>()
+            val timeSource =
+                object : TimeSource {
+                    override fun markNow(): TimeMark = TimeSource.Monotonic.markNow().also { marks += it }
+                }
+            val uploads = CopyOnWriteArrayList<Pair<TimeSource.Monotonic.ValueTimeMark, TimeSource.Monotonic.ValueTimeMark>>()
+            val uploader = uploader { _, _, _ -> uploads += marks.last() to TimeSource.Monotonic.markNow() }
             running(
                 mapOf("a" to Recorded, "b" to Recorded, "c" to Recorded),
                 listOf("a", "b", "c"),
                 uploader,
                 dailyUploads = 432_000,
+                timeSource = timeSource,
             ) { repository ->
                 eventually(5.seconds) { repository["c"]?.status shouldBe Uploaded }
             }
 
-            // The service measures from before it picks and hashes the mp4, the uploader only sees the upload itself, so
-            // a gap may fall short of 200 ms by however much faster the second pick and hash ran than the first.
-            starts
-                .zipWithNext { first, second -> second - first }
-                .forEach { it shouldBeGreaterThanOrEqualTo 190.milliseconds }
+            // Measured from the mark the service takes before it picks and hashes an mp4, not from the upload itself.
+            uploads
+                .zipWithNext { (marked, _), (_, started) -> started - marked }
+                .forEach { it shouldBeGreaterThanOrEqualTo 200.milliseconds }
         }
 
         test("checks uploaded recordings while waiting for the next upload") {

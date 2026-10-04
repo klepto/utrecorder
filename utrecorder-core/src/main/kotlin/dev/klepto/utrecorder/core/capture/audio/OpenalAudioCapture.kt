@@ -217,8 +217,8 @@ class OpenalAudioCapture(
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo:
-     * `SeekStart`, which pauses the demo until the ticks settle, then seeks two seconds before the run start, or to the
-     * demo start without one, `DemoFrames <mixer periods per second>`, which turns on the spawn check that arms the hook
+     * `SeekStart`, which pauses the demo until the ticks settle, then resumes it time-based and seeks two seconds before
+     * the run start, or to the demo start without one, `DemoFrames <mixer periods per second>`, which turns on the spawn check that arms the hook
      * library and logs the spawn mark, `TimerReset <run start>`, which makes the console signal the spawn when the demo
      * reaches the run start, `TimerStop <run stop>`, which ends the run one second after the Bunny Track timer stops,
      * and `DisableRendering` when the config turns the audio capture's rendering off. If the demo shows no run start or

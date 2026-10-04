@@ -1,8 +1,8 @@
 import { HttpResponse, http } from "msw";
 import { jobs, queue, recordings } from "./fixtures";
 
-const DEFAULT_LIMIT = 10;
-const MAX_LIMIT = 50;
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 100;
 
 /** Returns the non-negative integer `value`, `fallback` if it is absent, or `null` if it is not one. */
 const nonNegativeInteger = (value: string | null, fallback: number): number | null => {

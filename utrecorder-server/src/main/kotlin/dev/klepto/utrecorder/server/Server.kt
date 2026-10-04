@@ -7,6 +7,11 @@ import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.demo.DemoService
 import dev.klepto.utrecorder.server.demo.UtbtDemoFetcher
 import dev.klepto.utrecorder.server.http.HttpService
+import dev.klepto.utrecorder.server.http.JobEndpoint
+import dev.klepto.utrecorder.server.http.QueueEndpoint
+import dev.klepto.utrecorder.server.http.RecordingEndpoint
+import dev.klepto.utrecorder.server.http.VideoEndpoint
+import dev.klepto.utrecorder.server.http.WebEndpoint
 import dev.klepto.utrecorder.server.recording.DefaultRecorderProvider
 import dev.klepto.utrecorder.server.recording.RecordingJobs
 import dev.klepto.utrecorder.server.recording.RecordingQueue
@@ -52,7 +57,16 @@ object Server {
                     RecordingService(repository, queue, listOf(recorder), config, jobs),
                     uploader?.let { UploadService(repository, it, config) },
                     cache,
-                    HttpService(repository, queue, jobs, cache, config),
+                    HttpService(
+                        listOf(
+                            VideoEndpoint(repository, cache, config),
+                            RecordingEndpoint(repository, config),
+                            JobEndpoint(jobs),
+                            QueueEndpoint(queue),
+                            WebEndpoint(),
+                        ),
+                        config,
+                    ),
                 )
             coroutineScope {
                 services.forEach { launch { it.start() } }

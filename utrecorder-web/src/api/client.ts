@@ -20,7 +20,7 @@ export const fetchJobs = (): Promise<Job[]> => {
 
 /** Fetches the next demos to be recorded, in the order they are taken. */
 export const fetchQueue = (): Promise<Demo[]> => {
-  return get("/api/queue");
+  return get("/api/queue?limit=10");
 };
 
 /** Fetches one page of the finished recordings, newest first. */

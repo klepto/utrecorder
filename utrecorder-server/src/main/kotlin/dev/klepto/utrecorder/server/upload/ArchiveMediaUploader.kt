@@ -73,18 +73,16 @@ class ArchiveMediaUploader(
     override suspend fun isUploaded(
         id: String,
         md5: String,
-    ): Boolean {
-        val body = client.get("https://archive.org/metadata/${identifier(id)}").bodyAsText()
-        return JSON
-            .decodeFromString<ItemMetadata>(body)
+    ): Boolean =
+        readItem(id)
             .files
             .any { it.md5 == md5 }
-    }
 
     override suspend fun describe(
         id: String,
         metadata: MediaMetadata,
     ) {
+        if (readItem(id).metadata?.title == null) return
         val form =
             parameters {
                 append("-target", "metadata")
@@ -127,13 +125,33 @@ class ArchiveMediaUploader(
     private fun identifier(id: String): String = "${config.archivePrefix}-$id".take(IDENTIFIER_MAX_LENGTH)
 
     /**
+     * Returns the metadata of the item [id]. Throws if the item cannot be read.
+     */
+    private suspend fun readItem(id: String): ItemMetadata {
+        val body = client.get("https://archive.org/metadata/${identifier(id)}").bodyAsText()
+        return JSON.decodeFromString(body)
+    }
+
+    /**
      * Metadata of one Archive item.
      *
      * @property files The files of the item. The Archive leaves it out for an item that does not exist.
+     * @property metadata The fields of the item, or `null` if the Archive lists none.
      */
     @Serializable
     private data class ItemMetadata(
         val files: List<ItemFile> = emptyList(),
+        val metadata: ItemFields? = null,
+    )
+
+    /**
+     * Fields of one Archive item.
+     *
+     * @property title The title of the item, or `null` until the Archive has created the item.
+     */
+    @Serializable
+    private data class ItemFields(
+        val title: String? = null,
     )
 
     /**

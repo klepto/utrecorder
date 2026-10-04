@@ -83,7 +83,7 @@ class DemoPlayback(
      * Returns the unstarted run named [name] that plays [description] windowed at [viewport].
      *
      * The run starts from the playback inis of [DemoPlaybackResources] on the `Entry` map, with the values of
-     * [description] in its game ini, and its exec script plays the demo on its own clock with `?timebased`. On Linux,
+     * [description] in its game ini, and its exec script plays the demo frame-based, one demo frame per tick. On Linux,
      * the run starts through `nice -n 10`, at a lower CPU priority. [configure] sets the rest of the run after that.
      * Lines it adds to `exec` run after the line that plays the demo.
      */
@@ -95,7 +95,7 @@ class DemoPlayback(
     ): UtProcess =
         installation.process(name) {
             map = "Entry"
-            exec = listOf("${description.execLine}?timebased")
+            exec = listOf(description.execLine)
             windowed = true
             baseGameIni = DemoPlaybackResources.gameIni
             baseUserIni = DemoPlaybackResources.userIni

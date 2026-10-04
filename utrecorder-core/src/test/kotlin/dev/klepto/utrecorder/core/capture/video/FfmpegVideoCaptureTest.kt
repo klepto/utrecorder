@@ -163,19 +163,28 @@ class FfmpegVideoCaptureTest :
             executable.arguments shouldContain "-forcelogflush"
         }
 
-        fun hideHud(btMod: String): List<String> {
-            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, listOf(UtPackage.named(btMod, "")))
+        fun hideHud(packageName: String): List<String> {
+            val packages = listOf(UtPackage.named(packageName, ""))
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO, packages)
             val userIni = UtIni("")
             capture().process(description, format, 100, hooks).userIniEdits.forEach { userIni.it() }
             return userIni["Botpack.ChallengeHUD", "bHideHUD"]
         }
 
         test("process hides the HUD of a demo that loads a Bunny Track mod older than version 18") {
-            hideHud("UTBT_BTMod_v13") shouldBe listOf("True")
+            hideHud("UTBT_BTMod_v9CE") shouldBe listOf("True")
+        }
+
+        test("process hides the HUD of a demo that loads no Bunny Track mod") {
+            hideHud("Botpack") shouldBe listOf("True")
         }
 
         test("process leaves the HUD of a demo that loads Bunny Track mod version 18 alone") {
             hideHud("UTBT_BTMod_v18") shouldBe emptyList()
+        }
+
+        test("process leaves the HUD of a demo that loads a suffixed Bunny Track mod of version 18 or later alone") {
+            hideHud("UTBT_BTMod_v19CE") shouldBe emptyList()
         }
 
         test("stopReason returns the reason of a line that reports the frame capture stopped") {

@@ -13,10 +13,10 @@
 // bAutoExit is on or not:
 //   DisableRendering  stop drawing the world,
 //   HideMessages      keep chat and progress messages off the HUD,
-//   SeekStart         pause the demo until ticks settle, then seek to
-//                     SEEK_PREROLL seconds before the run start TimerReset
-//                     set, or to the demo start without one, without arming
-//                     the hook library,
+//   SeekStart         pause the demo until ticks settle, then resume it
+//                     time-based and seek to SEEK_PREROLL seconds before the
+//                     run start TimerReset set, or to the demo start without
+//                     one, without arming the hook library,
 //   DemoFrames <rate> turn on the spawn check when the rate is above 0: set
 //                     the demo speed to 1 once the followed player spawns,
 //                     which arms the hook library, and log a spawn mark on
@@ -49,6 +49,8 @@ const SEEK_PREROLL = 2.0;
 const SEEK_MIN_DISTANCE = 0.5;
 // Seconds of demo time the end mark follows the stop of the Bunny Track timer.
 const TIMER_END_DELAY = 1.0;
+// udemo's playback mode that advances the demo by each tick's delta.
+const PLAYBACK_TIME_BASED = 0;
 
 // Turns on the start and end marks, the exit and the warp-zone unlinking.
 // Off by default.
@@ -316,9 +318,9 @@ function MuteHUD(DemoPlaybackSpec Spec, PlayerPawn Linked)
 		Log("UTRecorder: muted the HUD of" @ Linked, 'UTRecorder');
 }
 
-// Pauses the demo until ticks settle, then seeks to SEEK_PREROLL seconds
-// before the run start, or to the demo start without one, before the demo
-// reaches the start.
+// Pauses the demo until ticks settle, then resumes it time-based and seeks to
+// SEEK_PREROLL seconds before the run start, or to the demo start without one,
+// before the demo reaches the start.
 exec function SeekStart()
 {
 	bSeekStart = True;
@@ -326,8 +328,8 @@ exec function SeekStart()
 }
 
 // True while the seek SeekStart asked for is pending or still seeking.
-// Pauses the demo on the first call. Resumes it and issues the seek once
-// SETTLED_TICKS ticks in a row are shorter than SETTLED_DELTA.
+// Pauses the demo on the first call. Resumes it time-based and issues the
+// seek once SETTLED_TICKS ticks in a row are shorter than SETTLED_DELTA.
 function bool SeekingStart(DemoPlaybackSpec Spec, float Delta)
 {
 	if (!bSeekStart)
@@ -353,7 +355,8 @@ function bool SeekingStart(DemoPlaybackSpec Spec, float Delta)
 
 	bSought = True;
 	Spec.Driver.PauseDemo(False);
-	Log("UTRecorder: resumed the demo at demo time" @ Spec.Driver.GetCurrentTime(), 'UTRecorder');
+	Spec.Driver.SetPlayBackMode(PLAYBACK_TIME_BASED);
+	Log("UTRecorder: resumed the demo time-based at demo time" @ Spec.Driver.GetCurrentTime(), 'UTRecorder');
 	SeekWithoutArming(Spec, FMax(0.0, RunStart - SEEK_PREROLL));
 	return Spec.SeekTick > 0 || Spec.bSeeking;
 }

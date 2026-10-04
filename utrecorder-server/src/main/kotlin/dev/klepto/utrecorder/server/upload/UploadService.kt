@@ -55,12 +55,14 @@ import kotlin.time.TimeSource
  * @property uploader The remote storage the mp4 files are uploaded to.
  * @property config The recordings directory, the upload interval, the daily uploads and the archive delay.
  * @property clock The source of the time an unconfirmed upload and the archive delay are measured against.
+ * @property timeSource The source of the time measured from the start of an upload to the start of the next.
  */
 class UploadService(
     private val repository: RecordingRepository,
     private val uploader: MediaUploader,
     private val config: ServerConfig = ServerConfig(),
     private val clock: Clock = Clock.System,
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) : Service {
     /**
      * Cap ids of the recordings whose last upload failed, the one that failed longest ago first.
@@ -93,7 +95,7 @@ class UploadService(
      */
     private suspend fun uploadLoop() {
         while (isRunning()) {
-            val start = TimeSource.Monotonic.markNow()
+            val start = timeSource.markNow()
             val wait = uploadNext()
             delay(wait - start.elapsedNow())
         }

@@ -221,7 +221,7 @@ class FfmpegVideoCapture(
     /**
      * Returns the unstarted run that plays [description] at the frame size of [format]: without sound, and playing the
      * exec script. On Windows the injector of [hooks] starts the game executable copy, and on Linux the hook library of
-     * [hooks] is preloaded. The HUD is hidden when the demo loads a Bunny Track mod older than `UTBT_BTMod_v18`.
+     * [hooks] is preloaded. The HUD is hidden unless the demo loads `UTBT_BTMod_v18` or a later Bunny Track mod.
      */
     fun process(
         description: DemoPlaybackConfig,
@@ -239,8 +239,8 @@ class FfmpegVideoCapture(
 
     /**
      * Returns the lines the capture adds to the exec script after the line that plays [description]'s demo:
-     * `SeekStart`, which pauses the demo until the ticks settle, then seeks two seconds before the run start, or to the
-     * demo start without one, `DemoFrames <render fps>`, which turns on the spawn check, `TimerReset <run start>`, which
+     * `SeekStart`, which pauses the demo until the ticks settle, then resumes it time-based and seeks two seconds before
+     * the run start, or to the demo start without one, `DemoFrames <render fps>`, which turns on the spawn check, `TimerReset <run start>`, which
      * makes the console signal the spawn when the demo reaches the run start, `TimerStop <run stop>`, which ends the run
      * one second after the Bunny Track timer stops, `HideMessages`, which keeps chat and progress messages off the
      * recorded HUD, and `SmoothRecorder`, which smooths the movement and view of the player who recorded the demo, when
@@ -278,9 +278,10 @@ class FfmpegVideoCapture(
         private const val BT_MOD_HUD_VERSION = 18
 
         /**
-         * The name of a Bunny Track mod package, capturing its version.
+         * The name of a Bunny Track mod package, capturing its version without a suffix such as the `CE` of
+         * `UTBT_BTMod_v9CE`.
          */
-        private val BT_MOD = Regex("""UTBT_BTMod_v(\d+)""", RegexOption.IGNORE_CASE)
+        private val BT_MOD = Regex("""UTBT_BTMod_v(\d+)\w*""", RegexOption.IGNORE_CASE)
 
         /**
          * A line of the hook library that reports a frame capture stop, capturing its reason.
@@ -293,11 +294,11 @@ class FfmpegVideoCapture(
         private val log = logger<FfmpegVideoCapture>()
 
         /**
-         * Returns whether the demo of [description] loads a Bunny Track mod older than [BT_MOD_HUD_VERSION].
+         * Returns whether the demo of [description] loads no Bunny Track mod of version [BT_MOD_HUD_VERSION] or later.
          */
         private fun hidesHud(description: DemoPlaybackConfig): Boolean =
             description.packages
                 .mapNotNull { BT_MOD.matchEntire(it.name) }
-                .any { it.groupValues[1].toInt() < BT_MOD_HUD_VERSION }
+                .none { it.groupValues[1].toInt() >= BT_MOD_HUD_VERSION }
     }
 }

@@ -29,8 +29,8 @@ describe("client", () => {
     expect(recordings[3].recordedAt).toBeNull();
   });
 
-  test("caps the limit at 50", async () => {
-    const recordings = await fetchRecordings({ limit: 100, offset: 0 });
+  test("caps the limit at 100", async () => {
+    const recordings = await fetchRecordings({ limit: 150, offset: 0 });
 
     expect(recordings).toHaveLength(24);
   });

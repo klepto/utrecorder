@@ -30,7 +30,7 @@ interface MediaUploader {
 
     /**
      * Sets the title and description of the existing item [id] to those of [metadata]. Returns normally if the item
-     * already has them. Throws if the item cannot be changed.
+     * already has them, or if the item is still being created by an [upload]. Throws if the item cannot be changed.
      */
     suspend fun describe(
         id: String,

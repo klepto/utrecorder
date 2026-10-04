@@ -36,6 +36,19 @@ class ArchiveMediaUploaderTest :
                 respond(body, status, headersOf(HttpHeaders.ContentType, "application/json"))
             }
 
+        fun describeEngine(
+            item: String,
+            body: String = "",
+            status: HttpStatusCode = HttpStatusCode.OK,
+        ): MockEngine =
+            MockEngine { request ->
+                val headers = headersOf(HttpHeaders.ContentType, "application/json")
+                when (request.method) {
+                    HttpMethod.Get -> respond(item, HttpStatusCode.OK, headers)
+                    else -> respond(body, status, headers)
+                }
+            }
+
         suspend fun withMp4(block: suspend (Path) -> Unit) {
             val file = createTempFile("archive-upload", ".mp4")
             try {
@@ -121,11 +134,10 @@ class ArchiveMediaUploaderTest :
         }
 
         test("describes an item with one metadata POST replacing its title and description") {
-            val engine = engine("""{"success":true}""")
+            val engine = describeEngine("""{"metadata":{"title":"Old"}}""", """{"success":true}""")
             ArchiveMediaUploader(config, engine).describe(id, metadata)
 
-            val request = engine.requestHistory.single()
-            request.method shouldBe HttpMethod.Post
+            val request = engine.requestHistory.single { it.method == HttpMethod.Post }
             request.url.toString() shouldBe "https://archive.org/metadata/ut99-bt-$id"
             request.headers[HttpHeaders.Authorization] shouldBe "LOW access:secret"
             val form = (request.body as FormDataContent).formData
@@ -139,12 +151,24 @@ class ArchiveMediaUploaderTest :
         test("treats a metadata POST that changes nothing as done") {
             val body = """{"success":false,"error":"no changes to _meta.xml"}"""
 
-            ArchiveMediaUploader(config, engine(body, HttpStatusCode.BadRequest)).describe(id, metadata)
+            val engine = describeEngine("""{"metadata":{"title":"A & B"}}""", body, HttpStatusCode.BadRequest)
+
+            ArchiveMediaUploader(config, engine).describe(id, metadata)
+        }
+
+        test("describes nothing while the Archive has not yet created the item") {
+            val engine = describeEngine("""{"metadata":{"identifier":"ut99-bt-$id"}}""")
+            ArchiveMediaUploader(config, engine).describe(id, metadata)
+
+            val request = engine.requestHistory.single()
+            request.method shouldBe HttpMethod.Get
+            request.url.toString() shouldBe "https://archive.org/metadata/ut99-bt-$id"
         }
 
         test("throws when the metadata POST fails") {
             val body = """{"success":false,"error":"invalid patch"}"""
-            val uploader = ArchiveMediaUploader(config, engine(body, HttpStatusCode.BadRequest))
+            val engine = describeEngine("""{"metadata":{"title":"Old"}}""", body, HttpStatusCode.BadRequest)
+            val uploader = ArchiveMediaUploader(config, engine)
 
             shouldThrow<IllegalStateException> { uploader.describe(id, metadata) }
         }

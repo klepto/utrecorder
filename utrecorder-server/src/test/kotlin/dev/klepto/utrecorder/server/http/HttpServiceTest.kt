@@ -2,32 +2,10 @@ package dev.klepto.utrecorder.server.http
 
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
-import dev.klepto.utrecorder.common.Progress
-import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.server.ServerConfig
-import dev.klepto.utrecorder.server.cache.CacheService
-import dev.klepto.utrecorder.server.database.SqliteDocumentStore
-import dev.klepto.utrecorder.server.demo.Demo
-import dev.klepto.utrecorder.server.demo.DemoRepository
-import dev.klepto.utrecorder.server.recording.RecordingJobs
-import dev.klepto.utrecorder.server.recording.RecordingQueue
-import dev.klepto.utrecorder.server.recording.RecordingRepository
-import dev.klepto.utrecorder.server.recording.RecordingStatus
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
-import dev.klepto.utrecorder.server.upload.MediaMetadata
-import dev.klepto.utrecorder.server.upload.MediaUploader
-import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.string.shouldContain
-import io.kotest.matchers.string.shouldNotContain
 import io.ktor.client.request.get
 import io.ktor.client.request.head
 import io.ktor.client.request.header
@@ -36,513 +14,60 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.get
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import java.nio.file.Path
-import java.util.concurrent.atomic.AtomicReference
-import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeText
-import kotlin.time.Clock
-import kotlin.time.Duration.Companion.hours
-import kotlin.time.Duration.Companion.seconds
-import kotlin.time.Instant
 
 class HttpServiceTest :
     FunSpec({
         val root = tempdir().toPath()
-        val now = AtomicReference(Instant.parse("2026-09-27T08:00:00Z"))
-        val clock =
-            object : Clock {
-                override fun now(): Instant = now.get()
-            }
 
-        val cache = AtomicReference<CacheService>()
-
-        beforeTest { now.set(Instant.parse("2026-09-27T08:00:00Z")) }
-
-        fun demo(
-            capId: String,
-            timestamp: Instant = Instant.parse("2026-09-26T12:00:00Z"),
-        ): Demo =
-            Demo(
-                capId = capId,
-                map = "CTF-BT-Maverick",
-                player = "klepto",
-                capTime = 10.seconds,
-                timestamp = timestamp,
-                demoUrl = "http://api.utbt.net/demos/$capId",
-            )
-
-        fun capIds(body: String): List<String> =
-            Json
-                .parseToJsonElement(body)
-                .jsonArray
-                .map {
-                    it.jsonObject["demo"]!!
-                        .jsonObject["capId"]!!
-                        .jsonPrimitive.content
-                }
-
-        val uploader =
-            object : MediaUploader {
-                override suspend fun upload(
-                    id: String,
-                    file: Path,
-                    metadata: MediaMetadata,
-                ) {}
-
-                override suspend fun isUploaded(
-                    id: String,
-                    md5: String,
-                ): Boolean = true
-
-                override suspend fun describe(
-                    id: String,
-                    metadata: MediaMetadata,
-                ) {}
-
-                override suspend fun delete(
-                    id: String,
-                    name: String,
-                ) {}
-
-                override fun downloadUrl(
-                    id: String,
-                    name: String,
-                ): String = "https://archive.org/download/ut99-bt-$id/$name"
-            }
-
-        suspend fun http(
-            statuses: Map<String, RecordingStatus>,
-            mp4s: List<String> = emptyList(),
-            thumbnails: List<String> = emptyList(),
-            archive: Boolean = true,
-            jobs: RecordingJobs = RecordingJobs(),
-            trustForwardedHeaders: Boolean = false,
-            queued: Boolean = false,
-            block: suspend ApplicationTestBuilder.(RecordingRepository) -> Unit,
-        ) {
+        suspend fun http(block: suspend ApplicationTestBuilder.() -> Unit) {
             val directory = createTempDirectory(root, "http")
-            val recordings = directory.resolve("recordings").createDirectories()
-            mp4s.forEach { recordings.resolve("$it.mp4").writeText("0123456789") }
-            val thumbnailDirectory = directory.resolve("thumbnails").createDirectories()
-            thumbnails.forEach { thumbnailDirectory.resolve("$it.jpg").writeText("jpg") }
+            val mp4 = directory.resolve("video.mp4")
+            mp4.writeText("0123456789")
+            val text = "0123456789".repeat(100)
+            val endpoint =
+                object : Endpoint {
+                    override fun install(route: Route) {
+                        route.get("/html") { call.respondText("<p>$text</p>", ContentType.Text.Html) }
+                        route.get("/json") { call.respond(listOf(text)) }
+                        route.get("/mp4") { call.respondFile(mp4.toFile()) }
+                    }
+                }
             val config =
                 ServerConfig(
                     ConfigReader.EMPTY,
                     directories = DirectoriesConfig(ConfigReader.EMPTY, home = directory.resolve("home")),
-                    recordings = recordings,
-                    thumbnails = thumbnailDirectory,
-                    trustForwardedHeaders = trustForwardedHeaders,
                 )
-            SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
-                val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, clock)
-                repository += statuses.keys.map { demo(it) }
-                statuses.forEach { (capId, status) -> repository.finish(capId, status) }
-                cache.set(CacheService(repository, uploader.takeIf { archive }, config, clock))
-                val queue = RecordingQueue(demos, repository, config, clock)
-                val service = HttpService(repository, queue, jobs, cache.get(), config)
-                testApplication {
-                    application { service.module(this) }
-                    coroutineScope {
-                        val job = if (queued) launch { queue.start() } else null
-                        block(repository)
-                        job?.cancelAndJoin()
-                    }
-                }
+            testApplication {
+                application { HttpService(listOf(endpoint), config).module(this) }
+                block()
             }
         }
 
-        test("answers index.html without caching for every path the site routes") {
-            http(emptyMap()) {
-                listOf("/", "/recordings", "/about", "/recordings/unknown").forEach { path ->
-                    val response = client.get(path)
-
-                    response.status shouldBe HttpStatusCode.OK
-                    response.contentType()?.withoutParameters() shouldBe ContentType.Text.Html
-                    response.headers[HttpHeaders.CacheControl] shouldBe "no-cache"
-                    response.bodyAsText() shouldContain "<div id=\"root\">"
-                }
-            }
-        }
-
-        test("answers an asset with an immutable cache header") {
-            http(emptyMap()) {
-                val asset = Regex("/assets/[^\"]+\\.js").find(client.get("/").bodyAsText())!!.value
-                val response = client.get(asset)
+        test("answers HEAD with the headers of GET and no body") {
+            http {
+                val response = client.head("/mp4")
 
                 response.status shouldBe HttpStatusCode.OK
-                response.headers[HttpHeaders.CacheControl] shouldBe "public, max-age=31536000, immutable"
+                response.contentType() shouldBe ContentType.Video.MP4
+                response.headers[HttpHeaders.ContentLength] shouldBe "10"
+                response.bodyAsText() shouldBe ""
             }
         }
 
-        test("does not serve the index of the embedded artifacts") {
-            http(emptyMap()) {
-                client.get("/index").status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("answers a JSON 404 for an unknown path under /api/") {
-            http(emptyMap()) {
-                val response = client.get("/api/unknown")
-
-                response.status shouldBe HttpStatusCode.NotFound
-                response.contentType()?.withoutParameters() shouldBe ContentType.Application.Json
-                Json
-                    .parseToJsonElement(response.bodyAsText())
-                    .jsonObject["error"]!!
-                    .jsonPrimitive.content shouldBe "Not found"
-            }
-        }
-
-        test("compresses the site and JSON, but not an mp4") {
-            http(mapOf("local" to Recorded), listOf("local")) {
-                client.get("/") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe "gzip"
-                client.get("/api/recordings") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe
-                    "gzip"
-                client.get("/mp4/local") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe null
-            }
-        }
-
-        test("serves a local mp4 with range support, and counts a view only for a request from its start") {
-            http(mapOf("local" to Recorded), listOf("local")) { repository ->
-                val response = client.get("/mp4/local") { header(HttpHeaders.Range, "bytes=2-4") }
-                client.get("/mp4/local")
-                client.get("/mp4/local") { header(HttpHeaders.Range, "bytes=0-") }
-                cache.get().flushViews()
-
-                response.status shouldBe HttpStatusCode.PartialContent
-                response.bodyAsText() shouldBe "234"
-                repository["local"]?.views shouldBe 2
-            }
-        }
-
-        test("answers HEAD with the headers of GET and no body, and counts no view for it") {
-            http(mapOf("local" to Recorded), listOf("local")) { repository ->
-                val mp4 = client.head("/mp4/local")
-                val view = client.head("/view/local")
-                cache.get().flushViews()
-
-                mp4.status shouldBe HttpStatusCode.OK
-                mp4.contentType() shouldBe ContentType.Video.MP4
-                mp4.headers[HttpHeaders.ContentLength] shouldBe "10"
-                mp4.bodyAsText() shouldBe ""
-                view.status shouldBe HttpStatusCode.OK
-                repository["local"]?.views shouldBe 0
-            }
-        }
-
-        test("serves a local mp4 without the Archive keys") {
-            http(mapOf("local" to Uploaded), listOf("local"), archive = false) {
-                client.get("/mp4/local").bodyAsText() shouldBe "0123456789"
-            }
-        }
-
-        test("redirects an archived recording without a local mp4 to its file in its item, and counts a view") {
-            http(mapOf("evicted" to Archived)) { repository ->
-                repository.update("evicted") { it.copy(itemId = "1234-3e92a055-ctf-bt-maverick") }
-                val response = createClient { followRedirects = false }.get("/mp4/evicted")
-                cache.get().flushViews()
-
-                response.status shouldBe HttpStatusCode.Found
-                response.headers[HttpHeaders.Location] shouldBe
-                    "https://archive.org/download/ut99-bt-1234-3e92a055-ctf-bt-maverick/evicted.mp4"
-                repository["evicted"]?.views shouldBe 1
-            }
-        }
-
-        test("answers 404 for the mp4 and the view page of an archived recording without an item id") {
-            http(mapOf("evicted" to Archived)) {
-                client.get("/mp4/evicted").status shouldBe HttpStatusCode.NotFound
-                client.get("/view/evicted").status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("answers 404 for an archived recording without a local mp4 when nothing is archived") {
-            http(mapOf("evicted" to Archived), archive = false) {
-                client.get("/mp4/evicted").status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("answers 404 for an unknown, pending or failed recording") {
-            http(mapOf("pending" to Pending, "failed" to Failed), listOf("failed")) {
-                client.get("/mp4/unknown").status shouldBe HttpStatusCode.NotFound
-                client.get("/mp4/pending").status shouldBe HttpStatusCode.NotFound
-                client.get("/mp4/failed").status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("answers 404 for a recorded recording whose mp4 is missing") {
-            http(mapOf("missing" to Recorded)) {
-                client.get("/mp4/missing").status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("serves an outdated recording from disk while its mp4 exists") {
-            http(mapOf("outdated" to Outdated), listOf("outdated")) {
-                client.get("/mp4/outdated").bodyAsText() shouldBe "0123456789"
-            }
-        }
-
-        test("answers 404 without redirecting for an outdated recording whose mp4 is gone") {
-            http(mapOf("outdated" to Outdated)) {
-                val response = createClient { followRedirects = false }.get("/mp4/outdated")
-
-                response.status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("answers a view page with OpenGraph video tags at the forwarded origin, and counts no view") {
-            http(mapOf("local" to Recorded), listOf("local"), trustForwardedHeaders = true) { repository ->
-                val response =
-                    client.get("/view/local") {
-                        header("X-Forwarded-Proto", "https")
-                        header("X-Forwarded-Host", "recorder.example.com")
-                    }
-                val body = response.bodyAsText()
-                cache.get().flushViews()
-
-                response.status shouldBe HttpStatusCode.OK
-                response.contentType()?.withoutParameters() shouldBe ContentType.Text.Html
-                body shouldContain "<meta property=\"og:site_name\" content=\"CTF-BT-Maverick - 10.000 by klepto\" />"
-                body shouldNotContain "<title>"
-                body shouldNotContain "og:title"
-                body shouldContain "<meta property=\"og:url\" content=\"https://recorder.example.com/view/local\" />"
-                body shouldContain "<meta property=\"og:video\" content=\"https://recorder.example.com/mp4/local\" />"
-                body shouldContain "<meta property=\"og:video:type\" content=\"video/mp4\" />"
-                body shouldContain "<meta property=\"og:video:width\" content=\"1920\" />"
-                body shouldContain "<meta property=\"og:video:height\" content=\"1080\" />"
-                body shouldContain "<meta property=\"og:image\" content=\"https://recorder.example.com/thumb/local\" />"
-                body shouldContain "<meta property=\"og:image:type\" content=\"image/jpeg\" />"
-                body shouldContain "<meta property=\"og:image:width\" content=\"1920\" />"
-                body shouldContain "<meta property=\"og:image:height\" content=\"1080\" />"
-                body shouldContain "<video src=\"https://recorder.example.com/mp4/local\""
-                repository["local"]?.views shouldBe 0
-            }
-        }
-
-        test("ignores the forwarded headers unless they are trusted") {
-            http(mapOf("local" to Recorded), listOf("local")) {
-                val body =
-                    client
-                        .get("/view/local") {
-                            header("X-Forwarded-Proto", "https")
-                            header("X-Forwarded-Host", "attacker.example.com")
-                        }.bodyAsText()
-
-                body shouldContain "<meta property=\"og:url\" content=\"http://localhost/view/local\" />"
-                body shouldContain "<meta property=\"og:video\" content=\"http://localhost/mp4/local\" />"
-            }
-        }
-
-        test("serves the thumbnail of a served recording as a JPEG, also after its mp4 is evicted, and counts no view") {
-            http(mapOf("local" to Recorded, "evicted" to Archived), listOf("local"), listOf("local", "evicted")) { repository ->
-                val response = client.get("/thumb/local")
-                cache.get().flushViews()
-
-                response.status shouldBe HttpStatusCode.OK
-                response.contentType() shouldBe ContentType.Image.JPEG
-                response.bodyAsText() shouldBe "jpg"
-                client.get("/thumb/evicted").status shouldBe HttpStatusCode.OK
-                repository["local"]?.views shouldBe 0
-            }
-        }
-
-        test("answers 404 for the thumbnail of an unknown, unserved or unthumbnailed recording") {
-            http(mapOf("pending" to Pending, "missing" to Recorded), thumbnails = listOf("pending")) {
-                client.get("/thumb/unknown").status shouldBe HttpStatusCode.NotFound
-                client.get("/thumb/pending").status shouldBe HttpStatusCode.NotFound
-                client.get("/thumb/missing").status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("answers a view page for an archived recording without a local mp4") {
-            http(mapOf("evicted" to Archived)) { repository ->
-                repository.update("evicted") { it.copy(itemId = "1234-3e92a055-ctf-bt-maverick") }
-                client.get("/view/evicted").status shouldBe HttpStatusCode.OK
-            }
-        }
-
-        test("answers 404 for the view page wherever the mp4 answers 404") {
-            http(mapOf("pending" to Pending, "missing" to Recorded, "evicted" to Archived), archive = false) {
-                client.get("/view/unknown").status shouldBe HttpStatusCode.NotFound
-                client.get("/view/pending").status shouldBe HttpStatusCode.NotFound
-                client.get("/view/missing").status shouldBe HttpStatusCode.NotFound
-                client.get("/view/evicted").status shouldBe HttpStatusCode.NotFound
-            }
-        }
-
-        test("lists an outdated recording while its mp4 exists, in the same order as the others") {
-            http(
-                mapOf("outdated" to Outdated, "recorded" to Recorded),
-                listOf("outdated", "recorded"),
-            ) { repository ->
-                now.set(Instant.parse("2026-09-27T00:00:00Z"))
-                repository.recorded("outdated", 1.hours)
-                now.set(Instant.parse("2026-09-27T01:00:00Z"))
-                repository.recorded("recorded", 1.hours)
-                repository.finish("outdated", Outdated)
-                repository.finish("recorded", Recorded)
-
-                capIds(client.get("/api/recordings").bodyAsText()) shouldBe listOf("recorded", "outdated")
-            }
-        }
-
-        test("drops an outdated recording once its mp4 is gone") {
-            http(mapOf("outdated" to Outdated)) {
-                capIds(client.get("/api/recordings").bodyAsText()) shouldBe emptyList()
-            }
-        }
-
-        test("lists the running recordings with their attempt and progress") {
-            val jobs = RecordingJobs()
-            http(emptyMap(), jobs = jobs) {
-                jobs.track(demo("running")) { tracker ->
-                    tracker.startAttempt(2)
-                    tracker.report(Progress(RecorderStage.FetchingDemo, 0.5))
-                    val job =
-                        Json
-                            .parseToJsonElement(client.get("/api/jobs").bodyAsText())
-                            .jsonArray
-                            .single()
-                            .jsonObject
-
-                    job["demo"]!!.jsonObject["capId"]!!.jsonPrimitive.content shouldBe "running"
-                    job["attempt"]!!.jsonPrimitive.content shouldBe "2"
-                    job["stage"]!!.jsonPrimitive.content shouldBe "FetchingDemo"
-                    job["progress"]!!.jsonPrimitive.content shouldBe "0.5"
-                }
-                client.get("/api/jobs").bodyAsText() shouldBe "[]"
-            }
-        }
-
-        test("lists the demos of the first 10 pending recordings in queue order: recent, medal, cap time, newest") {
-            http(emptyMap(), queued = true) { repository ->
-                now.set(Instant.parse("2026-09-27T08:00:00Z"))
-                repository +=
-                    listOf(
-                        demo("backlog", Instant.parse("2026-09-25T08:00:00Z")).copy(medal = 6),
-                        demo("casual-slow", Instant.parse("2026-09-27T07:00:00Z")).copy(capTime = 20.seconds),
-                        demo("casual-fast", Instant.parse("2026-09-27T06:00:00Z")),
-                        demo("gold", Instant.parse("2026-09-27T05:00:00Z")).copy(medal = 4),
-                        demo("world-record", Instant.parse("2026-09-27T04:00:00Z")).copy(medal = 6),
-                        demo("recorded", Instant.parse("2026-09-27T07:30:00Z")).copy(medal = 6),
-                    ).map { it.copy(userId = it.capId) }
-                repository +=
-                    (1..8).map {
-                        val timestamp = Instant.parse("2026-09-26T20:00:00Z") - it.hours
-                        demo("filler-$it", timestamp).copy(userId = "filler-$it", capTime = 30.seconds)
-                    }
-                repository.finish("recorded", Recorded)
-
-                eventually(5.seconds) {
-                    val queue = Json.parseToJsonElement(client.get("/api/queue").bodyAsText()).jsonArray
-                    queue.map { it.jsonObject["capId"]!!.jsonPrimitive.content } shouldBe
-                        listOf("world-record", "gold", "casual-fast", "casual-slow") + (1..6).map { "filler-$it" }
-                }
-            }
-        }
-
-        test("answers the recording of a cap whatever its status, with its error, and a JSON 404 for an unknown cap") {
-            http(mapOf("failed" to Failed, "pending" to Pending)) { repository ->
-                repository.finish("failed", Failed, "Capture timed out")
-                val failed = Json.parseToJsonElement(client.get("/api/recording/failed").bodyAsText()).jsonObject
-                val pending = Json.parseToJsonElement(client.get("/api/recording/pending").bodyAsText()).jsonObject
-                val unknown = client.get("/api/recording/unknown")
-
-                failed["demo"]!!.jsonObject["capId"]!!.jsonPrimitive.content shouldBe "failed"
-                failed["status"]!!.jsonPrimitive.content shouldBe "Failed"
-                failed["error"]!!.jsonPrimitive.content shouldBe "Capture timed out"
-                pending["status"]!!.jsonPrimitive.content shouldBe "Pending"
-                unknown.status shouldBe HttpStatusCode.NotFound
-                unknown.contentType()?.withoutParameters() shouldBe ContentType.Application.Json
-            }
-        }
-
-        test("lists the 10 most recently recorded completed recordings, newest first") {
-            http(emptyMap()) { repository ->
-                repository += (1..12).map { demo("recording-$it", Instant.parse("2026-09-26T00:00:00Z") - it.hours) }
-                repository += listOf(demo("pending", Instant.parse("2026-09-27T00:00:00Z")))
-                (1..12).forEach {
-                    now.set(Instant.parse("2026-09-27T00:00:00Z") + it.hours)
-                    repository.recorded("recording-$it", 1.hours)
-                    if (it % 2 == 0) repository.finish("recording-$it", Archived)
-                }
-                val recordings = Json.parseToJsonElement(client.get("/api/recordings").bodyAsText()).jsonArray
-
-                recordings.map {
-                    it.jsonObject["demo"]!!
-                        .jsonObject["capId"]!!
-                        .jsonPrimitive.content
-                } shouldBe
-                    (12 downTo 3).map { "recording-$it" }
-            }
-        }
-
-        test("pages the recordings with limit and offset, and caps the limit at 50") {
-            http(emptyMap()) { repository ->
-                repository += (1..60).map { demo("recording-$it") }
-                (1..60).forEach {
-                    now.set(Instant.parse("2026-09-27T00:00:00Z") + it.hours)
-                    repository.recorded("recording-$it", 1.hours)
-                }
-
-                capIds(client.get("/api/recordings?limit=3&offset=2").bodyAsText()) shouldBe
-                    listOf("recording-58", "recording-57", "recording-56")
-                capIds(client.get("/api/recordings?offset=55").bodyAsText()) shouldBe (5 downTo 1).map { "recording-$it" }
-                capIds(client.get("/api/recordings?limit=100").bodyAsText()).size shouldBe 50
-                capIds(client.get("/api/recordings?limit=0").bodyAsText()) shouldBe emptyList()
-            }
-        }
-
-        test("answers 400 for a limit or offset that is not a non-negative integer") {
-            http(emptyMap()) {
-                listOf("limit=-1", "limit=abc", "offset=-1", "offset=1.5", "limit=").forEach { query ->
-                    client.get("/api/recordings?$query").status shouldBe HttpStatusCode.BadRequest
-                }
-            }
-        }
-
-        test("lists every recording of the statuses named in any case, an outdated one without its mp4 included") {
-            http(mapOf("failed" to Failed, "unresolvable" to Unresolvable, "recorded" to Recorded, "outdated" to Outdated)) {
-                capIds(client.get("/api/recordings?status=failed,UNRESOLVABLE").bodyAsText()) shouldBe
-                    listOf("unresolvable", "failed")
-                capIds(client.get("/api/recordings?status=Outdated").bodyAsText()) shouldBe listOf("outdated")
-            }
-        }
-
-        test("lists the recordings of a status without a default or maximum limit") {
-            http(emptyMap()) { repository ->
-                repository += (1..60).map { demo("pending-$it") }
-
-                capIds(client.get("/api/recordings?status=pending").bodyAsText()).size shouldBe 60
-                capIds(client.get("/api/recordings?status=pending&limit=55").bodyAsText()).size shouldBe 55
-            }
-        }
-
-        test("answers 400 for a status that names no recording status") {
-            http(emptyMap()) {
-                listOf("status=unknown", "status=failed,unknown", "status=failed,", "status=").forEach { query ->
-                    client.get("/api/recordings?$query").status shouldBe HttpStatusCode.BadRequest
-                }
-            }
-        }
-
-        test("orders recordings with equal recording and demo times by capId, descending") {
-            http(emptyMap()) { repository ->
-                repository += listOf(demo("b"), demo("c"), demo("a"))
-                listOf("b", "c", "a").forEach { repository.recorded(it, 1.hours) }
-
-                capIds(client.get("/api/recordings").bodyAsText()) shouldBe listOf("c", "b", "a")
+        test("compresses HTML and JSON, but not an mp4") {
+            http {
+                client.get("/html") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe "gzip"
+                client.get("/json") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe "gzip"
+                client.get("/mp4") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe null
             }
         }
     })

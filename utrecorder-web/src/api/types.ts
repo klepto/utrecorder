@@ -1,7 +1,7 @@
 /**
- * The server's JSON, exactly as `HttpService` answers it. Every field is present; a nullable one is `null`, never
- * missing. A duration is an ISO-8601 duration string such as `PT1M2.345S`, an instant an ISO-8601 UTC string, and an
- * enum its constant's name.
+ * The server's JSON, exactly as the endpoints of `HttpService` answer it. Every field is present; a nullable one is
+ * `null`, never missing. A duration is an ISO-8601 duration string such as `PT1M2.345S`, an instant an ISO-8601 UTC
+ * string, and an enum its constant's name.
  */
 
 /** A cap and its demo. */

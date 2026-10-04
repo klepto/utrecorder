@@ -9,17 +9,17 @@ import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.logger
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.onDownload
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.utils.io.ByteWriteChannel
-import io.ktor.utils.io.copyAndClose
-import io.ktor.utils.io.streams.asByteWriteChannel
+import io.ktor.http.contentLength
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.readAvailable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.io.OutputStream
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import kotlin.io.path.exists
@@ -120,21 +120,21 @@ class Downloader(
         onProgress: ProgressListener<Unit>,
     ) {
         target.outputStream(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING).use { output ->
-            val channel = output.asByteWriteChannel()
-            useHttpClient(timeout) { copyTo(channel, onProgress) }
+            useHttpClient(timeout) { copyTo(output, onProgress) }
         }
     }
 
     /**
-     * Copies the response body into [channel], reporting progress to [onProgress].
+     * Copies the response body into [output], reporting progress to [onProgress].
      */
     private suspend fun HttpClient.copyTo(
-        channel: ByteWriteChannel,
+        output: OutputStream,
         onProgress: ProgressListener<Unit>,
-    ) = prepareGet(url) {
-        onDownload { received, total -> if (total != null && total > 0) onProgress(Progress(received.toDouble() / total)) }
-    }.execute { response: HttpResponse ->
-        response.bodyAsChannel().copyAndClose(channel)
+    ) = prepareGet(url).execute { response: HttpResponse ->
+        val total = response.contentLength()?.takeIf { it > 0 }
+        response.bodyAsChannel().copyTo(output) { received ->
+            total?.let { onProgress(Progress(received.toDouble() / it)) }
+        }
     }
 
     /**
@@ -151,6 +151,26 @@ class Downloader(
 
     companion object {
         private val log = logger<Downloader>()
+
+        /**
+         * Copies this channel into [output], passing the number of bytes copied so far to [onCopied] after each read.
+         * Throws the cause the channel was closed with, if any.
+         */
+        private suspend fun ByteReadChannel.copyTo(
+            output: OutputStream,
+            onCopied: (Long) -> Unit,
+        ) {
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var copied = 0L
+            while (true) {
+                val read = readAvailable(buffer)
+                if (read < 0) break
+                output.write(buffer, 0, read)
+                copied += read
+                onCopied(copied)
+            }
+            closedCause?.let { throw it }
+        }
     }
 }
 
