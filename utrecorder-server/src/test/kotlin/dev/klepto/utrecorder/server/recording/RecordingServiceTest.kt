@@ -7,16 +7,13 @@ import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
 import dev.klepto.utrecorder.server.ServerConfig
+import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import dev.klepto.utrecorder.ut99.UtPackageException
 import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.assertions.throwables.shouldThrow
@@ -30,6 +27,7 @@ import io.kotest.matchers.comparables.shouldBeGreaterThanOrEqualTo
 import io.kotest.matchers.comparables.shouldBeLessThan
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -38,6 +36,7 @@ import kotlinx.coroutines.launch
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
@@ -46,7 +45,6 @@ import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.time.Clock
 import kotlin.time.Duration
-import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -81,7 +79,6 @@ class RecordingServiceTest :
             recordings: Path,
             maxAttempts: Int = 3,
             cooldown: Duration = 20.milliseconds,
-            retryInterval: Duration = 12.hours,
         ): ServerConfig =
             ServerConfig(
                 ConfigReader.EMPTY,
@@ -89,7 +86,6 @@ class RecordingServiceTest :
                 recordings = recordings,
                 recordingMaxAttempts = maxAttempts,
                 recordingCooldown = cooldown,
-                recordingRetryInterval = retryInterval,
             )
 
         fun recorder(record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult): RecorderProvider =
@@ -111,15 +107,17 @@ class RecordingServiceTest :
 
         suspend fun running(
             demos: List<Demo>,
-            service: (DemoRepository, RecordingRepository) -> RecordingService,
+            service: (RecordingRepository, RecordingQueue) -> RecordingService,
             block: suspend (RecordingRepository) -> Unit,
         ) {
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demoRepository = DemoRepository(store)
-                val repository = RecordingRepository(store, demoRepository, ServerConfig(ConfigReader.EMPTY, directories), clock)
+                val repository = RecordingRepository(store, demoRepository, clock)
+                val queue = RecordingQueue(demoRepository, repository, ServerConfig(ConfigReader.EMPTY, directories), clock)
                 demoRepository += demos
                 coroutineScope {
-                    val job = launch { service(demoRepository, repository).start() }
+                    val services: List<Service> = listOf(queue, service(repository, queue))
+                    val job = launch { services.forEach { launch { it.start() } } }
                     block(repository)
                     job.cancelAndJoin()
                 }
@@ -131,14 +129,14 @@ class RecordingServiceTest :
             val attempts = AtomicInteger()
             running(
                 listOf(demo("cap", 0)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(
                             recorder { demo, _ ->
                                 when (attempts.incrementAndGet()) {
-                                    1 -> RecorderResult.Failed(IllegalStateException("Capture failed")).also { delay(1.seconds) }
+                                    1 -> RecorderResult.Failed(IllegalStateException("Capture failed")).also { delay(400.milliseconds) }
                                     else -> done(demo).also { delay(100.milliseconds) }
                                 }
                             },
@@ -152,7 +150,7 @@ class RecordingServiceTest :
 
                 recording.recordedAt shouldBe Instant.parse("2026-09-27T08:00:00Z")
                 recording.processingTime!! shouldBeGreaterThanOrEqualTo 100.milliseconds
-                recording.processingTime!! shouldBeLessThan 1.seconds
+                recording.processingTime!! shouldBeLessThan 400.milliseconds
             }
         }
 
@@ -162,10 +160,10 @@ class RecordingServiceTest :
             val mp4s = CopyOnWriteArrayList<Path>()
             running(
                 listOf(demo("cap", 0)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(
                             recorder { demo, _ -> done(demo).also { mp4s.add((it as RecorderResult.Done).mp4) } },
                         ),
@@ -191,10 +189,10 @@ class RecordingServiceTest :
             val recorded = CopyOnWriteArrayList<String>()
             running(
                 listOf(demo("known", 1), demo("cap", 0)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(
                             recorder { demo, _ -> done(demo).also { recorded += demo.capId } },
                         ),
@@ -218,10 +216,10 @@ class RecordingServiceTest :
             val recorded = CopyOnWriteArrayList<String>()
             running(
                 listOf(demo("newer", 1), demo("older", 0)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(
                             recorder { demo, _ ->
                                 starts += TimeSource.Monotonic.markNow()
@@ -255,10 +253,10 @@ class RecordingServiceTest :
             }
             running(
                 listOf(demo("first", 0), demo("second", 1)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(recorder(record), recorder(record)),
                         config(recordings),
                     )
@@ -275,10 +273,10 @@ class RecordingServiceTest :
             val attempts = AtomicInteger()
             running(
                 listOf(demo("broken", 1), demo("cap", 0)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(
                             recorder { demo, _ ->
                                 if (demo.capId == "cap") return@recorder done(demo)
@@ -304,10 +302,10 @@ class RecordingServiceTest :
             val attempts = AtomicInteger()
             running(
                 listOf(demo("unresolvable", 1), demo("cap", 0)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(
                             recorder { demo, _ ->
                                 if (demo.capId == "cap") return@recorder done(demo)
@@ -332,10 +330,10 @@ class RecordingServiceTest :
             val jobs = RecordingJobs()
             running(
                 listOf(demo("cap", 0)),
-                { demos, repository ->
+                { repository, queue ->
                     RecordingService(
-                        demos,
                         repository,
+                        queue,
                         listOf(
                             recorder { demo, onProgress ->
                                 if (!gate.isCompleted) {
@@ -363,245 +361,45 @@ class RecordingServiceTest :
             }
         }
 
-        test("records only the fastest demo of each player on each map, and no demo without a user id") {
-            val recordings = createTempDirectory(root, "recordings")
-
-            fun cap(
-                capId: String,
-                minute: Int,
-                userId: String?,
-                seconds: Int,
-                map: String = "CTF-BT-Maverick",
-            ): Demo = demo(capId, minute).copy(userId = userId, map = map, capTime = seconds.seconds)
-            running(
-                listOf(
-                    cap("slower", 0, "1", 12),
-                    cap("fastest", 1, "1", 10),
-                    cap("tie", 2, "1", 10),
-                    cap("other-player", 3, "2", 12),
-                    cap("other-map", 4, "1", 12, map = "CTF-BT-Other"),
-                    cap("no-user", 5, null, 12),
-                    cap("no-user-again", 6, null, 12),
-                ),
-                { demos, repository ->
-                    RecordingService(
-                        demos,
-                        repository,
-                        listOf(recorder { demo, _ -> done(demo) }),
-                        config(recordings),
-                    )
-                },
-            ) { repository ->
-                eventually(5.seconds) {
-                    names(recordings) shouldContainExactlyInAnyOrder listOf("fastest.mp4", "other-player.mp4", "other-map.mp4")
-                }
-                delay(100.milliseconds)
-                names(recordings).size shouldBe 3
-                repository["no-user"] shouldBe null
-                repository["no-user-again"] shouldBe null
-            }
-        }
-
-        test("removes the pending recording of a demo once a faster demo of its player on its map arrives") {
-            val recordings = createTempDirectory(root, "recordings")
-            val gate = CompletableDeferred<Unit>()
-            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
-                val recorder = recorder { demo, _ -> done(demo).also { gate.await() } }
-                demos += listOf(demo("busy", 3), demo("slower", 0).copy(userId = "1", capTime = 12.seconds))
-                coroutineScope {
-                    val job = launch { RecordingService(demos, repository, listOf(recorder), config(recordings)).start() }
-                    eventually(5.seconds) { repository["slower"]?.status shouldBe RecordingStatus.Pending }
-                    demos += listOf(demo("faster", 1).copy(userId = "1", capTime = 10.seconds))
-                    eventually(5.seconds) { repository["slower"] shouldBe null }
-                    gate.complete(Unit)
-                    eventually(5.seconds) { names(recordings) shouldContainExactlyInAnyOrder listOf("busy.mp4", "faster.mp4") }
-                    job.cancelAndJoin()
-                }
-            }
-        }
-
-        test("sets a beaten recorded, uploaded or archived recording to outdated once the faster one is recorded") {
-            val recordings = createTempDirectory(root, "recordings")
-            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
-                repository +=
-                    listOf(
-                        demo("recorded", 0).copy(userId = "1", capTime = 12.seconds),
-                        demo("uploaded", 1).copy(userId = "2", capTime = 12.seconds),
-                        demo("archived", 2).copy(userId = "3", capTime = 12.seconds),
-                    )
-                repository.finish("recorded", Recorded)
-                repository.update("uploaded") { it.copy(status = Uploaded, md5 = "uploaded-md5") }
-                repository.update("archived") { it.copy(status = Archived, md5 = "archived-md5", views = 2) }
-                demos +=
-                    listOf(
-                        demo("faster-recorded", 3).copy(userId = "1", capTime = 10.seconds),
-                        demo("faster-uploaded", 4).copy(userId = "2", capTime = 10.seconds),
-                        demo("faster-archived", 5).copy(userId = "3", capTime = 10.seconds),
-                    )
-                val recorder = recorder { demo, _ -> done(demo) }
-                coroutineScope {
-                    val job = launch { RecordingService(demos, repository, listOf(recorder), config(recordings)).start() }
-                    eventually(5.seconds) {
-                        repository["recorded"]?.status shouldBe Outdated
-                        repository["uploaded"]?.status shouldBe Outdated
-                        repository["archived"]?.status shouldBe Outdated
-                    }
-                    repository["faster-recorded"]?.status shouldBe Recorded
-                    repository["uploaded"]?.md5 shouldBe "uploaded-md5"
-                    repository["archived"]?.md5 shouldBe "archived-md5"
-                    repository["archived"]?.views shouldBe 2
-                    job.cancelAndJoin()
-                }
-            }
-        }
-
-        test("keeps a recorded recording while the faster demo of its player on its map is only pending or failed") {
-            val recordings = createTempDirectory(root, "recordings")
-            val gate = CompletableDeferred<Unit>()
-            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
-                repository +=
-                    listOf(
-                        demo("beaten-by-pending", 0).copy(userId = "1", capTime = 12.seconds),
-                        demo("beaten-by-failed", 1).copy(userId = "2", capTime = 12.seconds),
-                    )
-                repository.finish("beaten-by-pending", Recorded)
-                repository.finish("beaten-by-failed", Recorded)
-                demos +=
-                    listOf(
-                        demo("pending", 2).copy(userId = "1", capTime = 10.seconds),
-                        demo("busy", 3),
-                        demo("failed", 4).copy(userId = "2", capTime = 10.seconds),
-                    )
-                val recorder =
-                    recorder { demo, _ ->
-                        when (demo.capId) {
-                            "failed" -> RecorderResult.Failed(IllegalStateException("Capture failed"))
-                            else -> done(demo).also { gate.await() }
-                        }
-                    }
-                coroutineScope {
-                    val job =
-                        launch {
-                            RecordingService(demos, repository, listOf(recorder), config(recordings, maxAttempts = 1)).start()
-                        }
-                    eventually(5.seconds) { repository["busy"]?.status shouldBe RecordingStatus.Recording }
-                    repository["failed"]?.status shouldBe Failed
-                    repository["pending"]?.status shouldBe Pending
-                    repository["beaten-by-pending"]?.status shouldBe Recorded
-                    repository["beaten-by-failed"]?.status shouldBe Recorded
-                    gate.complete(Unit)
-                    job.cancelAndJoin()
-                }
-            }
-        }
-
-        test("sets a beaten recording to outdated once its capture ends") {
-            val recordings = createTempDirectory(root, "recordings")
-            val gate = CompletableDeferred<Unit>()
-            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
-                val record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult = { demo, _ ->
-                    if (demo.capId == "slower") gate.await()
-                    done(demo)
-                }
-                demos += listOf(demo("slower", 0).copy(userId = "1", capTime = 12.seconds))
-                coroutineScope {
-                    val job =
-                        launch {
-                            RecordingService(demos, repository, listOf(recorder(record), recorder(record)), config(recordings))
-                                .start()
-                        }
-                    eventually(5.seconds) { repository["slower"]?.status shouldBe RecordingStatus.Recording }
-                    demos += listOf(demo("faster", 1).copy(userId = "1", capTime = 10.seconds))
-                    eventually(5.seconds) { repository["faster"]?.status shouldBe Recorded }
-                    repository["slower"]?.status shouldBe RecordingStatus.Recording
-                    gate.complete(Unit)
-                    eventually(5.seconds) { repository["slower"]?.status shouldBe Outdated }
-                    recordings.resolve("slower.mp4").exists() shouldBe true
-                    job.cancelAndJoin()
-                }
-            }
-        }
-
-        test("records recording, failed and unresolvable recordings again on start, and keeps the rest") {
+        test("does not record a recording claimed elsewhere between the head of the queue and its claim") {
             val recordings = createTempDirectory(root, "recordings")
             val recorded = CopyOnWriteArrayList<String>()
+            val claimElsewhere = AtomicReference<(() -> Unit)?>()
+            val queueClock =
+                object : Clock {
+                    override fun now(): Instant {
+                        claimElsewhere.getAndSet(null)?.invoke()
+                        return clock.now()
+                    }
+                }
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
-                repository += listOf(demo("recording", 0))
-                repository.take()
-                repository += listOf(demo("failed", 1), demo("recorded", 2), demo("unresolvable", 3))
-                repository.finish("failed", Failed, "Capture failed")
-                repository.finish("recorded", Recorded)
-                repository.finish("unresolvable", Unresolvable, "Missing BTPog")
+                val repository = RecordingRepository(store, demos, clock)
+                val queue = RecordingQueue(demos, repository, ServerConfig(ConfigReader.EMPTY, directories), queueClock)
+                repository += listOf(demo("cap", 0))
                 val recorder = recorder { demo, _ -> done(demo).also { recorded += demo.capId } }
                 coroutineScope {
-                    val job = launch { RecordingService(demos, repository, listOf(recorder), config(recordings)).start() }
-                    eventually(5.seconds) { recorded shouldContainExactlyInAnyOrder listOf("recording", "failed", "unresolvable") }
-                    job.cancelAndJoin()
-                }
-            }
-        }
-
-        test("records failed and unresolvable recordings again once the retry interval passes, and leaves outdated and the rest") {
-            val recordings = createTempDirectory(root, "recordings")
-            val starts = CopyOnWriteArrayList<String>()
-            val gate = CompletableDeferred<Unit>()
-            val record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult = { demo, _ ->
-                starts += demo.capId
-                val attempt = starts.count { it == demo.capId }
-                when {
-                    demo.capId == "busy" -> done(demo).also { gate.await() }
-                    attempt > 1 -> done(demo)
-                    demo.capId == "failed" -> RecorderResult.Failed(IllegalStateException("Capture failed"))
-                    else -> RecorderResult.Unresolvable(UtPackageException("BTPog", listOf("http://packages.example")))
-                }
-            }
-            SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock)
-                repository += listOf(demo("recorded", 0), demo("outdated", 4))
-                repository.finish("recorded", Recorded)
-                repository.finish("outdated", Outdated, "Capture failed")
-                demos += listOf(demo("busy", 1), demo("failed", 2), demo("unresolvable", 3))
-                val config = config(recordings, maxAttempts = 1, retryInterval = 300.milliseconds)
-                coroutineScope {
-                    val job =
-                        launch {
-                            RecordingService(demos, repository, listOf(recorder(record), recorder(record)), config).start()
-                        }
-                    eventually(10.seconds) {
-                        repository["failed"]?.status shouldBe Recorded
-                        repository["unresolvable"]?.status shouldBe Recorded
-                    }
-                    delay(600.milliseconds)
-                    repository["busy"]?.status shouldBe RecordingStatus.Recording
-                    repository["recorded"]?.status shouldBe Recorded
-                    repository["outdated"]?.status shouldBe Outdated
-                    gate.complete(Unit)
+                    claimElsewhere.set { launch(start = CoroutineStart.UNDISPATCHED) { repository.claim("cap") } }
+                    val services: List<Service> = listOf(queue, RecordingService(repository, queue, listOf(recorder), config(recordings)))
+                    val job = launch { services.forEach { launch { it.start() } } }
+                    eventually(5.seconds) { claimElsewhere.get() shouldBe null }
+                    delay(200.milliseconds)
+                    repository["cap"]?.status shouldBe RecordingStatus.Recording
                     job.cancelAndJoin()
                 }
             }
 
-            starts.filter { it == "busy" } shouldContainExactly listOf("busy")
-            starts.filter { it != "busy" } shouldContainExactlyInAnyOrder listOf("failed", "failed", "unresolvable", "unresolvable")
+            recorded.shouldBeEmpty()
         }
 
         test("rejects an empty list of recorders") {
             shouldThrow<IllegalArgumentException> {
                 SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
                     val demos = DemoRepository(store)
+                    val repository = RecordingRepository(store, demos, clock)
                     RecordingService(
-                        demos,
-                        RecordingRepository(store, demos, ServerConfig(ConfigReader.EMPTY, directories), clock),
+                        repository,
+                        RecordingQueue(demos, repository, ServerConfig(ConfigReader.EMPTY, directories), clock),
                         emptyList(),
                         config(root),
                     )

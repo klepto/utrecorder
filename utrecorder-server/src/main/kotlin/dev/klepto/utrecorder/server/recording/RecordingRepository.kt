@@ -1,6 +1,5 @@
 package dev.klepto.utrecorder.server.recording
 
-import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.CachedCollection
 import dev.klepto.utrecorder.server.database.DocumentStore
 import dev.klepto.utrecorder.server.database.DocumentTransaction
@@ -11,8 +10,9 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
 import java.util.concurrent.ConcurrentHashMap
@@ -21,36 +21,35 @@ import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
- * Every [Recording] known to the server, kept in the `recordings` collection of a [DocumentStore], and the queue of the
- * ones waiting for a recorder. Each recording is keyed by the cap id of its demo.
+ * Every [Recording] known to the server, kept in the `recordings` collection of a [DocumentStore]. Each recording is keyed
+ * by the cap id of its demo.
  *
  * A recording is stored with the cap id of its demo, not the demo itself. Its [Recording.demo] is read from [demos],
  * which every added demo is stored in as well.
  *
  * The collection is kept in memory.
  *
- * A demo added within [ServerConfig.recordingRecentAge] of now is recent, and is taken whenever it is the newest pending
- * one. An older demo is a backlog demo. It is taken only while fewer than [ServerConfig.recordingBacklogBuffer]
- * recordings are [RecordingStatus.Recording] or [Recorded]. A demo recorded before, one with a [Recording.recordedAt],
- * is taken like a recent one.
- *
  * Every change of the status of a recording sets its [Recording.lastUpdate] to the time [clock] reports. [recorded]
  * sets [Recording.recordedAt] to that time as well.
  *
  * @param store The store that holds the `recordings` collection.
  * @property demos The demos of the recordings.
- * @property config The recent age and the backlog buffer.
- * @property clock The source of [Recording.lastUpdate], of [Recording.recordedAt] and of the age of a demo.
+ * @property clock The source of [Recording.lastUpdate] and of [Recording.recordedAt].
  */
 class RecordingRepository(
     store: DocumentStore,
     private val demos: DemoRepository,
-    private val config: ServerConfig = ServerConfig(),
     private val clock: Clock = Clock.System,
 ) {
     private val collection: CachedCollection<StoredRecording> = store.cachedCollection("recordings") { it.capId }
     private val demoIndex = ConcurrentHashMap<String, Demo>()
     private val statusRevision = MutableStateFlow(0L)
+
+    /**
+     * Signal of status changes. Emits once when collected, then again after every transaction that adds, removes or
+     * changes the status of a recording. Emissions that are not collected in time are merged into one.
+     */
+    val statusChanges: Flow<Unit> = statusRevision.map { }
 
     /**
      * Returns the recording stored under [capId]. If there is none, returns `null` instead.
@@ -61,19 +60,6 @@ class RecordingRepository(
      * Returns every recording, in the order they were first stored.
      */
     suspend fun all(): List<Recording> = transaction { it.all() }
-
-    /**
-     * Returns the demos of the [limit] newest [Pending] recordings, newest first. This is the order [take] gives them in.
-     */
-    suspend fun pending(limit: Int): List<Demo> =
-        transaction { recordings ->
-            recordings
-                .all()
-                .filter { it.status == Pending }
-                .sortedByDescending { it.demo.timestamp }
-                .take(limit)
-                .map { it.demo }
-        }
 
     /**
      * Stores a [Pending] recording of each of [demos], in the order given, and stores each demo in [DemoRepository]. A
@@ -103,17 +89,15 @@ class RecordingRepository(
     }
 
     /**
-     * Returns the demo of the newest [Pending] recording that may be taken, and sets the recording to
-     * [RecordingStatus.Recording]. If there is none, suspends until a recording is added, removed or changes its status,
-     * and one may be taken.
+     * If the recording stored under [capId] is [Pending], sets it to [RecordingStatus.Recording] as one transaction and
+     * returns `true`. If there is none, or it is not [Pending], changes nothing and returns `false` instead.
      */
-    suspend fun take(): Demo {
-        while (true) {
-            val seen = statusRevision.value
-            claim()?.let { return it }
-            statusRevision.first { it != seen }
+    suspend fun claim(capId: String): Boolean =
+        transaction { recordings ->
+            val recording = recordings[capId]?.takeIf { it.status == Pending } ?: return@transaction false
+            put(recordings, recording.copy(status = RecordingStatus.Recording))
+            true
         }
-    }
 
     /**
      * Sets the recording stored under [capId] to [status], with [error] as its failure. If there is none, does nothing.
@@ -165,33 +149,9 @@ class RecordingRepository(
     }
 
     /**
-     * Returns the demo of the newest [Pending] recording that may be taken, and sets the recording to
-     * [RecordingStatus.Recording]. If there is none, returns `null` instead.
-     */
-    private suspend fun claim(): Demo? =
-        transaction { recordings ->
-            val all = recordings.all()
-            val backlogOpen = all.count { it.isBuffered() } < config.recordingBacklogBuffer
-            all
-                .filter { it.status == Pending && (backlogOpen || isRecent(it.demo) || it.recordedAt != null) }
-                .maxByOrNull { it.demo.timestamp }
-                ?.let { put(recordings, it.copy(status = RecordingStatus.Recording)).demo }
-        }
-
-    /**
      * Returns `true` if this recording is [Pending], [Failed] or [Unresolvable], without a [Recording.recordedAt].
      */
     private fun Recording.isUnrecorded(): Boolean = status in UNRECORDED && recordedAt == null
-
-    /**
-     * Returns `true` if this recording is [RecordingStatus.Recording] or [Recorded].
-     */
-    private fun Recording.isBuffered(): Boolean = status == RecordingStatus.Recording || status == Recorded
-
-    /**
-     * Returns `true` if [demo] was added within [ServerConfig.recordingRecentAge] of now.
-     */
-    private fun isRecent(demo: Demo): Boolean = clock.now() - demo.timestamp <= config.recordingRecentAge
 
     /**
      * Returns [recording] after storing it in [recordings]. If its status differs from the one stored, or none is stored,

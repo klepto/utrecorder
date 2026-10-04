@@ -10,6 +10,7 @@ import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.recording.Recording
 import dev.klepto.utrecorder.server.recording.RecordingJob
 import dev.klepto.utrecorder.server.recording.RecordingJobs
+import dev.klepto.utrecorder.server.recording.RecordingQueue
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
@@ -66,7 +67,7 @@ import kotlin.time.Instant
  *   built from the origin of the request. The origin honours the `X-Forwarded-*` headers only if
  *   [ServerConfig.trustForwardedHeaders] is enabled. Answers `404` wherever `/mp4/{capId}` answers `404`.
  * - `GET /api/jobs`: every running recording, with its attempt and progress.
- * - `GET /api/queue`: the next 10 demos to be recorded, in the order they are taken.
+ * - `GET /api/queue`: the demos of the first 10 recordings of [queue], in queue order.
  * - `GET /api/recordings?limit=&offset=`: one page of the [Recorded], [Uploaded] or [Archived] recordings, plus every
  *   [Outdated] recording whose mp4 still exists, most recently recorded first. Recordings recorded at the same time
  *   are ordered by the time of their demo, then by [Demo.capId], both descending. A recording without
@@ -86,6 +87,7 @@ import kotlin.time.Instant
  * `/thumb/{capId}` or `/view/{capId}` count none.
  *
  * @property repository The recordings to serve.
+ * @property queue The order the pending recordings are recorded in.
  * @property jobs The running recordings.
  * @property cache The cache that counts the views and names the download URL of an archived mp4.
  * @property config The recordings and thumbnails directories, the port, whether the forwarded headers are trusted
@@ -93,6 +95,7 @@ import kotlin.time.Instant
  */
 class HttpService(
     private val repository: RecordingRepository,
+    private val queue: RecordingQueue,
     private val jobs: RecordingJobs,
     private val cache: CacheService,
     private val config: ServerConfig = ServerConfig(),
@@ -125,7 +128,7 @@ class HttpService(
             get("/thumb/{capId}") { serveThumbnail(call.parameters["capId"].orEmpty()) }
             get("/view/{capId}") { serveView(call.parameters["capId"].orEmpty()) }
             get("/api/jobs") { call.respond(jobs.jobs.first().map { it.toResponse() }) }
-            get("/api/queue") { call.respond(repository.pending(LIMIT)) }
+            get("/api/queue") { call.respond(queue.get(LIMIT).map { it.demo }) }
             get("/api/recordings") { serveRecordings() }
             route("/api/{...}") { handle { call.respond(HttpStatusCode.NotFound, ErrorResponse("Not found")) } }
             get("/index") { call.respond(HttpStatusCode.NotFound) }

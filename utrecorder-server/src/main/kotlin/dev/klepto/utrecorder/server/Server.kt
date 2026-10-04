@@ -9,6 +9,7 @@ import dev.klepto.utrecorder.server.demo.UtbtDemoFetcher
 import dev.klepto.utrecorder.server.http.HttpService
 import dev.klepto.utrecorder.server.recording.DefaultRecorderProvider
 import dev.klepto.utrecorder.server.recording.RecordingJobs
+import dev.klepto.utrecorder.server.recording.RecordingQueue
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingService
 import dev.klepto.utrecorder.server.upload.ArchiveMediaUploader
@@ -38,7 +39,8 @@ object Server {
         log.info { "Starting the server against ${config.utbtApiUrl}" }
         SqliteDocumentStore.open(config.database) { store ->
             val demos = DemoRepository(store)
-            val repository = RecordingRepository(store, demos, config)
+            val repository = RecordingRepository(store, demos)
+            val queue = RecordingQueue(demos, repository, config)
             val jobs = RecordingJobs()
             val uploader = uploader(config)
             val cache = CacheService(repository, uploader, config)
@@ -46,10 +48,11 @@ object Server {
             val services: List<Service> =
                 listOfNotNull(
                     DemoService(UtbtDemoFetcher(config), demos, config),
-                    RecordingService(demos, repository, listOf(recorder), config, jobs),
+                    queue,
+                    RecordingService(repository, queue, listOf(recorder), config, jobs),
                     uploader?.let { UploadService(repository, it, config) },
                     cache,
-                    HttpService(repository, jobs, cache, config),
+                    HttpService(repository, queue, jobs, cache, config),
                 )
             coroutineScope {
                 services.forEach { launch { it.start() } }

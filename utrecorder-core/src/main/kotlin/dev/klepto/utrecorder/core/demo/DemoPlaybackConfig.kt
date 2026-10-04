@@ -1,8 +1,10 @@
 package dev.klepto.utrecorder.core.demo
 
 import dev.klepto.utrecorder.ut99.UtPackage
+import java.util.Locale
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.DurationUnit.SECONDS
 
 /**
  * Settings of one run that plays a demo through the recorder console.
@@ -40,6 +42,17 @@ data class DemoPlaybackConfig(
      * show one of them, the start or the end of the demo stands in for it.
      */
     fun runDuration(): Duration = (runStop ?: demoDuration) - (runStart ?: Duration.ZERO)
+
+    /**
+     * Returns the exec script lines that place the run on the Bunny Track timer: `TimerReset <run start>` and
+     * `TimerStop <run stop>`, each in seconds with six decimals. If the demo does not show [runStart] or [runStop], its
+     * line is left out.
+     */
+    fun timerExecLines(): List<String> =
+        listOfNotNull(
+            runStart?.let { "TimerReset %.6f".format(Locale.ROOT, it.toDouble(SECONDS)) },
+            runStop?.let { "TimerStop %.6f".format(Locale.ROOT, it.toDouble(SECONDS)) },
+        )
 
     /**
      * Returns the game ini values of the run by section: [console] as the console of the engine, and the settings of

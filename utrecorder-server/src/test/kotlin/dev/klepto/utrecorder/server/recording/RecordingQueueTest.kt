@@ -1,0 +1,409 @@
+package dev.klepto.utrecorder.server.recording
+
+import dev.klepto.utrecorder.common.ConfigReader
+import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.server.ServerConfig
+import dev.klepto.utrecorder.server.database.SqliteDocumentStore
+import dev.klepto.utrecorder.server.demo.Demo
+import dev.klepto.utrecorder.server.demo.DemoRepository
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
+import io.kotest.assertions.nondeterministic.eventually
+import io.kotest.assertions.throwables.shouldThrow
+import io.kotest.core.spec.style.FunSpec
+import io.kotest.engine.spec.tempdir
+import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.io.path.createTempDirectory
+import kotlin.time.Clock
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+
+class RecordingQueueTest :
+    FunSpec({
+        val home = tempdir().toPath()
+
+        val now = Instant.parse("2026-09-27T12:00:00Z")
+        val clock =
+            object : Clock {
+                override fun now(): Instant = now
+            }
+
+        fun demo(
+            capId: String,
+            age: Duration,
+            medal: Int? = null,
+            capTime: Duration = 10.seconds,
+            userId: String? = capId,
+            map: String = "CTF-BT-Maverick",
+        ): Demo =
+            Demo(
+                capId = capId,
+                map = map,
+                player = "klepto",
+                userId = userId,
+                capTime = capTime,
+                timestamp = now - age,
+                demoUrl = "http://api.utbt.net/demos/$capId",
+                medal = medal,
+            )
+
+        suspend fun <R> stored(
+            retryInterval: Duration = 12.hours,
+            block: suspend (DemoRepository, RecordingRepository, RecordingQueue) -> R,
+        ): R =
+            SqliteDocumentStore.open(createTempDirectory("utrecorder-recording-queue-test").resolve("server.db")) { store ->
+                val demos = DemoRepository(store)
+                val repository = RecordingRepository(store, demos, clock = clock)
+                val config =
+                    ServerConfig(
+                        ConfigReader.EMPTY,
+                        DirectoriesConfig(ConfigReader.EMPTY, home = home),
+                        recordingRetryInterval = retryInterval,
+                        recordingRecentAge = 1.days,
+                        recordingBacklogBuffer = 1,
+                    )
+                block(demos, repository, RecordingQueue(demos, repository, config, clock))
+            }
+
+        suspend fun <R> running(
+            queue: RecordingQueue,
+            block: suspend () -> R,
+        ): R =
+            coroutineScope {
+                val job = launch { queue.start() }
+                block().also { job.cancelAndJoin() }
+            }
+
+        suspend fun <R> queue(block: suspend (RecordingRepository, RecordingQueue) -> R): R =
+            stored { _, repository, queue -> running(queue) { block(repository, queue) } }
+
+        suspend fun capIds(queue: RecordingQueue): List<String> = queue.get(10).map { it.demo.capId }
+
+        suspend fun order(vararg demos: Demo): List<String> =
+            queue { repository, queue ->
+                repository += demos.toList()
+                capIds(queue)
+            }
+
+        test("puts a recent demo, one up to the recent age old, ahead of an older one with a higher medal and a shorter cap time") {
+            order(
+                demo("backlog", 25.hours, medal = 6, capTime = 1.seconds),
+                demo("recent", 1.days, medal = 0, capTime = 60.seconds),
+            ) shouldBe listOf("recent", "backlog")
+        }
+
+        test("counts a demo from the future as recent") {
+            order(demo("backlog", 2.days), demo("future", (-1).hours)) shouldBe listOf("future", "backlog")
+        }
+
+        test("puts a higher medal ahead of a shorter cap time and a newer demo") {
+            order(
+                demo("silver", 1.hours, medal = 3, capTime = 1.seconds),
+                demo("world-record", 2.hours, medal = 6, capTime = 60.seconds),
+            ) shouldBe listOf("world-record", "silver")
+        }
+
+        test("ranks a missing medal and a medal outside 0 to 6 as casual") {
+            order(
+                demo("unknown", 1.hours, medal = 7, capTime = 30.seconds),
+                demo("negative", 1.hours, medal = -1, capTime = 25.seconds),
+                demo("missing", 1.hours, medal = null, capTime = 20.seconds),
+                demo("casual", 1.hours, medal = 0, capTime = 10.seconds),
+                demo("certified", 1.hours, medal = 1, capTime = 40.seconds),
+            ) shouldBe listOf("certified", "casual", "missing", "negative", "unknown")
+        }
+
+        test("puts a shorter cap time ahead of a newer demo") {
+            order(
+                demo("newer", 1.hours, capTime = 20.seconds),
+                demo("shorter", 2.hours, capTime = 10.seconds),
+            ) shouldBe listOf("shorter", "newer")
+        }
+
+        test("puts a newer demo ahead of an older one") {
+            order(demo("older", 3.days), demo("newer", 2.days)) shouldBe listOf("newer", "older")
+        }
+
+        test("keeps the order the recordings were stored in for ties") {
+            order(demo("b", 1.hours), demo("a", 1.hours)) shouldBe listOf("b", "a")
+        }
+
+        test("returns at most the maximum size of pending recordings and changes no status") {
+            val got =
+                queue { repository, queue ->
+                    repository += listOf(demo("first", 1.hours), demo("failed", 2.hours), demo("second", 3.hours), demo("third", 4.hours))
+                    repository.finish("failed", Failed)
+                    queue.get(2).map { it.demo.capId } + capIds(queue) to repository.all().map { it.status }
+                }
+            got shouldBe (listOf("first", "second", "first", "second", "third") to listOf(Pending, Failed, Pending, Pending))
+        }
+
+        test("returns an empty list for a maximum size of 0 and rejects a negative one") {
+            queue { repository, queue ->
+                repository += listOf(demo("cap", 1.hours))
+                queue.get(0) shouldBe emptyList()
+                shouldThrow<IllegalArgumentException> { queue.get(-1) }
+            }
+        }
+
+        test("returns the head of the queue from first and changes no status") {
+            val got =
+                queue { repository, queue ->
+                    repository += listOf(demo("older", 2.hours), demo("newer", 1.hours))
+                    listOf(queue.first().demo.capId, queue.first().demo.capId, repository["newer"]?.status)
+                }
+            got shouldBe listOf("newer", "newer", Pending)
+        }
+
+        test("suspends first until a recording is queued") {
+            val head =
+                queue { repository, queue ->
+                    coroutineScope {
+                        val first = async { queue.first() }
+                        delay(50.milliseconds)
+                        first.isActive shouldBe true
+                        repository += listOf(demo("cap", 1.hours))
+                        first.await().demo.capId
+                    }
+                }
+            head shouldBe "cap"
+        }
+
+        test("holds back a backlog head while the backlog buffer is full, and releases it once a recording is uploaded") {
+            val head =
+                queue { repository, queue ->
+                    repository += listOf(demo("buffered", 3.days), demo("backlog", 2.days))
+                    repository.claim("buffered")
+                    coroutineScope {
+                        val first = async { queue.first() }
+                        delay(50.milliseconds)
+                        first.isActive shouldBe true
+                        repository.finish("buffered", Recorded)
+                        delay(50.milliseconds)
+                        first.isActive shouldBe true
+                        repository.finish("buffered", Uploaded)
+                        first.await().demo.capId
+                    }
+                }
+            head shouldBe "backlog"
+        }
+
+        test("returns a recent head while the backlog buffer is full") {
+            val head =
+                queue { repository, queue ->
+                    repository += listOf(demo("recorded", 3.days), demo("backlog", 2.days), demo("recent", 1.hours))
+                    repository.finish("recorded", Recorded)
+                    queue.first().demo.capId
+                }
+            head shouldBe "recent"
+        }
+
+        test("waits in first and get until start has set recordings pending again and built the queue") {
+            val got =
+                stored { demos, repository, queue ->
+                    repository += listOf(demo("failed", 1.hours))
+                    repository.finish("failed", Failed)
+                    demos += listOf(demo("cap", 2.hours))
+                    coroutineScope {
+                        val first = async { queue.first().demo.capId }
+                        val capIds = async { capIds(queue) }
+                        delay(50.milliseconds)
+                        first.isActive shouldBe true
+                        capIds.isActive shouldBe true
+                        running(queue) { first.await() to capIds.await() }
+                    }
+                }
+            got shouldBe ("failed" to listOf("failed", "cap"))
+        }
+
+        test("queues only the fastest demo of each player on each map, and no demo without a user id") {
+            val got =
+                stored { demos, repository, queue ->
+                    demos +=
+                        listOf(
+                            demo("slower", 7.hours, userId = "1", capTime = 12.seconds),
+                            demo("fastest", 6.hours, userId = "1"),
+                            demo("tie", 5.hours, userId = "1"),
+                            demo("other-player", 4.hours, userId = "2", capTime = 12.seconds),
+                            demo("other-map", 3.hours, userId = "1", capTime = 12.seconds, map = "CTF-BT-Other"),
+                            demo("no-user", 2.hours, userId = null, capTime = 12.seconds),
+                            demo("no-user-again", 1.hours, userId = null, capTime = 12.seconds),
+                        )
+                    running(queue) { capIds(queue) to repository.all().map { it.demo.capId } }
+                }
+            got shouldBe (listOf("fastest", "other-map", "other-player") to listOf("fastest", "other-player", "other-map"))
+        }
+
+        test("builds the queue again once a demo is added") {
+            stored { demos, _, queue ->
+                running(queue) {
+                    capIds(queue) shouldBe emptyList()
+                    demos += listOf(demo("cap", 1.hours))
+                    eventually(5.seconds) { capIds(queue) shouldBe listOf("cap") }
+                }
+            }
+        }
+
+        test("removes the pending recording of a demo once a faster demo of its player on its map arrives") {
+            stored { demos, repository, queue ->
+                demos += listOf(demo("slower", 2.hours, userId = "1", capTime = 12.seconds))
+                running(queue) {
+                    capIds(queue) shouldBe listOf("slower")
+                    demos += listOf(demo("faster", 1.hours, userId = "1"))
+                    eventually(5.seconds) { repository.all().map { it.demo.capId } shouldBe listOf("faster") }
+                }
+            }
+        }
+
+        test("sets a beaten recorded, uploaded or archived recording to outdated once the faster one is recorded") {
+            stored { demos, repository, queue ->
+                repository +=
+                    listOf(
+                        demo("recorded", 6.hours, userId = "1", capTime = 12.seconds),
+                        demo("uploaded", 5.hours, userId = "2", capTime = 12.seconds),
+                        demo("archived", 4.hours, userId = "3", capTime = 12.seconds),
+                    )
+                repository.finish("recorded", Recorded)
+                repository.update("uploaded") { it.copy(status = Uploaded, md5 = "uploaded-md5") }
+                repository.update("archived") { it.copy(status = Archived, md5 = "archived-md5", views = 2) }
+                demos +=
+                    listOf(
+                        demo("faster-recorded", 3.hours, userId = "1"),
+                        demo("faster-uploaded", 2.hours, userId = "2"),
+                        demo("faster-archived", 1.hours, userId = "3"),
+                    )
+                running(queue) {
+                    capIds(queue) shouldBe listOf("faster-archived", "faster-uploaded", "faster-recorded")
+                    listOf("faster-recorded", "faster-uploaded", "faster-archived").forEach { repository.finish(it, Recorded) }
+                    eventually(5.seconds) {
+                        repository["recorded"]?.status shouldBe Outdated
+                        repository["uploaded"]?.status shouldBe Outdated
+                        repository["archived"]?.status shouldBe Outdated
+                    }
+                }
+                repository["uploaded"]?.md5 shouldBe "uploaded-md5"
+                repository["archived"]?.md5 shouldBe "archived-md5"
+                repository["archived"]?.views shouldBe 2
+            }
+        }
+
+        test("keeps a recorded recording while the faster demo of its player on its map is only pending or failed") {
+            stored { demos, repository, queue ->
+                repository +=
+                    listOf(
+                        demo("beaten-by-pending", 4.hours, userId = "1", capTime = 12.seconds),
+                        demo("beaten-by-failed", 3.hours, userId = "2", capTime = 12.seconds),
+                    )
+                repository.finish("beaten-by-pending", Recorded)
+                repository.finish("beaten-by-failed", Recorded)
+                demos += listOf(demo("pending", 2.hours, userId = "1"), demo("failed", 1.hours, userId = "2"))
+                running(queue) {
+                    capIds(queue) shouldBe listOf("failed", "pending")
+                    repository.finish("failed", Failed)
+                    delay(100.milliseconds)
+                    repository["failed"]?.status shouldBe Failed
+                    repository["beaten-by-pending"]?.status shouldBe Recorded
+                    repository["beaten-by-failed"]?.status shouldBe Recorded
+                }
+            }
+        }
+
+        test("sets a beaten recording to outdated once its capture ends") {
+            stored { demos, repository, queue ->
+                demos += listOf(demo("slower", 2.hours, userId = "1", capTime = 12.seconds))
+                running(queue) {
+                    capIds(queue) shouldBe listOf("slower")
+                    repository.claim("slower")
+                    demos += listOf(demo("faster", 1.hours, userId = "1"))
+                    eventually(5.seconds) { capIds(queue) shouldBe listOf("faster") }
+                    repository.finish("faster", Recorded)
+                    delay(100.milliseconds)
+                    repository["slower"]?.status shouldBe RecordingStatus.Recording
+                    repository.finish("slower", Recorded)
+                    eventually(5.seconds) { repository["slower"]?.status shouldBe Outdated }
+                }
+            }
+        }
+
+        test("raises no status change from a build that changes nothing") {
+            val changes =
+                stored { demos, repository, queue ->
+                    repository += listOf(demo("slower", 2.hours, userId = "1", capTime = 12.seconds))
+                    repository.finish("slower", Recorded)
+                    demos += listOf(demo("faster", 1.hours, userId = "1"))
+                    running(queue) {
+                        capIds(queue) shouldBe listOf("faster")
+                        repository.finish("faster", Recorded)
+                        eventually(5.seconds) { repository["slower"]?.status shouldBe Outdated }
+                        delay(100.milliseconds)
+                        val count = AtomicInteger()
+                        coroutineScope {
+                            val job = launch { repository.statusChanges.collect { count.incrementAndGet() } }
+                            delay(200.milliseconds)
+                            job.cancelAndJoin()
+                        }
+                        count.get()
+                    }
+                }
+            changes shouldBe 1
+        }
+
+        test("queues recording, failed and unresolvable recordings again on start, and keeps the rest") {
+            val got =
+                stored { _, repository, queue ->
+                    repository += listOf(demo("recording", 4.hours))
+                    repository.claim("recording")
+                    repository += listOf(demo("failed", 3.hours), demo("recorded", 2.hours), demo("unresolvable", 1.hours))
+                    repository.finish("failed", Failed, "Capture failed")
+                    repository.finish("recorded", Recorded)
+                    repository.finish("unresolvable", Unresolvable, "Missing BTPog")
+                    running(queue) { capIds(queue) to repository["recorded"]?.status }
+                }
+            got shouldBe (listOf("unresolvable", "failed", "recording") to Recorded)
+        }
+
+        test("queues failed and unresolvable recordings again once the retry interval passes, and leaves outdated and the rest") {
+            stored(retryInterval = 300.milliseconds) { _, repository, queue ->
+                running(queue) {
+                    repository +=
+                        listOf(
+                            demo("busy", 5.hours),
+                            demo("failed", 4.hours),
+                            demo("unresolvable", 3.hours),
+                            demo("recorded", 2.hours),
+                            demo("outdated", 1.hours),
+                        )
+                    repository.claim("busy")
+                    repository.finish("failed", Failed, "Capture failed")
+                    repository.finish("unresolvable", Unresolvable, "Missing BTPog")
+                    repository.finish("recorded", Recorded)
+                    repository.finish("outdated", Outdated, "Capture failed")
+                    eventually(5.seconds) { capIds(queue) shouldBe listOf("unresolvable", "failed") }
+                    delay(600.milliseconds)
+                    repository.all().map { it.demo.capId to it.status } shouldBe
+                        listOf(
+                            "busy" to RecordingStatus.Recording,
+                            "failed" to Pending,
+                            "unresolvable" to Pending,
+                            "recorded" to Recorded,
+                            "outdated" to Outdated,
+                        )
+                }
+            }
+        }
+    })

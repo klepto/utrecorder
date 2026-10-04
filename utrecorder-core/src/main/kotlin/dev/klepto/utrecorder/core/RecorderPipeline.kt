@@ -37,11 +37,6 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit.SECONDS
 
 /**
- * The logger of the recorder pipeline.
- */
-private val log = logger<RecorderPipeline>()
-
-/**
  * A recording of demos in one installation: a video capture and an audio capture, muxed into one mp4 with a thumbnail.
  *
  * Create one with the constructor. Several recordings may share one installation.
@@ -173,6 +168,11 @@ class RecorderPipeline(
          * How many seconds into the mp4 the thumbnail is taken.
          */
         const val THUMBNAIL_TIME = 1.0
+
+        /**
+         * The logger of the recorder pipeline.
+         */
+        val log = logger<RecorderPipeline>()
 
         fun format(duration: Duration): String = "%.3f".format(Locale.ROOT, duration.toDouble(SECONDS))
     }

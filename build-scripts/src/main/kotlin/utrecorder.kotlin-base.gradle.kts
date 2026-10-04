@@ -41,6 +41,7 @@ tasks.withType<Test>().configureEach {
 
 tasks.test {
     filter.excludeTestsMatching(INTEGRATION_TEST_PATTERN)
+    maxParallelForks = 2
 }
 
 val integrationTestCachePath =
@@ -65,6 +66,7 @@ tasks.register<Test>("integrationTest") {
     filter.includeTestsMatching(INTEGRATION_TEST_PATTERN)
     filter.isFailOnNoMatchingTests = false
     outputs.upToDateWhen { false }
+    outputs.doNotCacheIf("it exercises real external dependencies") { true }
     testLogging.showStandardStreams = true
     jvmArgumentProviders += IntegrationTestCache(integrationTestCache)
 }

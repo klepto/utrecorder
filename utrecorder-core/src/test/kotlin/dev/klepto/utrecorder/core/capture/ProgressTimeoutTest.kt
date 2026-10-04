@@ -11,6 +11,8 @@ import kotlin.time.Duration.Companion.milliseconds
 
 class ProgressTimeoutTest :
     FunSpec({
+        coroutineTestScope = true
+
         test("runs a block that keeps making progress past the idle window") {
             val progress = MutableStateFlow(0L)
 

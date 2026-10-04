@@ -130,7 +130,7 @@ class UploadServiceTest :
                     archiveDelay = archiveDelay,
                 )
             SqliteDocumentStore.open(createTempDirectory(root, "database").resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, DemoRepository(store), config, clock)
+                val repository = RecordingRepository(store, DemoRepository(store), clock)
                 repository += demos
                 statuses.forEach { (capId, status) -> repository.update(capId) { seed(it.copy(status = status, md5 = md5s[capId])) } }
                 coroutineScope {

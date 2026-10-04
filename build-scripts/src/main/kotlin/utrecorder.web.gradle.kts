@@ -20,6 +20,7 @@ node {
     workDir = rootProject.layout.projectDirectory.dir(".gradle/nodejs")
     npmWorkDir = rootProject.layout.projectDirectory.dir(".gradle/npm")
     npmInstallCommand = "ci"
+    fastNpmInstall = true
 }
 
 tasks.npmInstall {
@@ -50,6 +51,7 @@ val webBuild =
         inputs.file(nodeVersionFile).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("version", project.version.toString())
         outputs.dir(layout.buildDirectory.dir("web"))
+        outputs.cacheIf { true }
     }
 
 val webCheck =
@@ -64,6 +66,7 @@ val webCheck =
         inputs.files(webSources, "biome.json").withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.file(nodeVersionFile).withPathSensitivity(PathSensitivity.NONE)
         outputs.file(marker)
+        outputs.cacheIf { true }
         doLast { marker.get().asFile.writeText("") }
     }
 

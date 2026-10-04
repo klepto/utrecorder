@@ -10,6 +10,7 @@ import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingJobs
+import dev.klepto.utrecorder.server.recording.RecordingQueue
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
@@ -20,6 +21,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import dev.klepto.utrecorder.server.upload.MediaMetadata
 import dev.klepto.utrecorder.server.upload.MediaUploader
+import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.shouldBe
@@ -35,6 +37,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -121,6 +126,7 @@ class HttpServiceTest :
             archive: Boolean = true,
             jobs: RecordingJobs = RecordingJobs(),
             trustForwardedHeaders: Boolean = false,
+            queued: Boolean = false,
             block: suspend ApplicationTestBuilder.(RecordingRepository) -> Unit,
         ) {
             val directory = createTempDirectory(root, "http")
@@ -137,14 +143,20 @@ class HttpServiceTest :
                     trustForwardedHeaders = trustForwardedHeaders,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, DemoRepository(store), config, clock)
+                val demos = DemoRepository(store)
+                val repository = RecordingRepository(store, demos, clock)
                 repository += statuses.keys.map { demo(it) }
                 statuses.forEach { (capId, status) -> repository.finish(capId, status) }
                 cache.set(CacheService(repository, uploader.takeIf { archive }, config, clock))
-                val service = HttpService(repository, jobs, cache.get(), config)
+                val queue = RecordingQueue(demos, repository, config, clock)
+                val service = HttpService(repository, queue, jobs, cache.get(), config)
                 testApplication {
                     application { service.module(this) }
-                    block(repository)
+                    coroutineScope {
+                        val job = if (queued) launch { queue.start() } else null
+                        block(repository)
+                        job?.cancelAndJoin()
+                    }
                 }
             }
         }
@@ -412,14 +424,30 @@ class HttpServiceTest :
             }
         }
 
-        test("lists the next 10 pending demos, newest first") {
-            http(emptyMap()) { repository ->
-                repository += (1..12).map { demo("pending-$it", Instant.parse("2026-09-26T00:00:00Z") + it.hours) }
-                repository += listOf(demo("recorded", Instant.parse("2026-09-27T00:00:00Z")))
+        test("lists the demos of the first 10 pending recordings in queue order: recent, medal, cap time, newest") {
+            http(emptyMap(), queued = true) { repository ->
+                now.set(Instant.parse("2026-09-27T08:00:00Z"))
+                repository +=
+                    listOf(
+                        demo("backlog", Instant.parse("2026-09-25T08:00:00Z")).copy(medal = 6),
+                        demo("casual-slow", Instant.parse("2026-09-27T07:00:00Z")).copy(capTime = 20.seconds),
+                        demo("casual-fast", Instant.parse("2026-09-27T06:00:00Z")),
+                        demo("gold", Instant.parse("2026-09-27T05:00:00Z")).copy(medal = 4),
+                        demo("world-record", Instant.parse("2026-09-27T04:00:00Z")).copy(medal = 6),
+                        demo("recorded", Instant.parse("2026-09-27T07:30:00Z")).copy(medal = 6),
+                    ).map { it.copy(userId = it.capId) }
+                repository +=
+                    (1..8).map {
+                        val timestamp = Instant.parse("2026-09-26T20:00:00Z") - it.hours
+                        demo("filler-$it", timestamp).copy(userId = "filler-$it", capTime = 30.seconds)
+                    }
                 repository.finish("recorded", Recorded)
-                val queue = Json.parseToJsonElement(client.get("/api/queue").bodyAsText()).jsonArray
 
-                queue.map { it.jsonObject["capId"]!!.jsonPrimitive.content } shouldBe (12 downTo 3).map { "pending-$it" }
+                eventually(5.seconds) {
+                    val queue = Json.parseToJsonElement(client.get("/api/queue").bodyAsText()).jsonArray
+                    queue.map { it.jsonObject["capId"]!!.jsonPrimitive.content } shouldBe
+                        listOf("world-record", "gold", "casual-fast", "casual-slow") + (1..6).map { "filler-$it" }
+                }
             }
         }
 

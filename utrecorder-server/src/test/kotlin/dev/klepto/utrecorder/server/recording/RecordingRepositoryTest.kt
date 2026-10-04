@@ -1,8 +1,5 @@
 package dev.klepto.utrecorder.server.recording
 
-import dev.klepto.utrecorder.common.ConfigReader
-import dev.klepto.utrecorder.common.DirectoriesConfig
-import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
@@ -10,14 +7,14 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
-import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import io.kotest.core.spec.style.FunSpec
-import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.shouldBe
-import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
 import kotlin.time.Clock
@@ -28,8 +25,6 @@ import kotlin.time.Instant
 
 class RecordingRepositoryTest :
     FunSpec({
-        val config = ServerConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = tempdir().toPath()))
-
         fun demo(
             capId: String,
             minute: Int,
@@ -56,7 +51,7 @@ class RecordingRepositoryTest :
             block: suspend (RecordingRepository) -> R,
         ): R =
             SqliteDocumentStore.open(file) {
-                block(RecordingRepository(it, DemoRepository(it), config, clock))
+                block(RecordingRepository(it, DemoRepository(it), clock))
             }
 
         test("stores a pending recording of an added demo and skips a demo already stored") {
@@ -73,13 +68,13 @@ class RecordingRepositoryTest :
         test("stores the demo of an added recording in the demo repository and reads it from there once reopened") {
             val file = file()
             SqliteDocumentStore.open(file) { store ->
-                RecordingRepository(store, DemoRepository(store), config, clock) += listOf(demo("cap", 0))
+                RecordingRepository(store, DemoRepository(store), clock) += listOf(demo("cap", 0))
             }
 
             val stored =
                 SqliteDocumentStore.open(file) { store ->
                     val demos = DemoRepository(store)
-                    demos.all() to RecordingRepository(store, demos, config, clock)["cap"]?.demo
+                    demos.all() to RecordingRepository(store, demos, clock)["cap"]?.demo
                 }
             stored shouldBe (listOf(demo("cap", 0)) to demo("cap", 0))
         }
@@ -129,69 +124,68 @@ class RecordingRepositoryTest :
             capIds shouldBe listOf("recording", "recorded", "viewed", "kept")
         }
 
-        test("takes the demo of the newest pending recording and sets it to recording") {
-            val taken =
-                repository { repository ->
-                    repository += listOf(demo("older", 0), demo("newer", 1))
-                    val first = repository.take()
-                    val second = repository.take()
-                    listOf(first.capId, second.capId, repository["newer"]?.status)
+        test("claims a pending recording by setting it to recording and stamping its last update") {
+            val claimed =
+                repository {
+                    now.set(Instant.parse("2026-09-27T08:00:00Z"))
+                    it += listOf(demo("cap", 0))
+                    now.set(Instant.parse("2026-09-27T09:00:00Z"))
+                    it.claim("cap") to it["cap"]
                 }
-            taken shouldBe listOf("newer", "older", RecordingStatus.Recording)
+            claimed shouldBe
+                (true to Recording(demo("cap", 0), RecordingStatus.Recording, lastUpdate = Instant.parse("2026-09-27T09:00:00Z")))
         }
 
-        test("suspends a take until a demo is added") {
-            val taken =
+        test("does not claim a missing recording or one that is not pending") {
+            val claimed =
+                repository {
+                    it += listOf(demo("failed", 0), demo("recording", 1))
+                    it.finish("failed", Failed)
+                    it.finish("recording", RecordingStatus.Recording)
+                    listOf(it.claim("missing"), it.claim("failed"), it.claim("recording"), it["failed"]?.status)
+                }
+            claimed shouldBe listOf(false, false, false, Failed)
+        }
+
+        test("signals status changes once when collected and again after a recording is added, changes status or is removed") {
+            val counts =
                 repository { repository ->
                     coroutineScope {
-                        val take = async { repository.take() }
-                        delay(50.milliseconds)
-                        take.isActive shouldBe true
+                        val count = AtomicInteger()
+                        val collector =
+                            launch(start = CoroutineStart.UNDISPATCHED) { repository.statusChanges.collect { count.incrementAndGet() } }
+                        val counts = mutableListOf(count.get())
                         repository += listOf(demo("cap", 0))
-                        take.await().capId
+                        delay(50.milliseconds)
+                        counts += count.get()
+                        repository.finish("cap", Failed)
+                        delay(50.milliseconds)
+                        counts += count.get()
+                        repository.retainUnrecorded { false }
+                        delay(50.milliseconds)
+                        counts += count.get()
+                        collector.cancel()
+                        counts
                     }
                 }
-            taken shouldBe "cap"
+            counts shouldBe listOf(1, 2, 3, 4)
         }
 
-        test("takes a backlog demo only while fewer recordings than the backlog buffer are recording or recorded") {
-            val taken =
+        test("does not signal a status change after a write that keeps every status") {
+            val count =
                 repository { repository ->
-                    repository += listOf(demo("backlog-older", -20_000), demo("backlog-newer", -10_000))
-                    val first = repository.take()
+                    repository += listOf(demo("cap", 0))
                     coroutineScope {
-                        val second = async { repository.take() }
+                        val count = AtomicInteger()
+                        val collector =
+                            launch(start = CoroutineStart.UNDISPATCHED) { repository.statusChanges.collect { count.incrementAndGet() } }
+                        repository.update("cap") { it.copy(md5 = "md5") }
                         delay(50.milliseconds)
-                        second.isActive shouldBe true
-                        repository.finish(first.capId, Recorded)
-                        delay(50.milliseconds)
-                        second.isActive shouldBe true
-                        repository.finish(first.capId, Uploaded)
-                        listOf(first.capId, second.await().capId)
+                        collector.cancel()
+                        count.get()
                     }
                 }
-            taken shouldBe listOf("backlog-newer", "backlog-older")
-        }
-
-        test("takes a recent demo while the backlog buffer is full") {
-            val taken =
-                repository { repository ->
-                    repository += listOf(demo("backlog", -10_000), demo("recorded", -20_000), demo("recent", 0))
-                    repository.finish("recorded", Recorded)
-                    listOf(repository.take().capId, repository["backlog"]?.status)
-                }
-            taken shouldBe listOf("recent", Pending)
-        }
-
-        test("takes a pending demo recorded before while the backlog buffer is full") {
-            val taken =
-                repository { repository ->
-                    repository += listOf(demo("backlog", -10_000), demo("recorded", -20_000), demo("evicted", -30_000))
-                    repository.finish("recorded", Recorded)
-                    repository.update("evicted") { it.copy(recordedAt = Instant.parse("2026-09-20T12:00:00Z")) }
-                    listOf(repository.take().capId, repository["backlog"]?.status)
-                }
-            taken shouldBe listOf("evicted", Pending)
+            count shouldBe 1
         }
 
         test("keeps the error of a finished recording") {

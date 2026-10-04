@@ -125,11 +125,12 @@ class CacheServiceTest :
                     ConfigReader.EMPTY,
                     directories = DirectoriesConfig(ConfigReader.EMPTY, home = directory.resolve("home")),
                     recordings = recordings,
+                    cacheTtl = 14.days,
                     cacheMaxBytes = maxBytes,
                     cacheTargetBytes = targetBytes,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, DemoRepository(store), config, clock)
+                val repository = RecordingRepository(store, DemoRepository(store), clock)
                 repository += statuses.keys.map { demo(it) }
                 // MD5 of "archived".
                 statuses.forEach { (capId, status) ->

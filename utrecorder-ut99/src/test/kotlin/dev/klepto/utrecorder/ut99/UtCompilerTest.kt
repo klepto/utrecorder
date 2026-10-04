@@ -30,7 +30,7 @@ import kotlin.io.path.writeText
  * the package named by `-packages=`, writes the file named by the header of a `.uz` archive, and fails when its
  * directory holds `ucc.fail`. While its directory holds `ucc.abort`, a decompression takes one from the count the file
  * holds and exits with code 134 instead, as a UCC aborted by an assertion does. While its directory holds
- * `ucc.exclusive`, it holds `ucc.running` for a second and fails when another run holds it already.
+ * `ucc.exclusive`, it holds `ucc.running` for 300 milliseconds and fails when another run holds it already.
  */
 class UtCompilerTest :
     FunSpec({
@@ -54,7 +54,7 @@ class UtCompilerTest :
                     echo "FAKE UCC: another run is running"
                     exit 5
                 fi
-                sleep 1
+                sleep 0.3
                 rm -f "${'$'}DIRECTORY/ucc.running"
             fi
             if [ -f "${'$'}DIRECTORY/ucc.fail" ]; then
@@ -106,7 +106,7 @@ class UtCompilerTest :
                             Console.WriteLine("FAKE UCC: another run is running");
                             return 5;
                         }
-                        System.Threading.Thread.Sleep(1000);
+                        System.Threading.Thread.Sleep(300);
                         File.Delete(runningPath);
                     }
 

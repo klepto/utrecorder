@@ -95,7 +95,8 @@ class RecorderConfigTest :
                         VideoTier(1280, 720, 2_700_000, 6_000_000, "4"),
                     )
                 targetSize shouldBe 76_000_000
-                svtav1Params shouldBe "tune=0:color-primaries=1:transfer-characteristics=1:matrix-coefficients=1:color-range=0"
+                svtav1Params shouldBe
+                    "tune=0:enable-variance-boost=1:color-primaries=1:transfer-characteristics=1:matrix-coefficients=1:color-range=0"
                 gop shouldBe 300
                 queue shouldBe 32
                 port shouldBe 0
