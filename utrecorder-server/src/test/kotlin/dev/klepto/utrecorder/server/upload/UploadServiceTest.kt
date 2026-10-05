@@ -78,6 +78,7 @@ class UploadServiceTest :
             isUploaded: suspend (String, String) -> Boolean = { _, _ -> false },
             describe: suspend (String, MediaMetadata) -> Unit = { _, _ -> },
             delete: suspend (String, String) -> Unit = { _, _ -> },
+            size: suspend (String, String) -> Long? = { _, _ -> null },
             upload: suspend (String, Path, MediaMetadata) -> Unit = { _, _, _ -> },
         ): MediaUploader =
             object : MediaUploader {
@@ -101,6 +102,11 @@ class UploadServiceTest :
                     id: String,
                     name: String,
                 ) = delete(id, name)
+
+                override suspend fun size(
+                    id: String,
+                    name: String,
+                ): Long? = size(id, name)
 
                 override fun downloadUrl(
                     id: String,
@@ -503,5 +509,56 @@ class UploadServiceTest :
             }
 
             deletes shouldContainExactly List(2) { "$item:beaten.mp4" }
+        }
+
+        test("sizes each archived recording that has an item and no size, one at a time, then reads no more sizes") {
+            val reads = CopyOnWriteArrayList<String>()
+            val active = AtomicInteger()
+            val overlapped = AtomicInteger()
+            val sizes = mapOf("a.mp4" to 100L, "b.mp4" to 200L)
+            val uploader =
+                uploader(size = { id, name ->
+                    if (active.incrementAndGet() > 1) overlapped.incrementAndGet()
+                    delay(5.milliseconds)
+                    reads += "$id:$name"
+                    active.decrementAndGet()
+                    sizes[name]
+                })
+            running(
+                mapOf("a" to Archived, "b" to Archived, "sized" to Archived, "recorded" to Recorded, "unplaced" to Archived),
+                emptyList(),
+                uploader,
+                seed = {
+                    when (it.demo.capId) {
+                        "sized" -> it.copy(itemId = item, size = 300)
+                        "unplaced" -> it
+                        else -> it.copy(itemId = item)
+                    }
+                },
+            ) { repository ->
+                eventually(5.seconds) { repository["b"]?.size shouldBe 200 }
+                delay(200.milliseconds)
+
+                repository.all().associate { it.demo.capId to it.size } shouldBe
+                    mapOf("a" to 100L, "b" to 200L, "sized" to 300L, "recorded" to null, "unplaced" to null)
+                repository["a"]?.status shouldBe Archived
+            }
+
+            reads shouldContainExactly listOf("$item:a.mp4", "$item:b.mp4")
+            overlapped.get() shouldBe 0
+        }
+
+        test("reads a size again on the next pass after the read failed") {
+            val reads = AtomicInteger()
+            val uploader =
+                uploader(size = { _, _ ->
+                    if (reads.incrementAndGet() == 1) throw IOException("The Archive is unavailable")
+                    100
+                })
+            running(mapOf("a" to Archived), emptyList(), uploader, seed = { it.copy(itemId = item) }) { repository ->
+                eventually(5.seconds) { repository["a"]?.size shouldBe 100 }
+            }
+
+            reads.get() shouldBe 2
         }
     })

@@ -78,8 +78,8 @@ class Recorder(
     }
 
     /**
-     * Returns the mp4 recorded from the demo at [url]. Its thumbnail lies beside it, named as the mp4 with a `.jpg`
-     * extension.
+     * Returns the output of recording the demo at [url]: the mp4, its thumbnail beside it, named as the mp4 with a
+     * `.jpg` extension, and the frame size and the frame rate of its video.
      *
      * The demo is downloaded into the workspace of this recording and is kept there with the rest of its files.
      * [onProgress] receives the [FetchingDemo] stage first. Everything else is as for the [record] that takes a demo
@@ -98,7 +98,7 @@ class Recorder(
         url: String,
         name: String? = null,
         onProgress: ProgressListener<RecorderStage> = {},
-    ): Path =
+    ): RecorderOutput =
         workspace("record", config = directories) {
             val demo = downloadDemo(url, FetchingDemo.start(onProgress))
             recordDemo(demo, name ?: demo.name.substringBeforeLast(DEMO_EXTENSION), onProgress)
@@ -123,7 +123,8 @@ class Recorder(
     }
 
     /**
-     * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo]. Its thumbnail `<name>.jpg` lies beside it.
+     * Returns the output of recording the demo file at [demo]: the mp4 `<name>.mp4`, its thumbnail `<name>.jpg` beside
+     * it, and the frame size and the frame rate of its video.
      *
      * The installation is provisioned and its maps are decompressed when either is missing. Every package the demo
      * names is installed at the GUID the demo recorded. The recorder's console package and HUD layout are installed
@@ -144,17 +145,17 @@ class Recorder(
         demo: Path,
         name: String = demo.name.substringBeforeLast(DEMO_EXTENSION),
         onProgress: ProgressListener<RecorderStage> = {},
-    ): Path = workspace("record", config = directories) { recordDemo(demo, name, onProgress) }
+    ): RecorderOutput = workspace("record", config = directories) { recordDemo(demo, name, onProgress) }
 
     /**
-     * Returns the mp4 `<name>.mp4` recorded from the demo file at [demo], with its thumbnail `<name>.jpg` beside it,
-     * inside this workspace.
+     * Returns the output of recording the demo file at [demo]: the mp4 `<name>.mp4`, with its thumbnail `<name>.jpg`
+     * beside it, inside this workspace.
      */
     private suspend fun Workspace.recordDemo(
         demo: Path,
         name: String,
         onProgress: ProgressListener<RecorderStage>,
-    ): Path {
+    ): RecorderOutput {
         val preparing = PreparingInstallation.start(onProgress)
         UtInstaller(config.ut).install(preparing.part(0.0, 0.8))
         val installation = UtInstallation(config.ut.gameDirectory, config.ut)

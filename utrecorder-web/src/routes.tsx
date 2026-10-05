@@ -4,6 +4,7 @@ import { AboutPage } from "./pages/AboutPage";
 import { HomePage } from "./pages/HomePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { RecordingsPage } from "./pages/RecordingsPage";
+import { StatisticsPage } from "./pages/StatisticsPage";
 
 /** The route table of the site, rendered inside whichever router the caller mounts. */
 export const AppRoutes = () => {
@@ -12,6 +13,7 @@ export const AppRoutes = () => {
       <Route element={<Shell />}>
         <Route index element={<HomePage />} />
         <Route path="recordings" element={<RecordingsPage />} />
+        <Route path="statistics" element={<StatisticsPage />} />
         <Route path="about" element={<AboutPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

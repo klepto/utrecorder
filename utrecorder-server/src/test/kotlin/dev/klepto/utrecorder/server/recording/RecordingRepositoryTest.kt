@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.server.recording
 
+import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
@@ -91,11 +92,11 @@ class RecordingRepositoryTest :
             capIds shouldBe listOf("stored", "added")
         }
 
-        test("sets a recorded recording with the time it was recorded and the time it took") {
+        test("sets a recorded recording with the time it was recorded, the time it took, the size of its mp4 and its video") {
             val entry =
                 repository {
                     it += listOf(demo("cap", 0))
-                    it.recorded("cap", 90.seconds)
+                    it.recorded("cap", 90.seconds, 1_048_576, VideoStream(1920, 1080, 60))
                     it["cap"]
                 }
             entry shouldBe
@@ -105,6 +106,10 @@ class RecordingRepositoryTest :
                     lastUpdate = now.get(),
                     recordedAt = now.get(),
                     processingTime = 90.seconds,
+                    size = 1_048_576,
+                    width = 1920,
+                    height = 1080,
+                    fps = 60,
                 )
         }
 

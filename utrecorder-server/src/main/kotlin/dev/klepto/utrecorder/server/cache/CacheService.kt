@@ -44,6 +44,9 @@ import kotlin.time.Instant
  * and its mp4 is not in [ServerConfig.recordings], the mp4 is downloaded again from [uploader] in the background, one
  * recording at a time.
  *
+ * Each pass also sets the [Recording.size] of every recording without one whose mp4 is in [ServerConfig.recordings],
+ * and keeps the [CacheUsage] of the mp4 files it leaves in [usage].
+ *
  * A delete or a download that fails is logged, and tried again on the next pass or the next view.
  *
  * @property repository The recordings whose mp4 files are kept.
@@ -60,6 +63,14 @@ class CacheService(
     private val downloads = Channel<Recording>(Channel.UNLIMITED)
     private val downloading: MutableSet<String> = ConcurrentHashMap.newKeySet()
     private val views = ConcurrentHashMap<String, View>()
+
+    /**
+     * Usage of the mp4 files in [ServerConfig.recordings] that the last [evict] pass left, or `null` until the first
+     * pass ends. Thumbnails are not counted.
+     */
+    @Volatile
+    var usage: CacheUsage? = null
+        private set
 
     override suspend fun start() {
         try {
@@ -123,6 +134,10 @@ class CacheService(
      * [Recording.lastUpdate] when never viewed; within [Outdated], the oldest [Recording.lastUpdate] goes first. The mp4
      * of any other recording is never deleted. When only such mp4 files are left above [ServerConfig.cacheTargetBytes],
      * logs a warning and stops.
+     *
+     * Before deleting anything, sets the [Recording.size] of every recording without one whose mp4 is in
+     * [ServerConfig.recordings], as one transaction that changes no status. If no recording needs a size, writes nothing.
+     * Once done, sets [usage] to the mp4 files left, measured at the time [clock] reports.
      */
     suspend fun evict() {
         val recordings =
@@ -130,10 +145,31 @@ class CacheService(
                 .all()
                 .map { withViews(it) }
                 .associateBy { it.demo.capId }
-        mp4s()
-            .filter { isExpired(recordings[it.nameWithoutExtension]) }
-            .forEach { delete(it) }
-        trim(recordings.values)
+        val sizes = mp4Sizes().toMutableMap()
+        storeSizes(recordings.values, sizes)
+        sizes.keys
+            .filter { isExpired(recordings[it]) }
+            .filter { delete(config.mp4(it)) }
+            .forEach { sizes -= it }
+        trim(recordings.values, sizes)
+        usage = CacheUsage(sizes.values.sum(), sizes.size, clock.now())
+    }
+
+    /**
+     * Sets the [Recording.size] of every recording of [repository] without one to its size in [sizes], keyed by cap id,
+     * as one transaction. If none of [recordings] lacks a size that [sizes] holds, writes nothing.
+     */
+    private suspend fun storeSizes(
+        recordings: Collection<Recording>,
+        sizes: Map<String, Long>,
+    ) {
+        if (recordings.none { it.size == null && it.demo.capId in sizes }) return
+        repository.updateAll { recording ->
+            when (recording.size) {
+                null -> sizes[recording.demo.capId]?.let { recording.copy(size = it) } ?: recording
+                else -> recording
+            }
+        }
     }
 
     /**
@@ -162,12 +198,15 @@ class CacheService(
     private fun withViews(recording: Recording): Recording = views[recording.demo.capId]?.let { viewed(recording, it) } ?: recording
 
     /**
-     * Deletes the mp4 files of [recordings] in trim order, if they take more than [ServerConfig.cacheMaxBytes], until
-     * they take at most [ServerConfig.cacheTargetBytes]. Logs a warning if only mp4 files that are never trimmed are
-     * left above [ServerConfig.cacheTargetBytes].
+     * Deletes the mp4 files of [recordings] in trim order, if the mp4 files of [sizes] take more than
+     * [ServerConfig.cacheMaxBytes], until they take at most [ServerConfig.cacheTargetBytes]. Removes each deleted mp4
+     * from [sizes]. Logs a warning if only mp4 files that are never trimmed are left above
+     * [ServerConfig.cacheTargetBytes].
      */
-    private suspend fun trim(recordings: Collection<Recording>) {
-        val sizes = mp4Sizes()
+    private suspend fun trim(
+        recordings: Collection<Recording>,
+        sizes: MutableMap<String, Long>,
+    ) {
         var total = sizes.values.sum()
         if (total <= config.cacheMaxBytes) return
         val candidates =
@@ -178,7 +217,7 @@ class CacheService(
             if (total <= config.cacheTargetBytes) break
             val capId = recording.demo.capId
             if (!delete(config.mp4(capId))) continue
-            total -= sizes.getValue(capId)
+            total -= sizes.remove(capId) ?: 0
         }
         if (total > config.cacheTargetBytes) {
             log.warn { "Cannot trim ${config.recordings} below $total bytes: only undeletable mp4 files left" }

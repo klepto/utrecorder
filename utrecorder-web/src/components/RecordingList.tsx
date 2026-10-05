@@ -4,12 +4,18 @@ import type { Recording } from "../api/types";
 import { QueryList, type QueryState } from "./QueryList";
 import { RecordingItem } from "./RecordingItem";
 
+interface RecordingListProps {
+  query: QueryState<Recording>;
+  /** The text of the empty state. */
+  empty?: string;
+}
+
 /** Recordings as a stack of `RecordingItem`, of which at most one is expanded. */
-export const RecordingList = ({ query }: { query: QueryState<Recording> }) => {
+export const RecordingList = ({ query, empty = "No recordings yet." }: RecordingListProps) => {
   const [opened, setOpened] = useState<string | null>(null);
   const toggle = (capId: string) => setOpened((current) => (current === capId ? null : capId));
   return (
-    <QueryList query={query} empty="No recordings yet.">
+    <QueryList query={query} empty={empty}>
       {(recordings) => (
         <Stack gap="md">
           {recordings.map((recording) => (

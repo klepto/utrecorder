@@ -87,6 +87,27 @@ describe("RecordingList", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
+  test("lists the resolution, frame rate, file size and processing time under the video", () => {
+    render(wrap(<RecordingList query={{ data: [recordings[0]], isPending: false, isError: false }} />));
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(screen.getByText("Resolution").nextSibling).toHaveTextContent("1920×1080");
+    expect(screen.getByText("Frame rate").nextSibling).toHaveTextContent("60 fps");
+    expect(screen.getByText("File size").nextSibling).toHaveTextContent("19 MB");
+    expect(screen.getByText("Processing time").nextSibling).toHaveTextContent("1 min 30 s");
+  });
+
+  test("leaves out the figures the server did not store", () => {
+    const last = recordings[recordings.length - 1];
+    render(wrap(<RecordingList query={{ data: [last], isPending: false, isError: false }} />));
+
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(document.querySelector("video")).not.toBeNull();
+    expect(document.querySelector("dl")).toBeNull();
+  });
+
   test("replaces the video with an alert on a playback error", async () => {
     render(wrap(<Connected />));
 

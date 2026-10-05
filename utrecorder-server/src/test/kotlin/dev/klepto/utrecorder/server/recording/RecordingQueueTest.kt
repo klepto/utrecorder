@@ -194,7 +194,7 @@ class RecordingQueueTest :
                         val first = async { queue.first() }
                         delay(50.milliseconds)
                         first.isActive shouldBe true
-                        repository.recorded("buffered", 1.hours)
+                        repository.recorded("buffered", 1.hours, 1_024)
                         first.await().demo.capId
                     }
                 }
@@ -222,7 +222,7 @@ class RecordingQueueTest :
                 queue { repository, queue ->
                     repository += listOf(demo("first", 4.days), demo("second", 3.days), demo("backlog", 2.days))
                     repository.update("first") { it.copy(status = Recorded, recordedAt = now - 1.days + 1.seconds) }
-                    repository.recorded("second", 1.hours)
+                    repository.recorded("second", 1.hours, 1_024)
                     queue.first().demo.capId
                 }
             head shouldBe "backlog"

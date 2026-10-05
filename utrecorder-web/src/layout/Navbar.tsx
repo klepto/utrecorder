@@ -9,6 +9,7 @@ import classes from "./Navbar.module.css";
 const links = [
   { to: "/", label: "Home" },
   { to: "/recordings", label: "Recordings" },
+  { to: "/statistics", label: "Statistics" },
   { to: "/about", label: "About" },
 ];
 

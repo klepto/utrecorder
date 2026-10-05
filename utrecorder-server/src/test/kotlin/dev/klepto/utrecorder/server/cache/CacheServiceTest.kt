@@ -4,6 +4,9 @@ import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.server.ServerConfig
+import dev.klepto.utrecorder.server.database.DocumentCollection
+import dev.klepto.utrecorder.server.database.DocumentStore
+import dev.klepto.utrecorder.server.database.DocumentTransaction
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
@@ -28,6 +31,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.KSerializer
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.Path
@@ -53,6 +57,7 @@ class CacheServiceTest :
             }
 
         val requests = AtomicInteger()
+        val puts = AtomicInteger()
         val path = AtomicReference<String>()
         val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server.createContext("/") { exchange ->
@@ -68,8 +73,33 @@ class CacheServiceTest :
         beforeTest {
             now.set(Instant.parse("2026-09-27T08:00:00Z"))
             requests.set(0)
+            puts.set(0)
             path.set(null)
         }
+
+        fun counting(store: DocumentStore): DocumentStore =
+            object : DocumentStore {
+                override fun <T : Any> collection(
+                    name: String,
+                    serializer: KSerializer<T>,
+                    key: (T) -> String,
+                ): DocumentCollection<T> {
+                    val collection = store.collection(name, serializer, key)
+                    return object : DocumentCollection<T> {
+                        override suspend fun <R> transaction(block: suspend (DocumentTransaction<T>) -> R): R =
+                            collection.transaction { stored ->
+                                block(
+                                    object : DocumentTransaction<T> by stored {
+                                        override suspend fun put(document: T) {
+                                            puts.incrementAndGet()
+                                            stored.put(document)
+                                        }
+                                    },
+                                )
+                            }
+                    }
+                }
+            }
 
         fun demo(capId: String): Demo =
             Demo(
@@ -104,6 +134,11 @@ class CacheServiceTest :
                     name: String,
                 ) {}
 
+                override suspend fun size(
+                    id: String,
+                    name: String,
+                ): Long? = null
+
                 override fun downloadUrl(
                     id: String,
                     name: String,
@@ -130,7 +165,7 @@ class CacheServiceTest :
                     cacheTargetBytes = targetBytes,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
-                val repository = RecordingRepository(store, DemoRepository(store), clock)
+                val repository = RecordingRepository(counting(store), DemoRepository(store), clock)
                 repository += statuses.keys.map { demo(it) }
                 // MD5 of "archived".
                 statuses.forEach { (capId, status) ->
@@ -365,6 +400,52 @@ class CacheServiceTest :
                 }
 
                 recordings.resolve("corrupt.mp4").shouldNotExist()
+            }
+        }
+
+        test("sizes every recording without a size whose mp4 is cached, and changes no status") {
+            val statuses = mapOf("recorded" to Recorded, "archive" to Archived, "missing" to Archived)
+            cache(statuses, listOf("recorded", "archive")) { service, repository, _ ->
+                val before = repository.all().associate { it.demo.capId to it.lastUpdate }
+                service.evict()
+
+                repository.all().associate { it.demo.capId to it.size } shouldBe mapOf("recorded" to 8L, "archive" to 7L, "missing" to null)
+                repository.all().associate { it.demo.capId to it.status } shouldBe
+                    mapOf("recorded" to Recorded, "archive" to Archived, "missing" to Archived)
+                repository.all().associate { it.demo.capId to it.lastUpdate } shouldBe before
+            }
+        }
+
+        test("writes nothing to the store when no recording needs a size") {
+            cache(mapOf("sized" to Archived, "missing" to Recorded), listOf("sized")) { service, repository, _ ->
+                repository.update("sized") { it.copy(size = 999) }
+                puts.set(0)
+                service.evict()
+
+                puts.get() shouldBe 0
+                repository["sized"]?.size shouldBe 999
+            }
+        }
+
+        test("keeps the size of a recording whose mp4 is evicted") {
+            cache(mapOf("expired" to Archived), listOf("expired")) { service, repository, recordings ->
+                now.set(now.get() + 15.days)
+                service.evict()
+                service.evict()
+
+                recordings.resolve("expired.mp4").shouldNotExist()
+                repository["expired"]?.size shouldBe 7
+            }
+        }
+
+        test("reports no usage before the first pass, then the mp4 files left after the last pass") {
+            cache(mapOf("kept" to Recorded, "expired" to Archived), listOf("kept", "expired")) { service, _, recordings ->
+                recordings.resolve("kept.jpg").writeText("thumbnail")
+                service.usage.shouldBeNull()
+                now.set(now.get() + 15.days)
+                service.evict()
+
+                service.usage shouldBe CacheUsage(4, 1, Instant.parse("2026-10-12T08:00:00Z"))
             }
         }
     })

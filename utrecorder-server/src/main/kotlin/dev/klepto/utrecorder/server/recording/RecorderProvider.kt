@@ -39,8 +39,8 @@ class DefaultRecorderProvider(
         onProgress: ProgressListener<RecorderStage>,
     ): RecorderResult =
         try {
-            val mp4 = Recorder(config).record(demo.demoUrl, demo.capId, onProgress)
-            RecorderResult.Done(mp4, mp4.resolveSibling("${demo.capId}.jpg"))
+            val output = Recorder(config).record(demo.demoUrl, demo.capId, onProgress)
+            RecorderResult.Done(output.mp4, output.thumbnail, output.video)
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: UtPackageException) {

@@ -1,5 +1,5 @@
 import { HttpResponse, http } from "msw";
-import { jobs, queue, recordings } from "./fixtures";
+import { jobs, queue, recordings, statistics } from "./fixtures";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 100;
@@ -13,6 +13,7 @@ const nonNegativeInteger = (value: string | null, fallback: number): number | nu
 /** Handlers serving the fixtures on the server's JSON API. */
 export const handlers = [
   http.get("/api/jobs", () => HttpResponse.json(jobs)),
+  http.get("/api/statistics", () => HttpResponse.json(statistics)),
   http.get("/api/queue", () => HttpResponse.json(queue)),
   http.get("/api/recordings", ({ request }) => {
     const params = new URL(request.url).searchParams;

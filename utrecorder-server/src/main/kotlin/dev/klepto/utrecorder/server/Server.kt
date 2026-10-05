@@ -10,6 +10,7 @@ import dev.klepto.utrecorder.server.http.HttpService
 import dev.klepto.utrecorder.server.http.JobEndpoint
 import dev.klepto.utrecorder.server.http.QueueEndpoint
 import dev.klepto.utrecorder.server.http.RecordingEndpoint
+import dev.klepto.utrecorder.server.http.StatisticsEndpoint
 import dev.klepto.utrecorder.server.http.VideoEndpoint
 import dev.klepto.utrecorder.server.http.WebEndpoint
 import dev.klepto.utrecorder.server.recording.DefaultRecorderProvider
@@ -17,6 +18,7 @@ import dev.klepto.utrecorder.server.recording.RecordingJobs
 import dev.klepto.utrecorder.server.recording.RecordingQueue
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingService
+import dev.klepto.utrecorder.server.statistics.StatisticsReport
 import dev.klepto.utrecorder.server.upload.ArchiveMediaUploader
 import dev.klepto.utrecorder.server.upload.MediaUploader
 import dev.klepto.utrecorder.server.upload.UploadService
@@ -63,6 +65,7 @@ object Server {
                             RecordingEndpoint(repository, config),
                             JobEndpoint(jobs),
                             QueueEndpoint(queue),
+                            StatisticsEndpoint(StatisticsReport(demos, repository, queue, jobs, cache, config)),
                             WebEndpoint(),
                         ),
                         config,

@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.server.recording
 
+import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.server.demo.Demo
 import kotlinx.serialization.Serializable
 import kotlin.time.Duration
@@ -20,6 +21,12 @@ import kotlin.time.Instant
  * the server.
  * @property itemId The id of the item in remote storage the mp4 was uploaded into, or `null` if the mp4 is not in remote
  * storage, or its file there has been deleted.
+ * @property size The size in bytes of the mp4, or `null` if it was never measured. Kept once measured, whatever the
+ * status of the recording becomes and whether its mp4 is still stored.
+ * @property width The width of the video of the mp4 in pixels, or `null` if it was not recorded by the server since
+ * the server began to store it.
+ * @property height The height of the video of the mp4 in pixels, or `null` where [width] is.
+ * @property fps The frames per second of the video of the mp4, or `null` where [width] is.
  */
 @Serializable
 data class Recording(
@@ -33,7 +40,17 @@ data class Recording(
     val recordedAt: Instant? = null,
     val processingTime: Duration? = null,
     val itemId: String? = null,
-)
+    val size: Long? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val fps: Int? = null,
+) {
+    /**
+     * Returns this recording with the frame size and the frame rate of [video]. If [video] is `null`, returns it with
+     * both unset instead.
+     */
+    fun withVideo(video: VideoStream?): Recording = copy(width = video?.width, height = video?.height, fps = video?.fps)
+}
 
 /**
  * State of a [Recording].

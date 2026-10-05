@@ -108,6 +108,16 @@ class ArchiveMediaUploaderTest :
             request.url.toString() shouldBe "https://archive.org/metadata/ut99-bt-$id"
         }
 
+        test("reads the size of a file from the item metadata, or null for a file the item does not hold") {
+            val body = """{"files":[{"name":"other.mp4","size":"7"},{"name":"cap.mp4","size":"1048576"}]}"""
+            val engine = engine(body)
+            val uploader = ArchiveMediaUploader(config, engine)
+
+            uploader.size(id, "cap.mp4") shouldBe 1_048_576
+            uploader.size(id, "missing.mp4") shouldBe null
+            engine.requestHistory.map { it.url.toString() } shouldBe List(2) { "https://archive.org/metadata/ut99-bt-$id" }
+        }
+
         test("finds no file when every md5 differs") {
             val uploader = ArchiveMediaUploader(config, engine("""{"files":[{"name":"$id.mp4","md5":"other"}]}"""))
 

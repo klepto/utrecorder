@@ -171,7 +171,7 @@ object UtRecorder {
     ) {
         val progress = MutableStateFlow<Progress<RecorderStage>?>(null)
         val progressLog = ProgressLog<RecorderStage> { log.info { progressLine(it) } }
-        val mp4 =
+        val output =
             coroutineScope {
                 val progressLogger = launch { logProgress(progress, progressLog) }
                 Recorder(directories = directories)
@@ -179,7 +179,7 @@ object UtRecorder {
                     .also { progressLogger.cancel() }
             }
         progress.value?.let { progressLog.log(it) }
-        println(mp4)
+        println(output.mp4)
     }
 
     /**

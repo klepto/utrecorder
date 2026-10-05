@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.server.recording
 
+import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.server.database.CachedCollection
 import dev.klepto.utrecorder.server.database.DocumentStore
 import dev.klepto.utrecorder.server.database.DocumentTransaction
@@ -111,14 +112,21 @@ class RecordingRepository(
     }
 
     /**
-     * Sets the recording stored under [capId] to [Recorded], recorded now in [processingTime]. If there is none, does
-     * nothing.
+     * Sets the recording stored under [capId] to [Recorded], recorded now in [processingTime] into an mp4 of [size]
+     * bytes whose video is [video]. If [video] is not provided, the frame size and the frame rate are unset. If there
+     * is no recording, does nothing.
      */
     suspend fun recorded(
         capId: String,
         processingTime: Duration,
+        size: Long,
+        video: VideoStream? = null,
     ) {
-        update(capId) { it.copy(status = Recorded, recordedAt = clock.now(), processingTime = processingTime) }
+        update(capId) {
+            it
+                .copy(status = Recorded, recordedAt = clock.now(), processingTime = processingTime, size = size)
+                .withVideo(video)
+        }
     }
 
     /**
@@ -213,6 +221,10 @@ class RecordingRepository(
         val recordedAt: Instant? = null,
         val processingTime: Duration? = null,
         val itemId: String? = null,
+        val size: Long? = null,
+        val width: Int? = null,
+        val height: Int? = null,
+        val fps: Int? = null,
     )
 
     /**
@@ -262,6 +274,10 @@ class RecordingRepository(
                 recordedAt = recording.recordedAt,
                 processingTime = recording.processingTime,
                 itemId = recording.itemId,
+                size = recording.size,
+                width = recording.width,
+                height = recording.height,
+                fps = recording.fps,
             )
 
         /**
@@ -279,6 +295,10 @@ class RecordingRepository(
                 recordedAt = recording.recordedAt,
                 processingTime = recording.processingTime,
                 itemId = recording.itemId,
+                size = recording.size,
+                width = recording.width,
+                height = recording.height,
+                fps = recording.fps,
             )
     }
 

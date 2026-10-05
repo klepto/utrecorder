@@ -37,7 +37,9 @@ import kotlin.time.TimeSource
  * - Once per [ServerConfig.uploadInterval], each [Uploaded] recording whose checksum [uploader] confirms is set to
  *   [Archived], one at a time. One that is still not confirmed 24 hours after it was set to [Uploaded] is set to
  *   [Recorded] again, so it is uploaded again. Then, for every [Archived] recording, the file of each [Outdated]
- *   recording of the same item is deleted, and the [Recording.itemId] of that recording is cleared.
+ *   recording of the same item is deleted, and the [Recording.itemId] of that recording is cleared. Then each
+ *   [Archived] recording that has a [Recording.itemId] and no [Recording.size] is given the size [uploader] reports
+ *   for its file, one at a time.
  * - The [Recorded] recording with the oldest [Recording.recordedAt] whose `<capId>.mp4` is in [ServerConfig.recordings],
  *   and that was recorded at least [ServerConfig.archiveDelay] ago, is uploaded into its item, the item is described,
  *   and the recording is set to [Uploaded] with the MD5 checksum of the mp4 and the item id. If [uploader] already holds
@@ -77,13 +79,14 @@ class UploadService(
     }
 
     /**
-     * Checks the [Uploaded] recordings, and deletes the files of the [Outdated] ones, once per
-     * [ServerConfig.uploadInterval].
+     * Checks the [Uploaded] recordings, deletes the files of the [Outdated] ones, and sizes the [Archived] ones, once
+     * per [ServerConfig.uploadInterval].
      */
     private suspend fun archiveLoop() {
         while (isRunning()) {
             archiveUploaded()
             deleteOutdated()
+            sizeArchived()
             delay(config.uploadInterval)
         }
     }
@@ -149,6 +152,30 @@ class UploadService(
         if (clock.now() - recording.lastUpdate < CONFIRMATION_TIMEOUT) return
         log.warn { "Uploading recording ${recording.demo.capId} again, its upload was not confirmed in $CONFIRMATION_TIMEOUT" }
         repository.finish(recording.demo.capId, Recorded)
+    }
+
+    /**
+     * Sets the [Recording.size] of every [Archived] recording of [repository] that has a [Recording.itemId] and no
+     * [Recording.size] to the size [uploader] reports for its file, one at a time. A recording whose file [uploader]
+     * does not hold keeps no size. If a read fails, logs it.
+     */
+    private suspend fun sizeArchived() {
+        repository
+            .all()
+            .filter { it.status == Archived && it.itemId != null && it.size == null }
+            .forEach { size(it) }
+    }
+
+    /**
+     * Sets the [Recording.size] of [recording] to the size [uploader] reports for its file, unless it has a size by
+     * then. If the read fails, logs it.
+     */
+    private suspend fun size(recording: Recording) {
+        val capId = recording.demo.capId
+        val itemId = recording.itemId ?: return
+        suspendCatching { uploader.size(itemId, config.mp4(capId).name) }
+            .onSuccess { size -> if (size != null) repository.update(capId) { it.copy(size = it.size ?: size) } }
+            .onFailure { log.warn(it) { "Could not read the size of the upload of recording $capId" } }
     }
 
     /**

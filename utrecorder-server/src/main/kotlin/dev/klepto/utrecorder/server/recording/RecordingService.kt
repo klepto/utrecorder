@@ -12,9 +12,12 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.io.path.fileSize
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimedValue
@@ -73,7 +76,7 @@ class RecordingService(
 
     /**
      * Stores the mp4 and the thumbnail of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [repository]. A
-     * stored mp4 is recorded in [processingTime].
+     * stored mp4 is recorded in [processingTime], with the video of [result].
      */
     private suspend fun processRecording(
         demo: Demo,
@@ -84,7 +87,7 @@ class RecordingService(
         when (result) {
             is RecorderResult.Done -> {
                 suspendCatching { store(demo, result) }
-                    .onSuccess { repository.recorded(capId, processingTime) }
+                    .onSuccess { repository.recorded(capId, processingTime, it, result.video) }
                     .onFailure {
                         log.error(it) { "Could not store recording $capId" }
                         repository.finish(capId, Failed, it.toString())
@@ -139,18 +142,20 @@ class RecordingService(
     }
 
     /**
-     * Moves the mp4 and the thumbnail of [result] to the recorded files of [demo], then deletes the workspace that held
-     * them.
+     * Returns the size in bytes of the mp4 of [result], after moving the mp4 and the thumbnail of [result] to the
+     * recorded files of [demo] and deleting the workspace that held them.
      */
     private suspend fun store(
         demo: Demo,
         result: RecorderResult.Done,
-    ) {
+    ): Long {
+        val mp4 = config.mp4(demo.capId)
         result.thumbnail.move(config.thumbnail(demo.capId))
-        result.mp4.move(config.mp4(demo.capId))
+        result.mp4.move(mp4)
         result.mp4.parent
             .deleteCatching()
             .onFailure { log.warn(it) { "Could not delete the workspace ${result.mp4.parent}" } }
+        return withContext(Dispatchers.IO) { mp4.fileSize() }
     }
 
     private companion object {

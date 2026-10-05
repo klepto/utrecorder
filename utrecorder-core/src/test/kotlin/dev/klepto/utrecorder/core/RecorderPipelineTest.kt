@@ -17,6 +17,7 @@ import dev.klepto.utrecorder.core.capture.audio.AudioTrack
 import dev.klepto.utrecorder.core.capture.video.VideoCapture
 import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig
 import dev.klepto.utrecorder.core.capture.video.VideoFormat
+import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.core.capture.video.VideoTrack
 import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
@@ -204,7 +205,7 @@ class RecorderPipelineTest :
                     )
                 val produced =
                     workspace("record", config = directories) { recording ->
-                        oversizedPipeline.record(demoIn(recording), "demo-file")
+                        oversizedPipeline.record(demoIn(recording), "demo-file").mp4
                     }
                 return produced to appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
             } finally {
@@ -250,6 +251,7 @@ class RecorderPipelineTest :
                 workspace("record", config = directories) { recording ->
                     pipeline(ConcurrentLinkedQueue(), track(cacheAudio.toString()))
                         .record(demoIn(recording), "demo-file")
+                        .mp4
                 }
 
             produced.fileName.toString() shouldBe "demo-file.mp4"
@@ -278,7 +280,7 @@ class RecorderPipelineTest :
         test("record returns the mp4 when it runs up to 2 seconds longer than the run") {
             val produced =
                 workspace("record", config = directories) { recording ->
-                    lengthCheckedPipeline(24.533).record(demoIn(recording), "demo-file", 23.842.seconds)
+                    lengthCheckedPipeline(24.533).record(demoIn(recording), "demo-file", 23.842.seconds).mp4
                 }
 
             produced.fileName.toString() shouldBe "demo-file.mp4"
@@ -369,10 +371,19 @@ class RecorderPipelineTest :
 
             val produced =
                 workspace("record", config = directories) { recording ->
-                    thumbnailedPipeline.record(demoIn(recording), "demo-file")
+                    thumbnailedPipeline.record(demoIn(recording), "demo-file").mp4
                 }
 
             extracted shouldBe Triple(produced, 1.0, produced.resolveSibling("demo-file.jpg"))
+        }
+
+        test("record returns the frame size of the format of the video track with the configured frame rate") {
+            val output =
+                workspace("record", config = directories) { recording ->
+                    pipeline(ConcurrentLinkedQueue(), track("audio.wav")).record(demoIn(recording), "demo-file")
+                }
+
+            output.video shouldBe VideoStream(1280, 720, 60)
         }
 
         test("record reports the capture with the lesser progress of the two captures, then the mux") {

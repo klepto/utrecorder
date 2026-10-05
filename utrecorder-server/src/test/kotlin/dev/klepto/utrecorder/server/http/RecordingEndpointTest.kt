@@ -118,9 +118,9 @@ class RecordingEndpointTest :
                 listOf("outdated", "recorded"),
             ) { repository ->
                 now.set(Instant.parse("2026-09-27T00:00:00Z"))
-                repository.recorded("outdated", 1.hours)
+                repository.recorded("outdated", 1.hours, 1_024)
                 now.set(Instant.parse("2026-09-27T01:00:00Z"))
-                repository.recorded("recorded", 1.hours)
+                repository.recorded("recorded", 1.hours, 1_024)
                 repository.finish("outdated", Outdated)
                 repository.finish("recorded", Recorded)
 
@@ -140,7 +140,7 @@ class RecordingEndpointTest :
                 repository += listOf(demo("pending", Instant.parse("2026-09-27T00:00:00Z")))
                 (1..12).forEach {
                     now.set(Instant.parse("2026-09-27T00:00:00Z") + it.hours)
-                    repository.recorded("recording-$it", 1.hours)
+                    repository.recorded("recording-$it", 1.hours, 1_024)
                     if (it % 2 == 0) repository.finish("recording-$it", Archived)
                 }
 
@@ -153,7 +153,7 @@ class RecordingEndpointTest :
                 repository += (1..110).map { demo("recording-$it") }
                 (1..110).forEach {
                     now.set(Instant.parse("2026-09-27T00:00:00Z") + it.hours)
-                    repository.recorded("recording-$it", 1.hours)
+                    repository.recorded("recording-$it", 1.hours, 1_024)
                 }
 
                 capIds(client.get("/api/recordings?limit=3&offset=2").bodyAsText()) shouldBe
@@ -194,7 +194,7 @@ class RecordingEndpointTest :
         test("pages after a cap id cursor, and answers 400 for a cursor that names no recording") {
             http(emptyMap()) { repository ->
                 repository += listOf(demo("a"), demo("b"), demo("c"))
-                listOf("a", "b", "c").forEach { repository.recorded(it, 1.hours) }
+                listOf("a", "b", "c").forEach { repository.recorded(it, 1.hours, 1_024) }
 
                 capIds(client.get("/api/recordings?after=c&limit=1").bodyAsText()) shouldBe listOf("b")
                 client.get("/api/recordings?after=unknown").status shouldBe HttpStatusCode.BadRequest
@@ -226,7 +226,7 @@ class RecordingEndpointTest :
         test("orders recordings with equal recording and demo times by capId, descending") {
             http(emptyMap()) { repository ->
                 repository += listOf(demo("b"), demo("c"), demo("a"))
-                listOf("b", "c", "a").forEach { repository.recorded(it, 1.hours) }
+                listOf("b", "c", "a").forEach { repository.recorded(it, 1.hours, 1_024) }
 
                 capIds(client.get("/api/recordings").bodyAsText()) shouldBe listOf("c", "b", "a")
             }

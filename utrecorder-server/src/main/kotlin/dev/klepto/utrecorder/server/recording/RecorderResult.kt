@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.server.recording
 
+import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.ut99.UtPackageException
 import java.nio.file.Path
 
@@ -12,10 +13,12 @@ sealed interface RecorderResult {
      *
      * @property mp4 The captured mp4, inside the workspace of the capture.
      * @property thumbnail The thumbnail of [mp4], beside it.
+     * @property video The frame size and the frame rate of the video of [mp4].
      */
     data class Done(
         val mp4: Path,
         val thumbnail: Path,
+        val video: VideoStream,
     ) : RecorderResult
 
     /**

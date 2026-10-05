@@ -78,6 +78,16 @@ class ArchiveMediaUploader(
             .files
             .any { it.md5 == md5 }
 
+    override suspend fun size(
+        id: String,
+        name: String,
+    ): Long? =
+        readItem(id)
+            .files
+            .firstOrNull { it.name == name }
+            ?.size
+            ?.toLongOrNull()
+
     override suspend fun describe(
         id: String,
         metadata: MediaMetadata,
@@ -157,11 +167,15 @@ class ArchiveMediaUploader(
     /**
      * One file of an Archive item.
      *
+     * @property name The name of the file, or `null` if the Archive lists none.
      * @property md5 The MD5 checksum of the file, or `null` if the Archive lists none.
+     * @property size The size of the file in bytes, as the decimal string the Archive lists, or `null` if it lists none.
      */
     @Serializable
     private data class ItemFile(
+        val name: String? = null,
         val md5: String? = null,
+        val size: String? = null,
     )
 
     private companion object {

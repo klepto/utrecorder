@@ -1,4 +1,4 @@
-import type { Demo, Job, Recording } from "./types";
+import type { Demo, Job, Recording, Statistics } from "./types";
 
 /** A page of `/api/recordings`: at most `limit` recordings, after skipping the `offset` newest. */
 export interface RecordingsPage {
@@ -27,4 +27,9 @@ export const fetchQueue = (): Promise<Demo[]> => {
 export const fetchRecordings = ({ limit, offset }: RecordingsPage): Promise<Recording[]> => {
   const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return get(`/api/recordings?${query}`);
+};
+
+/** Fetches the aggregate statistics of the queue, recorder, storage and personal bests. */
+export const fetchStatistics = (): Promise<Statistics> => {
+  return get("/api/statistics");
 };

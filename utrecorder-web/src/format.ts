@@ -10,6 +10,11 @@ const splitDuration = (value: string): { whole: number; fraction: string } => {
   return { whole: Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds), fraction };
 };
 
+/** Returns the ISO-8601 duration `value` in whole seconds, its fraction dropped. */
+export const durationSeconds = (value: string): number => {
+  return splitDuration(value).whole;
+};
+
 /**
  * Formats the ISO-8601 duration `value` as `m:ss.ccc`, or as `s.ccc` under a minute. The seconds are truncated to three
  * decimals, never rounded, so `PT59.9999S` reads `59.999`.
@@ -74,3 +79,36 @@ const STAGES: Record<RecorderStage, string> = {
 export const formatStage = (stage: RecorderStage | null): string => {
   return stage ? STAGES[stage] : "Starting";
 };
+
+const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
+
+/** Formats `bytes` as `GB` with one decimal from 1 GiB, as whole `MB` below. Units are 1024-based, as the cache limits are. */
+export const formatBytes = (bytes: number): string => {
+  if (bytes >= GIB) return `${(bytes / GIB).toFixed(1)} GB`;
+  return `${Math.round(bytes / MIB)} MB`;
+};
+
+/** Formats the ISO-8601 duration `value` as `2 h 30 min`, or `45 min` under an hour. Seconds are dropped. */
+export const formatHours = (value: string): string => {
+  const minutes = Math.floor(splitDuration(value).whole / 60);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+};
+
+/** Formats the ISO-8601 duration `value` as `1 min 31 s`, or `45 s` under a minute. The fraction of a second is dropped. */
+export const formatElapsed = (value: string): string => {
+  const seconds = splitDuration(value).whole;
+  if (seconds < 60) return `${seconds} s`;
+  return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+};
+
+/** Formats the recording `pace` as `2.5×`, or "Not enough data" when it is `null`. */
+export const formatPace = (pace: number | null): string => {
+  return pace === null ? "Not enough data" : `${pace.toFixed(1)}×`;
+};
+
+const counts = new Intl.NumberFormat("en");
+
+/** Formats the whole number `n` with grouped thousands, such as `1,284`. */
+export const formatCount = (n: number): string => counts.format(n);

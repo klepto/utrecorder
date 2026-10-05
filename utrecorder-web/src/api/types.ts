@@ -80,4 +80,114 @@ export interface Recording {
    * has been deleted.
    */
   itemId: string | null;
+  /** The size of the mp4 in bytes, or `null` if the server has not measured it. */
+  size: number | null;
+  /** The width of the video in pixels, or `null` if the server did not store it. */
+  width: number | null;
+  /** The height of the video in pixels, or `null` if the server did not store it. */
+  height: number | null;
+  /** The frames per second of the video, or `null` if the server did not store it. */
+  fps: number | null;
+}
+
+/** The size and age of the hot cache of mp4 files. */
+export interface CacheUsage {
+  /** The bytes the cached files hold. */
+  bytes: number;
+  /** The number of cached files. */
+  files: number;
+  /** The time the cache was measured, as an ISO-8601 instant. */
+  measuredAt: string;
+}
+
+/** The demos waiting to be recorded and the recordings that did not finish. */
+export interface QueueStatistics {
+  size: number;
+  /** The demos added within the last day. */
+  recent: number;
+  /** The demos added before the last day. */
+  backlog: number;
+  /** The summed cap time of the queued demos, as an ISO-8601 duration. */
+  capTime: string;
+  /** The recordings running now. */
+  recording: number;
+  failed: number;
+  unresolvable: number;
+}
+
+/** What the recorder produced in the last day. */
+export interface DayOutput {
+  recordings: number;
+  /** The summed cap time of those recordings, as an ISO-8601 duration. */
+  capTime: string;
+}
+
+/** What the recorder produced on one UTC day. */
+export interface RecorderDay {
+  /** The day, as `YYYY-MM-DD`. */
+  date: string;
+  recordings: number;
+  /** The summed cap time of the recordings, as an ISO-8601 duration. */
+  capTime: string;
+  /** The summed processing time of the recordings, as an ISO-8601 duration. */
+  processingTime: string;
+}
+
+/** The recorder's throughput. */
+export interface RecorderStatistics {
+  /** The cap time recorded per unit of processing time, or `null` if there is not enough data. */
+  pace: number | null;
+  lastDay: DayOutput;
+  /** Exactly 30 days, oldest first, ending with today, which is partial. */
+  days: RecorderDay[];
+  completed: number;
+  views: number;
+}
+
+/** Where the mp4 files are kept. */
+export interface StorageStatistics {
+  /** The hot cache, or `null` if it has not been measured. */
+  cache: CacheUsage | null;
+  cacheTargetBytes: number;
+  cacheMaxBytes: number;
+  archived: number;
+  archivedBytes: number;
+  /** The archived recordings whose size is not known. */
+  archivedUnsized: number;
+  uploadsLastDay: number;
+  dailyUploads: number;
+}
+
+/** The personal bests of one UTC day. */
+export interface PersonalBestDay {
+  /** The day, as `YYYY-MM-DD`. */
+  date: string;
+  personalBests: number;
+  players: number;
+}
+
+/** The number of personal bests on one map. */
+export interface MapCount {
+  map: string;
+  personalBests: number;
+}
+
+/** The personal bests the server knows. */
+export interface PersonalBestStatistics {
+  lastDay: number;
+  /** Exactly 30 days, oldest first, ending with today, which is partial. */
+  days: PersonalBestDay[];
+  players: number;
+  demos: number;
+  maps: MapCount[];
+}
+
+/** The aggregate figures of `/api/statistics`. */
+export interface Statistics {
+  /** The time the figures were computed, as an ISO-8601 instant. */
+  generatedAt: string;
+  queue: QueueStatistics;
+  recorder: RecorderStatistics;
+  storage: StorageStatistics;
+  personalBests: PersonalBestStatistics;
 }

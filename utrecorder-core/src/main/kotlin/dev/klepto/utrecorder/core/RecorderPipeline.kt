@@ -17,6 +17,7 @@ import dev.klepto.utrecorder.core.capture.video.VideoCapture
 import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig
 import dev.klepto.utrecorder.core.capture.video.VideoCaptureConfig.Companion.LENGTH_TOLERANCE
 import dev.klepto.utrecorder.core.capture.video.VideoFormat
+import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.FfmpegMuxer
 import dev.klepto.utrecorder.core.media.FfmpegThumbnailer
@@ -85,7 +86,9 @@ class RecorderPipeline(
     private val thumbnailer: Thumbnailer = thumbnailer ?: FfmpegThumbnailer(ffmpeg)
 
     /**
-     * Returns the path of the mp4 `<name>.mp4` recorded from [demo], kept in a workspace of the recording's own.
+     * Returns the output of recording [demo]: the mp4 `<name>.mp4`, kept in a workspace of the recording's own, its
+     * thumbnail, and the frame size of the format the video was recorded in with the frame rate
+     * [VideoCaptureConfig.fps].
      *
      * The audio capture runs beside the video capture, and the mux runs once both have finished. Cancelling this call
      * cancels both captures. The audio track is placed by [AudioAlignment.place] to start at the demo time of the video
@@ -110,7 +113,7 @@ class RecorderPipeline(
         name: String,
         runTime: Duration? = null,
         onProgress: ProgressListener<RecorderStage> = {},
-    ): Path =
+    ): RecorderOutput =
         workspace("record", config = directories) { output ->
             val capturing = Capturing.start(onProgress)
             val (videoProgress, audioProgress) = capturing.slowest(2)
@@ -130,7 +133,7 @@ class RecorderPipeline(
             warnIfOversized(mp4, videoTrack.format)
             val thumbnail = (output.directory / "$name.jpg").also(output::track)
             thumbnailer.extract(mp4, minOf(THUMBNAIL_TIME, videoTrack.length / 2), thumbnail)
-            mp4
+            RecorderOutput(mp4, thumbnail, VideoStream(videoTrack.format.width, videoTrack.format.height, video.fps))
         }
 
     /**

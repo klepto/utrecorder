@@ -47,6 +47,15 @@ interface MediaUploader {
     )
 
     /**
+     * Returns the size in bytes of the file [name] of the item [id]. If the item does not hold the file, returns `null`
+     * instead. Throws if the item cannot be read.
+     */
+    suspend fun size(
+        id: String,
+        name: String,
+    ): Long?
+
+    /**
      * Returns the URL the file [name] of the item [id] downloads from.
      */
     fun downloadUrl(

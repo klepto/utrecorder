@@ -74,6 +74,11 @@ class VideoEndpointTest :
                     name: String,
                 ) {}
 
+                override suspend fun size(
+                    id: String,
+                    name: String,
+                ): Long? = null
+
                 override fun downloadUrl(
                     id: String,
                     name: String,

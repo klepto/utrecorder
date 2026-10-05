@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { fetchJobs, fetchQueue, fetchRecordings } from "./client";
+import { fetchJobs, fetchQueue, fetchRecordings, fetchStatistics } from "./client";
 
 describe("client", () => {
   test("fetches the running jobs", async () => {
@@ -41,5 +41,15 @@ describe("client", () => {
 
   test("rejects an offset that is not a non-negative integer", async () => {
     await expect(fetchRecordings({ limit: 10, offset: 1.5 })).rejects.toThrow("400");
+  });
+
+  test("fetches the statistics with 30 days of each series", async () => {
+    const statistics = await fetchStatistics();
+
+    expect(statistics.recorder.days).toHaveLength(30);
+    expect(statistics.personalBests.days).toHaveLength(30);
+    expect(statistics.recorder.days[14].recordings).toBe(0);
+    expect(statistics.recorder.pace).toBe(2.5);
+    expect(statistics.storage.cache?.files).toBe(262);
   });
 });

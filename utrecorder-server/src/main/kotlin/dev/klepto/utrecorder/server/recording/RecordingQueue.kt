@@ -96,6 +96,12 @@ class RecordingQueue(
     }
 
     /**
+     * Returns `true` if [demo] is recent: at most [ServerConfig.recordingRecentAge] old at the time [clock] reports, a
+     * demo whose timestamp lies in the future included. Any other demo is a backlog demo.
+     */
+    fun isRecent(demo: Demo): Boolean = isRecent(demo, clock.now())
+
+    /**
      * Sets every [RecordingStatus.Recording], [Failed] or [Unresolvable] recording of [recordings] to [Pending].
      */
     private suspend fun requeue() {

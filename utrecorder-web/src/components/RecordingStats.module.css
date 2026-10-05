@@ -1,0 +1,17 @@
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: var(--mantine-spacing-xs) var(--mantine-spacing-md);
+  margin: 0;
+}
+
+.stats dt {
+  color: var(--mantine-color-dimmed);
+  font-size: var(--mantine-font-size-xs);
+}
+
+.stats dd {
+  margin: 0;
+  font-size: var(--mantine-font-size-sm);
+  font-variant-numeric: tabular-nums;
+}

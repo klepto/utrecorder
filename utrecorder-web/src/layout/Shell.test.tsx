@@ -32,6 +32,15 @@ describe("Shell", () => {
     expect(screen.getByRole("heading", { name: "Recordings" })).toBeInTheDocument();
   });
 
+  test("renders the statistics page at /statistics, linked between Recordings and About", () => {
+    renderAt("/statistics");
+
+    expect(screen.getByRole("heading", { name: "Statistics" })).toBeInTheDocument();
+    const labels = screen.getAllByRole("link").map((link) => link.textContent);
+    expect(labels.indexOf("Statistics")).toBe(labels.indexOf("Recordings") + 1);
+    expect(labels.indexOf("About")).toBe(labels.indexOf("Statistics") + 1);
+  });
+
   test("renders the about page at /about", () => {
     renderAt("/about");
 

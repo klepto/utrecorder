@@ -1,5 +1,59 @@
 import { describe, expect, test } from "vitest";
-import { formatCapTime, formatDate, formatExactTime, formatRelativeTime, formatRemaining, formatStage } from "./format";
+import {
+  formatBytes,
+  formatCapTime,
+  formatCount,
+  formatDate,
+  formatElapsed,
+  formatExactTime,
+  formatHours,
+  formatPace,
+  formatRelativeTime,
+  formatRemaining,
+  formatStage,
+} from "./format";
+
+describe("statistics formatters", () => {
+  test("formatBytes reads gigabytes with one decimal from 1 GiB, megabytes below", () => {
+    expect(formatBytes(1_073_741_824)).toBe("1.0 GB");
+    expect(formatBytes(1_073_741_823)).toBe("1024 MB");
+    expect(formatBytes(5_368_709_120)).toBe("5.0 GB");
+    expect(formatBytes(1_610_612_736)).toBe("1.5 GB");
+    expect(formatBytes(52_428_800)).toBe("50 MB");
+    expect(formatBytes(0)).toBe("0 MB");
+  });
+
+  test("formatHours reads hours and minutes, minutes under an hour, and zero", () => {
+    expect(formatHours("PT2H30M")).toBe("2 h 30 min");
+    expect(formatHours("PT1H")).toBe("1 h 0 min");
+    expect(formatHours("PT100H5M")).toBe("100 h 5 min");
+    expect(formatHours("PT45M")).toBe("45 min");
+    expect(formatHours("PT59M59.9S")).toBe("59 min");
+    expect(formatHours("PT30S")).toBe("0 min");
+    expect(formatHours("PT0S")).toBe("0 min");
+  });
+
+  test("formatElapsed reads minutes and seconds, seconds under a minute, and drops the fraction", () => {
+    expect(formatElapsed("PT1M31.5S")).toBe("1 min 31 s");
+    expect(formatElapsed("PT2H")).toBe("120 min 0 s");
+    expect(formatElapsed("PT45.9S")).toBe("45 s");
+    expect(formatElapsed("PT0S")).toBe("0 s");
+  });
+
+  test("formatPace reads one decimal and a missing pace as not enough data", () => {
+    expect(formatPace(2.5)).toBe("2.5×");
+    expect(formatPace(1)).toBe("1.0×");
+    expect(formatPace(0.04)).toBe("0.0×");
+    expect(formatPace(null)).toBe("Not enough data");
+  });
+
+  test("formatCount groups thousands", () => {
+    expect(formatCount(1284)).toBe("1,284");
+    expect(formatCount(1_234_567)).toBe("1,234,567");
+    expect(formatCount(7)).toBe("7");
+    expect(formatCount(0)).toBe("0");
+  });
+});
 
 describe("format", () => {
   test("formatCapTime truncates to three decimals", () => {

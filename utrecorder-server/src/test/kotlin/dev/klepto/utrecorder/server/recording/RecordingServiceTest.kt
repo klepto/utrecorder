@@ -6,6 +6,7 @@ import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
+import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
@@ -100,7 +101,7 @@ class RecordingServiceTest :
             val workspace = createTempDirectory(root, "workspace")
             val mp4 = workspace.resolve("${demo.capId}.mp4").also { it.writeText(demo.capId) }
             val thumbnail = workspace.resolve("${demo.capId}.jpg").also { it.writeText("${demo.capId}.jpg") }
-            return RecorderResult.Done(mp4, thumbnail)
+            return RecorderResult.Done(mp4, thumbnail, VideoStream(1920, 1080, 60))
         }
 
         fun names(directory: Path): List<String> = directory.listDirectoryEntries().map { it.name }
@@ -124,7 +125,7 @@ class RecordingServiceTest :
             }
         }
 
-        test("sets a stored recording to recorded with the time it was recorded and the time its last attempt took") {
+        test("sets a stored recording to recorded with its time, the time its last attempt took, its mp4 size and its video") {
             val recordings = createTempDirectory(root, "recordings")
             val attempts = AtomicInteger()
             running(
@@ -151,6 +152,10 @@ class RecordingServiceTest :
                 recording.recordedAt shouldBe Instant.parse("2026-09-27T08:00:00Z")
                 recording.processingTime!! shouldBeGreaterThanOrEqualTo 100.milliseconds
                 recording.processingTime!! shouldBeLessThan 400.milliseconds
+                recording.size shouldBe 3
+                recording.width shouldBe 1920
+                recording.height shouldBe 1080
+                recording.fps shouldBe 60
             }
         }
 
