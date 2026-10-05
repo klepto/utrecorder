@@ -31,6 +31,7 @@ ktor-server-auto-head-response = { module = "io.ktor:ktor-server-auto-head-respo
 ktor-server-compression = { module = "io.ktor:ktor-server-compression", version.ref = "ktor" }
 ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation", version.ref = "ktor" }
 ktor-server-forwarded-header = { module = "io.ktor:ktor-server-forwarded-header", version.ref = "ktor" }
+ktor-server-cors = { module = "io.ktor:ktor-server-cors", version.ref = "ktor" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
@@ -58,6 +59,7 @@ ktor-server = [
     "ktor-server-compression",
     "ktor-server-content-negotiation",
     "ktor-server-forwarded-header",
+    "ktor-server-cors",
     "ktor-serialization-kotlinx-json",
 ]
 kotest = ["kotest-runner-junit5", "kotest-assertions-core"]

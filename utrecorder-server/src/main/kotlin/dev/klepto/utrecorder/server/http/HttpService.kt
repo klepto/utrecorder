@@ -15,6 +15,7 @@ import io.ktor.server.plugins.compression.deflate
 import io.ktor.server.plugins.compression.gzip
 import io.ktor.server.plugins.compression.matchContentType
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.forwardedheaders.XForwardedHeaders
 import io.ktor.server.plugins.partialcontent.PartialContent
 import io.ktor.server.routing.routing
@@ -27,8 +28,8 @@ import kotlinx.coroutines.withContext
  *
  * The routes come from [endpoints], installed in list order on the routing root. Every `GET` route also answers
  * `HEAD`, with the headers of its `GET` answer and no body. A file answer supports `Range` requests. JavaScript, CSS,
- * HTML and JSON responses are compressed. The origin of a request honours the `X-Forwarded-*` headers only if
- * [ServerConfig.trustForwardedHeaders] is enabled.
+ * HTML and JSON responses are compressed. Every response allows any origin to read it. The origin of a request
+ * honours the `X-Forwarded-*` headers only if [ServerConfig.trustForwardedHeaders] is enabled.
  *
  * @property endpoints The endpoints whose routes are served.
  * @property config The port and whether the forwarded headers are trusted.
@@ -56,6 +57,7 @@ class HttpService(
         application.install(AutoHeadResponse)
         if (config.trustForwardedHeaders) application.install(XForwardedHeaders)
         application.install(ContentNegotiation) { json() }
+        application.install(CORS) { anyHost() }
         application.install(Compression) {
             gzip { matchContentType(*COMPRESSED) }
             deflate { matchContentType(*COMPRESSED) }

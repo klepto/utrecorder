@@ -70,4 +70,13 @@ class HttpServiceTest :
                 client.get("/mp4") { header(HttpHeaders.AcceptEncoding, "gzip") }.headers[HttpHeaders.ContentEncoding] shouldBe null
             }
         }
+
+        test("allows any origin to read a response") {
+            http {
+                val response = client.get("/json") { header(HttpHeaders.Origin, "https://example.com") }
+
+                response.status shouldBe HttpStatusCode.OK
+                response.headers[HttpHeaders.AccessControlAllowOrigin] shouldBe "*"
+            }
+        }
     })
