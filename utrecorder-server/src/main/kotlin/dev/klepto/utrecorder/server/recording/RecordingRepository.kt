@@ -91,13 +91,12 @@ class RecordingRepository(
 
     /**
      * If the recording stored under [capId] is [Pending], sets it to [RecordingStatus.Recording] as one transaction and
-     * returns `true`. If there is none, or it is not [Pending], changes nothing and returns `false` instead.
+     * returns it as stored. If there is none, or it is not [Pending], changes nothing and returns `null` instead.
      */
-    suspend fun claim(capId: String): Boolean =
+    suspend fun claim(capId: String): Recording? =
         transaction { recordings ->
-            val recording = recordings[capId]?.takeIf { it.status == Pending } ?: return@transaction false
+            val recording = recordings[capId]?.takeIf { it.status == Pending } ?: return@transaction null
             put(recordings, recording.copy(status = RecordingStatus.Recording))
-            true
         }
 
     /**
@@ -225,6 +224,7 @@ class RecordingRepository(
         val width: Int? = null,
         val height: Int? = null,
         val fps: Int? = null,
+        val runMedal: Int? = null,
     )
 
     /**
@@ -278,6 +278,7 @@ class RecordingRepository(
                 width = recording.width,
                 height = recording.height,
                 fps = recording.fps,
+                runMedal = recording.runMedal,
             )
 
         /**
@@ -299,6 +300,7 @@ class RecordingRepository(
                 width = recording.width,
                 height = recording.height,
                 fps = recording.fps,
+                runMedal = recording.runMedal,
             )
     }
 

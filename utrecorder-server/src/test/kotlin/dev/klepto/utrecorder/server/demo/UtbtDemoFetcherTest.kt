@@ -70,6 +70,9 @@ class UtbtDemoFetcherTest :
                     "user":"424992398657978370",
                     "cap_time_seconds":12.34,
                     "added":"2026-09-26 12:19:59.891708",
+                    "custom_id_other_players_on_team":"688002451005374476;290062867452133377;",
+                    "team_run_id":"B38CF3384E61F08F40C80720A77111AE",
+                    "team_size":2,
                     "verified":true
                 }]}
                 """.trimIndent()
@@ -84,7 +87,23 @@ class UtbtDemoFetcherTest :
                     capTime = 12340.milliseconds,
                     timestamp = Instant.parse("2026-09-26T12:19:59.891708Z"),
                     demoUrl = "http://api.utbt.net/demos/0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",
+                    teammates = listOf("290062867452133377", "688002451005374476"),
+                    teamRunId = "B38CF3384E61F08F40C80720A77111AE",
                 )
+        }
+
+        test("maps a solo cap, and a cap without team fields, to no teammates and no team run") {
+            val solo =
+                """
+                {"id":"0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d","map":"CTF-BT-A","alias":"a","cap_time_seconds":1,
+                "added":"2026-09-26 12:01:00","custom_id_other_players_on_team":"","team_run_id":null,"team_size":""}
+                """.trimIndent()
+            val fetcher = UtbtDemoFetcher(config, engine("""{"data":[$solo,${cap(1)}]}"""))
+
+            val demos = fetcher.fetch()
+
+            demos.map { it.teammates } shouldContainExactly listOf(emptyList(), emptyList())
+            demos.map { it.teamRunId } shouldContainExactly listOf(null, null)
         }
 
         test("skips a cap whose id is not a UUID") {

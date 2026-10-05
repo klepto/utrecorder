@@ -62,13 +62,13 @@ class RecordingService(
      */
     private suspend fun RecorderProvider.recordQueued() {
         while (isRunning()) {
-            val demo = queue.first().demo
-            if (!repository.claim(demo.capId)) continue
+            val recording = repository.claim(queue.first().demo.capId) ?: continue
+            val demo = recording.demo
             if (config.mp4(demo.capId).fileExists()) {
                 repository.finish(demo.capId, Recorded)
                 continue
             }
-            val (result, processingTime) = recordTracked(demo)
+            val (result, processingTime) = recordTracked(recording)
             processRecording(demo, result, processingTime)
             delay(config.recordingCooldown)
         }
@@ -107,12 +107,13 @@ class RecordingService(
     }
 
     /**
-     * Returns the result of [recordRetrying], tracked in [jobs]. Logs [demo] before the recording starts, and again
-     * with the time the recording took once it ends.
+     * Returns the result of [recordRetrying] on the demo of [recording], tracked in [jobs]. Logs the demo before the
+     * recording starts, and again with the time the recording took once it ends.
      */
-    private suspend fun RecorderProvider.recordTracked(demo: Demo): TimedValue<RecorderResult> {
+    private suspend fun RecorderProvider.recordTracked(recording: Recording): TimedValue<RecorderResult> {
+        val demo = recording.demo
         log.info { "Recording: $demo" }
-        val (result, elapsed) = measureTimedValue { jobs.track(demo) { recordRetrying(demo, it) } }
+        val (result, elapsed) = measureTimedValue { jobs.track(recording) { recordRetrying(demo, it) } }
         log.info { "Finished recording: $demo in ${elapsed.inWholeSeconds.seconds}" }
         return result
     }

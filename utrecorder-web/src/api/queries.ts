@@ -29,7 +29,7 @@ export const useJobs = () => {
 
   useEffect(() => {
     if (!data) return;
-    const current = new Set(data.map((job) => job.demo.capId));
+    const current = new Set(data.map((job) => job.recording.demo.capId));
     const last = previous.current;
     previous.current = current;
     if (last && [...last].some((capId) => !current.has(capId))) {

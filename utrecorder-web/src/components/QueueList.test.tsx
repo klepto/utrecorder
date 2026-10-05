@@ -60,6 +60,21 @@ describe("QueueList", () => {
     expect(within(rows[0]).getByRole("img", { name: "Champion Medal" })).toBeInTheDocument();
   });
 
+  test("shows the medal of the run of each recording", () => {
+    const [first] = queue;
+    const team = { ...first, demo: { ...first.demo, medal: 5 }, runMedal: 6 };
+    render(
+      <MantineProvider forceColorScheme="dark">
+        <QueueList
+          query={{ data: [team], isPending: false, isError: false }}
+          jobs={{ data: undefined, isPending: false, isError: false, dataUpdatedAt: 0 }}
+        />
+      </MantineProvider>,
+    );
+
+    expect(screen.getByRole("img", { name: "World Record" })).toBeInTheDocument();
+  });
+
   test("shows 1 minute when nothing is capturing, and still once the estimate has passed", () => {
     vi.useFakeTimers({ now: 0, toFake: ["Date", "setInterval", "clearInterval"] });
     render(listWith([{ ...jobs[0], stage: "FetchingDemo", progress: 0.5 }]));

@@ -43,7 +43,7 @@ const reestimate = (last: Estimate | null, next: string, capture: string | null,
  */
 export const useNextStart = (next: string | undefined, jobs: readonly Job[] | undefined, jobsUpdatedAt: number) => {
   const job = jobs?.find((job) => job.stage === "Capturing" && job.progress !== null);
-  const capture = job ? `${job.demo.capId}#${job.attempt}` : null;
+  const capture = job ? `${job.recording.demo.capId}#${job.attempt}` : null;
   const progress = job?.progress ?? 0;
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   if (

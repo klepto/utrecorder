@@ -1,6 +1,6 @@
 import { Table, Text } from "@mantine/core";
 import { useEffect, useState } from "react";
-import type { Demo } from "../api/types";
+import type { Recording } from "../api/types";
 import { formatRemaining } from "../format";
 import { CapTime } from "./CapTime";
 import { capLinkProps } from "./capLinkProps";
@@ -37,10 +37,11 @@ const NextLabel = ({ deadline }: { deadline: number | null }) => {
 };
 
 /**
- * One queued demo, whose click opens the cap on utbt.net. If `next`, it is outlined and labelled as up next, with the
- * time left until `deadline`.
+ * One queued recording, whose click opens the cap on utbt.net. Its cap time shows the medal of its run. If `next`, it
+ * is outlined and labelled as up next, with the time left until `deadline`.
  */
-const QueueRow = ({ demo, next, deadline }: { demo: Demo; next: boolean; deadline: number | null }) => {
+const QueueRow = ({ recording, next, deadline }: { recording: Recording; next: boolean; deadline: number | null }) => {
+  const { demo, runMedal } = recording;
   return (
     <Table.Tr className={next ? `${classes.row} ${classes.next}` : classes.row} {...capLinkProps(demo)}>
       <Table.Td>
@@ -54,7 +55,7 @@ const QueueRow = ({ demo, next, deadline }: { demo: Demo; next: boolean; deadlin
       </Table.Td>
       <Table.Td>
         <Text size="sm">
-          <CapTime demo={demo} />
+          <CapTime demo={demo} medal={runMedal ?? demo.medal} />
         </Text>
       </Table.Td>
       <Table.Td ta="right">
@@ -65,21 +66,21 @@ const QueueRow = ({ demo, next, deadline }: { demo: Demo; next: boolean; deadlin
 };
 
 interface QueueListProps {
-  query: QueryState<Demo>;
+  query: QueryState<Recording>;
   /** The running jobs, whose capture the up next estimate follows. */
   jobs: JobsState;
 }
 
 /**
- * The queued demos as a table of map, player, cap time and date added, in the order the recorder takes them. A border
- * and a label mark the first row as up next, with the time left until it starts, estimated from the capture among
- * `jobs`. A click on a row opens the cap on utbt.net.
+ * The queued recordings as a table of map, player, cap time and date added, in the order the recorder takes them. A
+ * border and a label mark the first row as up next, with the time left until it starts, estimated from the capture
+ * among `jobs`. A click on a row opens the cap on utbt.net.
  */
 export const QueueList = ({ query, jobs }: QueueListProps) => {
-  const deadline = useNextStart(query.data?.[0]?.capId, jobs.data, jobs.dataUpdatedAt);
+  const deadline = useNextStart(query.data?.[0]?.demo.capId, jobs.data, jobs.dataUpdatedAt);
   return (
     <QueryList query={query} empty="The queue is empty.">
-      {(demos) => (
+      {(recordings) => (
         <Table
           layout="fixed"
           verticalSpacing="var(--row-gap)"
@@ -94,8 +95,8 @@ export const QueueList = ({ query, jobs }: QueueListProps) => {
             <col style={{ width: "20%" }} />
           </colgroup>
           <Table.Tbody>
-            {demos.map((demo, index) => (
-              <QueueRow key={demo.capId} demo={demo} next={index === 0} deadline={deadline} />
+            {recordings.map((recording, index) => (
+              <QueueRow key={recording.demo.capId} recording={recording} next={index === 0} deadline={deadline} />
             ))}
           </Table.Tbody>
         </Table>

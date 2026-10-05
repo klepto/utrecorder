@@ -1,4 +1,4 @@
-import type { Demo, Job, PersonalBestDay, RecorderDay, Recording, Statistics } from "../api/types";
+import type { Demo, Job, PersonalBestDay, RecorderDay, Recording, RecordingStatus, Statistics } from "../api/types";
 
 /** Returns a sample demo of the cap `capId`, whose medal cycles through every medal and none. */
 const demo = (capId: string, map: string, player: string, capTime: string, timestamp: string): Demo => {
@@ -14,17 +14,38 @@ const demo = (capId: string, map: string, player: string, capTime: string, times
   };
 };
 
+/** Returns the recording of `sample` with `status`, not recorded yet, whose run medal is the medal of `sample`. */
+const unrecorded = (sample: Demo, status: RecordingStatus): Recording => {
+  return {
+    demo: sample,
+    status,
+    error: null,
+    md5: null,
+    lastUpdate: sample.timestamp,
+    views: 0,
+    lastView: null,
+    recordedAt: null,
+    processingTime: null,
+    itemId: null,
+    size: null,
+    width: null,
+    height: null,
+    fps: null,
+    runMedal: sample.medal,
+  };
+};
+
 /** Sample running recordings: one that has not reported a stage yet, and one on its second attempt. */
 export const jobs: Job[] = [
   {
-    demo: demo("1100", "CTF-BT-Maverick", "Shadow", "PT1M2.345S", "2026-09-28T18:04:11Z"),
+    recording: unrecorded(demo("1100", "CTF-BT-Maverick", "Shadow", "PT1M2.345S", "2026-09-28T18:04:11Z"), "Recording"),
     attempt: 1,
     stage: null,
     progress: null,
     startedAt: "2026-09-28T18:05:00Z",
   },
   {
-    demo: demo("1099", "CTF-BT-Skyfall", "Nyx", "PT48.12S", "2026-09-28T17:51:40Z"),
+    recording: unrecorded(demo("1099", "CTF-BT-Skyfall", "Nyx", "PT48.12S", "2026-09-28T17:51:40Z"), "Recording"),
     attempt: 2,
     stage: "Capturing",
     progress: 0.42,
@@ -32,14 +53,14 @@ export const jobs: Job[] = [
   },
 ];
 
-/** Sample queue: the demos to be recorded next, in the order they are taken. */
-export const queue: Demo[] = [
+/** Sample queue: the recordings to be captured next, in the order they are taken. */
+export const queue: Recording[] = [
   demo("1101", "CTF-BT-Andromeda", "Vex", "PT2M10.5S", "2026-09-28T18:10:22Z"),
   demo("1102", "CTF-BT-Maverick", "Kite", "PT59.999S", "2026-09-28T18:12:09Z"),
   demo("1103", "CTF-BT-Citadel", "Shadow", "PT3M0.01S", "2026-09-28T18:15:47Z"),
   demo("1104", "CTF-BT-Skyfall", "Orin", "PT41.7S", "2026-09-28T18:20:31Z"),
   demo("1105", "CTF-BT-Andromeda", "Nyx", "PT1M30S", "2026-09-28T18:22:02Z"),
-];
+].map((sample) => unrecorded(sample, "Pending"));
 
 const maps = ["CTF-BT-Maverick", "CTF-BT-Skyfall", "CTF-BT-Andromeda", "CTF-BT-Citadel"];
 const players = ["Shadow", "Nyx", "Vex", "Kite", "Orin"];
@@ -73,6 +94,7 @@ const recording = (index: number): Recording => {
     width: index % 3 === 2 ? 1280 : 1920,
     height: index % 3 === 2 ? 720 : 1080,
     fps: 60,
+    runMedal: sample.medal,
   };
 };
 
@@ -97,6 +119,7 @@ export const recordings: Recording[] = [
     width: null,
     height: null,
     fps: null,
+    runMedal: null,
   },
 ];
 

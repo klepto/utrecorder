@@ -48,7 +48,8 @@ const toggleOnKey = (event: KeyboardEvent<HTMLElement>, onToggle: () => void) =>
 };
 
 /**
- * One recording as a card whose header expands it to its video. Beaten by a faster run, the header carries an
+ * One recording as a card whose header expands it to its video. The cap time shows the medal of the run, so every
+ * member of a team run shows the same medal. Beaten by a faster run, the header carries an
  * "outdated" label under the timestamp, level with the player. The video and the figures of the recording mount only
  * while `open`.
  */
@@ -73,7 +74,7 @@ export const RecordingItem = ({
         onClick={onToggle}
         onKeyDown={(event) => toggleOnKey(event, onToggle)}
       >
-        <DemoSummary demo={demo} />
+        <DemoSummary demo={demo} medal={recording.runMedal ?? demo.medal} />
         <Stack gap={0} justify="space-between" align="flex-end" style={{ flexShrink: 0, alignSelf: "stretch" }}>
           <Group gap={4} wrap="nowrap">
             <Timestamp value={recordedTime(recording)} relative />

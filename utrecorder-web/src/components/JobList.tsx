@@ -62,6 +62,32 @@ const StageProgress = ({ job, reportedAt }: { job: Job; reportedAt: number }) =>
 };
 
 /**
+ * One running recording: map, cap time with the medal of its run, and player, the time the cap was added with the
+ * attempt after the first below it, and the stage with its progress reported at `reportedAt`.
+ */
+const JobCard = ({ job, reportedAt }: { job: Job; reportedAt: number }) => {
+  const { demo, runMedal } = job.recording;
+  return (
+    <Card withBorder padding="sm" className={classes.card} role="link" {...capLinkProps(demo)}>
+      <Stack gap="sm">
+        <Group wrap="nowrap">
+          <DemoSummary demo={demo} medal={runMedal ?? demo.medal} />
+          <Stack gap={0} align="flex-end" style={{ flexShrink: 0, alignSelf: "flex-start" }}>
+            <Timestamp value={demo.timestamp} />
+            {job.attempt > 1 && (
+              <Text size="sm" c="dimmed">
+                Attempt {job.attempt}
+              </Text>
+            )}
+          </Stack>
+        </Group>
+        <StageProgress job={job} reportedAt={reportedAt} />
+      </Stack>
+    </Card>
+  );
+};
+
+/**
  * The running recordings: map, cap time and player, the time the cap was added with the attempt after the first below
  * it, and the stage with its progress.
  */
@@ -69,31 +95,7 @@ export const JobList = ({ query }: { query: JobsState }) => {
   return (
     <QueryList query={query} empty="Nothing is recording.">
       {(jobs) =>
-        jobs.map((job) => (
-          <Card
-            key={job.demo.capId}
-            withBorder
-            padding="sm"
-            className={classes.card}
-            role="link"
-            {...capLinkProps(job.demo)}
-          >
-            <Stack gap="sm">
-              <Group wrap="nowrap">
-                <DemoSummary demo={job.demo} />
-                <Stack gap={0} align="flex-end" style={{ flexShrink: 0, alignSelf: "flex-start" }}>
-                  <Timestamp value={job.demo.timestamp} />
-                  {job.attempt > 1 && (
-                    <Text size="sm" c="dimmed">
-                      Attempt {job.attempt}
-                    </Text>
-                  )}
-                </Stack>
-              </Group>
-              <StageProgress job={job} reportedAt={query.dataUpdatedAt} />
-            </Stack>
-          </Card>
-        ))
+        jobs.map((job) => <JobCard key={job.recording.demo.capId} job={job} reportedAt={query.dataUpdatedAt} />)
       }
     </QueryList>
   );

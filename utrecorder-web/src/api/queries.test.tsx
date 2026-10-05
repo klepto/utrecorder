@@ -19,14 +19,20 @@ describe("queries", () => {
     const { result } = renderHook(() => useJobs(), { wrapper: wrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.map((job) => job.demo.capId)).toEqual(["1100", "1099"]);
+    expect(result.current.data?.map((job) => job.recording.demo.capId)).toEqual(["1100", "1099"]);
   });
 
-  test("useQueue returns the queued demos", async () => {
+  test("useQueue returns the queued recordings", async () => {
     const { result } = renderHook(() => useQueue(), { wrapper: wrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.map((demo) => demo.capId)).toEqual(["1101", "1102", "1103", "1104", "1105"]);
+    expect(result.current.data?.map((recording) => recording.demo.capId)).toEqual([
+      "1101",
+      "1102",
+      "1103",
+      "1104",
+      "1105",
+    ]);
   });
 
   test("useStatistics returns the aggregate statistics", async () => {

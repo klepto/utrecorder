@@ -216,7 +216,7 @@ class StatisticsReportTest :
                 cache.evict()
                 val gate = CompletableDeferred<Unit>()
                 coroutineScope {
-                    launch { jobs.track(demo("recent", now - 1.hours)) { gate.await() } }
+                    launch { jobs.track(Recording(demo("recent", now - 1.hours))) { gate.await() } }
                     jobs.jobs.first { it.isNotEmpty() }
 
                     val statistics = report.read()

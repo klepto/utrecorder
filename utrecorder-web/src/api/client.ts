@@ -1,4 +1,4 @@
-import type { Demo, Job, Recording, Statistics } from "./types";
+import type { Job, Recording, Statistics } from "./types";
 
 /** A page of `/api/recordings`: at most `limit` recordings, after skipping the `offset` newest. */
 export interface RecordingsPage {
@@ -18,8 +18,8 @@ export const fetchJobs = (): Promise<Job[]> => {
   return get("/api/jobs");
 };
 
-/** Fetches the next demos to be recorded, in the order they are taken. */
-export const fetchQueue = (): Promise<Demo[]> => {
+/** Fetches the next recordings to be captured, in the order they are taken. */
+export const fetchQueue = (): Promise<Recording[]> => {
   return get("/api/queue?limit=10");
 };
 

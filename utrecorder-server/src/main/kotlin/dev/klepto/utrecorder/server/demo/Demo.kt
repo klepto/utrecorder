@@ -15,6 +15,9 @@ import kotlin.time.Instant
  * @property timestamp The time the cap was added.
  * @property demoUrl The URL the `.dem` file downloads from.
  * @property medal The medal of the cap, as UTBT numbers it, or `null` if the cap list leaves it out.
+ * @property teammates The UTBT identifiers of the other players of the team, sorted. Empty for a solo cap.
+ * @property teamRunId The UTBT identifier of the team run the cap belongs to, shared by the caps of every member of
+ * that run, or `null` for a solo cap.
  */
 @Serializable
 data class Demo(
@@ -26,6 +29,8 @@ data class Demo(
     val timestamp: Instant,
     val demoUrl: String,
     val medal: Int? = null,
+    val teammates: List<String> = emptyList(),
+    val teamRunId: String? = null,
 ) {
     /**
      * Returns the cap as `<capId>: <map> - <capTime> by <player>`, with the cap time as `mm:ss.SSS`. If the cap time is

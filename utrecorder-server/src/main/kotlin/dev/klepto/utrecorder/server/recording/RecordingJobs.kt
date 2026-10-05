@@ -2,7 +2,6 @@ package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.core.RecorderStage
-import dev.klepto.utrecorder.server.demo.Demo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -22,15 +21,15 @@ class RecordingJobs {
     val jobs: Flow<List<RecordingJob>> = state.map { it.values.toList() }
 
     /**
-     * Returns the result of [block], and lists a job recording [demo] at its first attempt until [block] returns or
-     * throws. [block] receives the [Tracker] that updates the job.
+     * Returns the result of [block], and lists a job capturing [recording] at its first attempt until [block] returns
+     * or throws. [block] receives the [Tracker] that updates the job.
      */
     suspend fun <T> track(
-        demo: Demo,
+        recording: Recording,
         block: suspend (Tracker) -> T,
     ): T {
         val tracker = JobTracker()
-        state.update { it + (tracker to RecordingJob(demo, 1, null, Clock.System.now())) }
+        state.update { it + (tracker to RecordingJob(recording, 1, null, Clock.System.now())) }
         return try {
             block(tracker)
         } finally {
@@ -73,13 +72,13 @@ class RecordingJobs {
 /**
  * Capture of one [Recording] that a recorder is running, with its progress.
  *
- * @property demo The demo being recorded.
+ * @property recording The recording being captured, as it was when the capture was claimed.
  * @property attempt The number of the current attempt, starting at `1`.
  * @property progress The last progress report of the current attempt, or `null` if it has not reported yet.
  * @property startedAt The time the first attempt started.
  */
 data class RecordingJob(
-    val demo: Demo,
+    val recording: Recording,
     val attempt: Int,
     val progress: Progress<RecorderStage>?,
     val startedAt: Instant,

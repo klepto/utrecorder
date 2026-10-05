@@ -5,7 +5,7 @@ describe("client", () => {
   test("fetches the running jobs", async () => {
     const jobs = await fetchJobs();
 
-    expect(jobs.map((job) => job.demo.capId)).toEqual(["1100", "1099"]);
+    expect(jobs.map((job) => job.recording.demo.capId)).toEqual(["1100", "1099"]);
     expect(jobs[0].stage).toBeNull();
     expect(jobs[1].attempt).toBe(2);
   });
@@ -13,7 +13,7 @@ describe("client", () => {
   test("fetches the queue", async () => {
     const queue = await fetchQueue();
 
-    expect(queue.map((demo) => demo.capId)).toEqual(["1101", "1102", "1103", "1104", "1105"]);
+    expect(queue.map((recording) => recording.demo.capId)).toEqual(["1101", "1102", "1103", "1104", "1105"]);
   });
 
   test("fetches a page of recordings", async () => {

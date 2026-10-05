@@ -17,6 +17,7 @@ import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -50,6 +51,8 @@ class RecordingQueueTest :
             capTime: Duration = 10.seconds,
             userId: String? = capId,
             map: String = "CTF-BT-Maverick",
+            teammates: List<String> = emptyList(),
+            teamRunId: String? = null,
         ): Demo =
             Demo(
                 capId = capId,
@@ -60,6 +63,8 @@ class RecordingQueueTest :
                 timestamp = now - age,
                 demoUrl = "http://api.utbt.net/demos/$capId",
                 medal = medal,
+                teammates = teammates,
+                teamRunId = teamRunId,
             )
 
         suspend fun <R> stored(
@@ -285,6 +290,155 @@ class RecordingQueueTest :
                     running(queue) { capIds(queue) to repository.all().map { it.demo.capId } }
                 }
             got shouldBe (listOf("fastest", "other-map", "other-player") to listOf("fastest", "other-player", "other-map"))
+        }
+
+        test("queues the solo best and the best with each team of a player side by side") {
+            val got =
+                stored { demos, _, queue ->
+                    demos +=
+                        listOf(
+                            demo("solo", 5.hours, userId = "1", capTime = 20.seconds),
+                            demo("one-a", 4.hours, userId = "1", capTime = 12.seconds, teammates = listOf("2"), teamRunId = "A"),
+                            demo("two-a", 4.hours, userId = "2", capTime = 12.seconds, teammates = listOf("1"), teamRunId = "A"),
+                            demo("one-b", 3.hours, userId = "1", capTime = 11.seconds, teammates = listOf("3"), teamRunId = "B"),
+                            demo("three-b", 3.hours, userId = "3", capTime = 11.seconds, teammates = listOf("1"), teamRunId = "B"),
+                            demo("one-c", 2.hours, userId = "1", capTime = 13.seconds, teammates = listOf("2"), teamRunId = "C"),
+                            demo("two-c", 2.hours, userId = "2", capTime = 13.seconds, teammates = listOf("1"), teamRunId = "C"),
+                        )
+                    running(queue) { capIds(queue).toSet() }
+                }
+            got shouldBe setOf("solo", "one-a", "two-a", "one-b", "three-b")
+        }
+
+        test("removes the pending recording of a team once a faster run with the same teammates arrives") {
+            stored { demos, repository, queue ->
+                demos +=
+                    listOf(
+                        demo("one-slower", 2.hours, userId = "1", capTime = 12.seconds, teammates = listOf("2"), teamRunId = "A"),
+                        demo("two-slower", 2.hours, userId = "2", capTime = 12.seconds, teammates = listOf("1"), teamRunId = "A"),
+                    )
+                running(queue) {
+                    capIds(queue).toSet() shouldBe setOf("one-slower", "two-slower")
+                    demos +=
+                        listOf(
+                            demo("one-faster", 1.hours, userId = "1", teammates = listOf("2"), teamRunId = "B"),
+                            demo("two-faster", 1.hours, userId = "2", teammates = listOf("1"), teamRunId = "B"),
+                        )
+                    eventually(5.seconds) {
+                        repository.all().map { it.demo.capId }.toSet() shouldBe setOf("one-faster", "two-faster")
+                    }
+                }
+            }
+        }
+
+        test("compares team runs by the slowest cap time of the members") {
+            val got =
+                stored { demos, _, queue ->
+                    demos +=
+                        listOf(
+                            demo("one-a", 4.hours, userId = "1", capTime = 90.seconds, teammates = listOf("2"), teamRunId = "A"),
+                            demo("two-a", 4.hours, userId = "2", capTime = 95.seconds, teammates = listOf("1"), teamRunId = "A"),
+                            demo("one-b", 3.hours, userId = "1", capTime = 92.seconds, teammates = listOf("2"), teamRunId = "B"),
+                            demo("two-b", 3.hours, userId = "2", capTime = 93.seconds, teammates = listOf("1"), teamRunId = "B"),
+                        )
+                    running(queue) { capIds(queue) }
+                }
+            got shouldBe listOf("one-b", "two-b")
+        }
+
+        test("sets the run medal of every member of a team run to the highest medal of the run, and of a solo recording to its own medal") {
+            val got =
+                stored { demos, _, queue ->
+                    demos +=
+                        listOf(
+                            demo("one", 2.hours, medal = 5, userId = "1", teammates = listOf("2", "3"), teamRunId = "A"),
+                            demo("two", 2.hours, medal = 6, userId = "2", teammates = listOf("1", "3"), teamRunId = "A"),
+                            demo("three", 2.hours, medal = 7, userId = "3", teammates = listOf("1", "2"), teamRunId = "A"),
+                            demo("solo", 1.hours, medal = 3, userId = "4"),
+                        )
+                    running(queue) { queue.get(10).associate { it.demo.capId to it.runMedal } }
+                }
+            got shouldBe mapOf("one" to 6, "two" to 6, "three" to 6, "solo" to 3)
+        }
+
+        test("ranks a team recording by the medal of its run") {
+            val got =
+                stored { demos, _, queue ->
+                    demos +=
+                        listOf(
+                            demo("gold", 1.hours, medal = 4, userId = "3", capTime = 5.seconds),
+                            demo("one", 2.hours, medal = 1, userId = "1", capTime = 12.seconds, teammates = listOf("2"), teamRunId = "A"),
+                            demo("two", 2.hours, medal = 6, userId = "2", capTime = 11.seconds, teammates = listOf("1"), teamRunId = "A"),
+                        )
+                    running(queue) { capIds(queue) }
+                }
+            got shouldBe listOf("two", "one", "gold")
+        }
+
+        test("queues a team demo only once the demo of every teammate of its run is stored") {
+            stored { demos, _, queue ->
+                demos +=
+                    listOf(
+                        demo("one", 3.hours, userId = "1", teammates = listOf("2", "3"), teamRunId = "A"),
+                        demo("two", 3.hours, userId = "2", teammates = listOf("1", "3"), teamRunId = "A"),
+                        demo("three-other-run", 2.hours, userId = "3", capTime = 5.seconds, teammates = listOf("1", "2"), teamRunId = "B"),
+                        demo("four-no-run", 2.hours, userId = "4", teammates = listOf("5")),
+                        demo("five-no-run", 2.hours, userId = "5", teammates = listOf("4")),
+                    )
+                running(queue) {
+                    capIds(queue) shouldBe emptyList()
+                    demos +=
+                        listOf(demo("three", 1.hours, userId = "3", capTime = 12.seconds, teammates = listOf("1", "2"), teamRunId = "A"))
+                    eventually(5.seconds) { capIds(queue).toSet() shouldBe setOf("one", "two", "three") }
+                }
+            }
+        }
+
+        test("sets a completed team recording to outdated only once the faster run of the same teammates is complete") {
+            stored { demos, repository, queue ->
+                repository +=
+                    listOf(
+                        demo("one-old", 4.hours, userId = "1", capTime = 12.seconds, teammates = listOf("2"), teamRunId = "A"),
+                        demo("one-new", 2.hours, userId = "1", capTime = 10.seconds, teammates = listOf("2"), teamRunId = "B"),
+                    )
+                repository.finish("one-old", Recorded)
+                repository.finish("one-new", Recorded)
+                demos += listOf(demo("two-old", 4.hours, userId = "2", capTime = 14.seconds, teammates = listOf("1"), teamRunId = "A"))
+                running(queue) {
+                    capIds(queue) shouldBe listOf("two-old")
+                    repository["one-old"]?.status shouldBe Recorded
+                    repository["one-new"]?.status shouldBe Recorded
+                    demos += listOf(demo("two-new", 2.hours, userId = "2", capTime = 11.seconds, teammates = listOf("1"), teamRunId = "B"))
+                    eventually(5.seconds) {
+                        repository["one-old"]?.status shouldBe Outdated
+                        capIds(queue) shouldBe listOf("two-new")
+                    }
+                    repository["one-new"]?.status shouldBe Recorded
+                }
+            }
+        }
+
+        test("sets a beaten team recording to outdated only once a faster run of the same teammates is recorded") {
+            stored { demos, repository, queue ->
+                repository += listOf(demo("old", 4.hours, userId = "1", capTime = 12.seconds, teammates = listOf("2"), teamRunId = "A"))
+                repository.finish("old", Recorded)
+                demos +=
+                    listOf(
+                        demo("solo", 3.hours, userId = "1", capTime = 5.seconds),
+                        demo("partner", 4.hours, userId = "2", capTime = 14.seconds, teammates = listOf("1"), teamRunId = "A"),
+                        demo("new", 2.hours, userId = "1", capTime = 10.seconds, teammates = listOf("2"), teamRunId = "B"),
+                        demo("new-partner", 2.hours, userId = "2", capTime = 11.seconds, teammates = listOf("1"), teamRunId = "B"),
+                    )
+                running(queue) {
+                    eventually(5.seconds) { capIds(queue) shouldContain "new" }
+                    repository["old"]?.status shouldBe Recorded
+                    repository.finish("solo", Recorded)
+                    repository["old"]?.status shouldBe Recorded
+                    repository.finish("new", Recorded)
+                    eventually(5.seconds) { repository["old"]?.status shouldBe Outdated }
+                    repository["solo"]?.status shouldBe Recorded
+                }
+            }
         }
 
         test("builds the queue again once a demo is added") {

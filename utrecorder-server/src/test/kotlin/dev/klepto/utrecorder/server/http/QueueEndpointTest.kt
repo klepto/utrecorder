@@ -51,7 +51,7 @@ class QueueEndpointTest :
                 userId = capId,
             )
 
-        test("lists the demos of the pending recordings in queue order, up to 100: recent, medal, cap time, newest") {
+        test("lists the pending recordings in queue order, up to 100: recent, medal, cap time, newest") {
             val config = ServerConfig(ConfigReader.EMPTY, directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home")))
             SqliteDocumentStore.open(root.resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
@@ -76,13 +76,20 @@ class QueueEndpointTest :
                             }
                         repository.finish("recorded", Recorded)
 
+                        suspend fun capIds(url: String) =
+                            Json
+                                .parseToJsonElement(client.get(url).bodyAsText())
+                                .jsonArray
+                                .map {
+                                    it.jsonObject["demo"]!!
+                                        .jsonObject["capId"]!!
+                                        .jsonPrimitive.content
+                                }
+
                         eventually(5.seconds) {
-                            val queued = Json.parseToJsonElement(client.get("/api/queue").bodyAsText()).jsonArray
-                            queued.map { it.jsonObject["capId"]!!.jsonPrimitive.content } shouldBe
+                            capIds("/api/queue") shouldBe
                                 listOf("world-record", "gold", "casual-fast", "casual-slow") + (1..8).map { "filler-$it" } + "backlog"
-                            val after = client.get("/api/queue?after=casual-fast&limit=2").bodyAsText()
-                            Json.parseToJsonElement(after).jsonArray.map { it.jsonObject["capId"]!!.jsonPrimitive.content } shouldBe
-                                listOf("casual-slow", "filler-1")
+                            capIds("/api/queue?after=casual-fast&limit=2") shouldBe listOf("casual-slow", "filler-1")
                             client.get("/api/queue?after=recorded").status shouldBe HttpStatusCode.BadRequest
                         }
                         job.cancelAndJoin()

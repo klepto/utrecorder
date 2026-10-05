@@ -21,27 +21,38 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Instant
 
 /**
  * [Service] that keeps a [Pending] recording in [recordings] for each demo of [demos] that waits for a recorder, and
  * orders those recordings behind a backlog gate.
  *
- * Only the fastest demo of each player on each map is queued. Players are told apart by [Demo.userId]. Of two demos with
- * the same cap time, the one added first is queued. A demo without a [Demo.userId] is never queued. A [Recorded],
- * [Uploaded] or [Archived] recording stays chosen until a faster recording of the same player on the same map is
- * [Recorded], [Uploaded] or [Archived] as well; it is set to [Outdated] then. Every recording that has not been recorded
- * and whose demo is no longer chosen is removed. A [RecordingStatus.Recording] one is left alone until its capture ends.
+ * Only the fastest demo of each player with the same teammates on each map is queued. Players are told apart by
+ * [Demo.userId], teams by [Demo.teammates]. The time compared is the team time: its own [Demo.capTime] for a solo demo,
+ * and the slowest [Demo.capTime] among the stored demos of its [Demo.teamRunId] for a team demo. A team demo is complete
+ * once, for each of its [Demo.teammates], a stored demo with that [Demo.userId] and the same [Demo.teamRunId] exists; a
+ * team demo without a [Demo.teamRunId] is never complete. An incomplete team demo is neither queued nor compared: it
+ * beats nothing and outdates nothing until the build after the missing demos are stored. Of two demos with the same team
+ * time, the one added first is queued. A demo without a [Demo.userId] is never queued. A [Recorded], [Uploaded] or
+ * [Archived] recording stays chosen until a faster recording of the same player with the same teammates on the same map
+ * is [Recorded], [Uploaded] or [Archived] as well; it is set to [Outdated] then. Every recording that has not been
+ * recorded and whose demo is no longer chosen is removed. A [RecordingStatus.Recording] one is left alone until its
+ * capture ends.
  *
  * On [start], every [RecordingStatus.Recording], [Failed] or [Unresolvable] recording is set to [Pending] again, then the
  * queue is built. After that, the queue is built again whenever [DemoRepository.changes] or
  * [RecordingRepository.statusChanges] signals a change, and every [Failed] or [Unresolvable] recording is set to
  * [Pending] again once every [ServerConfig.recordingRetryInterval]. A build that changes nothing changes no status.
  *
- * The recordings are ordered key by key: recent first, then higher [Demo.medal], then shorter [Demo.capTime], then newer
- * [Demo.timestamp]. Ties keep the order [RecordingRepository.all] gives. A demo is recent while it is at most
+ * Every build sets the [Recording.runMedal] of each recording: the highest ranked [Demo.medal] among the stored demos of
+ * its [Demo.teamRunId], or its own [Demo.medal] for a solo demo.
+ *
+ * The recordings are ordered key by key: recent first, then higher [Recording.runMedal], then shorter [Demo.capTime],
+ * then newer [Demo.timestamp]. Ties keep the order [RecordingRepository.all] gives. A demo is recent while it is at most
  * [ServerConfig.recordingRecentAge] old, a demo whose timestamp lies in the future included; any other demo is a backlog
- * demo. A [Demo.medal] that is `null` or outside `0` to `6` ranks as `0`, casual.
+ * demo. A recording whose [Recording.runMedal] is not set yet ranks by its [Demo.medal]. A medal that is `null` or
+ * outside `0` to `6` ranks as `0`, casual.
  *
  * Every [Pending] recording is sorted again on each call. Neither [get] nor [first] changes a status, and both wait until
  * [start] has built the queue once.
@@ -126,20 +137,28 @@ class RecordingQueue(
     }
 
     /**
-     * Stores a recording of the fastest demo of each player on each map in [recordings]. Chooses those demos, and the
-     * fastest [completed][RecordingStatus.isCompleted] recording of each player on each map. Removes every recording that
-     * has not been recorded and whose demo is not chosen, and sets every [completed][RecordingStatus.isCompleted]
-     * recording whose demo is not chosen to [Outdated].
+     * Stores a recording of the fastest demo of each player with the same teammates on each map in [recordings]. Chooses
+     * those demos, and the fastest [completed][RecordingStatus.isCompleted] recording of each player with the same
+     * teammates on each map, comparing the team time over every stored demo and skipping every incomplete team demo.
+     * Removes every recording that has not been recorded and whose demo is not chosen, and sets every
+     * [completed][RecordingStatus.isCompleted] recording whose demo is complete but not chosen to [Outdated]. Sets the
+     * [Recording.runMedal] of every recording.
      */
     private suspend fun build(): Unit =
         building.withLock {
-            val fastest = fastest(demos.all())
+            val all = demos.all()
+            val runs = runs(all)
+            val fastest = fastest(all, runs)
             recordings += fastest
             val completed = recordings.all().filter { it.status.isCompleted }
-            val chosen = (fastest + fastest(completed.map { it.demo })).mapTo(HashSet()) { it.capId }
-            val beaten = completed.map { it.demo.capId }.filterTo(HashSet()) { it !in chosen }
+            val chosen = (fastest + fastest(completed.map { it.demo }, runs)).mapTo(HashSet()) { it.capId }
+            val beaten =
+                completed
+                    .map { it.demo }
+                    .filter { it.capId !in chosen && teamTime(it, runs) != null }
+                    .mapTo(HashSet()) { it.capId }
             recordings.retainUnrecorded { it in chosen }
-            setStatus(Outdated) { it.demo.capId in beaten && it.status.isCompleted }
+            recordings.updateAll { rebuilt(it, beaten, runs) }
         }
 
     /**
@@ -200,7 +219,7 @@ class RecordingQueue(
      */
     private fun order(now: Instant): Comparator<Recording> =
         compareByDescending<Recording> { isRecent(it.demo, now) }
-            .thenByDescending { rank(it.demo.medal) }
+            .thenByDescending { rank(it.runMedal ?: it.demo.medal) }
             .thenBy { it.demo.capTime }
             .thenByDescending { it.demo.timestamp }
 
@@ -217,25 +236,84 @@ class RecordingQueue(
 
         val REQUEUED = GIVEN_UP + RecordingStatus.Recording
 
-        val FASTEST_FIRST: Comparator<Demo> =
-            compareBy<Demo> { it.capTime }
-                .thenBy { it.timestamp }
-
         val MEDALS = 0..6
 
         const val CASUAL = 0
 
         /**
-         * Returns the fastest of [demos] for each player on each map, oldest first. A demo without a [Demo.userId] is
-         * never returned.
+         * Returns the [demos] of each [Demo.teamRunId] present among them. A demo without a [Demo.userId] counts.
          */
-        fun fastest(demos: List<Demo>): List<Demo> =
+        fun runs(demos: List<Demo>): Map<String, List<Demo>> =
             demos
-                .filter { it.userId != null }
-                .groupBy { it.userId to it.map }
+                .filter { it.teamRunId != null }
+                .groupBy { it.teamRunId!! }
+
+        /**
+         * Returns the team time of [demo]: its own [Demo.capTime] if it is solo, the slowest [Demo.capTime] of its run in
+         * [runs] if it is a complete team demo, or `null` if it is an incomplete team demo. A team demo is complete if
+         * its run in [runs] holds a demo of each of its [Demo.teammates].
+         */
+        fun teamTime(
+            demo: Demo,
+            runs: Map<String, List<Demo>>,
+        ): Duration? {
+            if (demo.teammates.isEmpty()) return demo.capTime
+            val run = demo.teamRunId?.let { runs[it] } ?: return null
+            val members = run.mapTo(HashSet()) { it.userId }
+            return run.maxOf { it.capTime }.takeIf { members.containsAll(demo.teammates) }
+        }
+
+        /**
+         * Returns the fastest of [demos] for each player with the same teammates on each map, oldest first. The demos
+         * are compared by their team time over [runs], then by [Demo.timestamp]. A demo without a [Demo.userId] and an
+         * incomplete team demo are never returned.
+         */
+        fun fastest(
+            demos: List<Demo>,
+            runs: Map<String, List<Demo>>,
+        ): List<Demo> {
+            val fastestFirst =
+                compareBy<Demo> { teamTime(it, runs) }
+                    .thenBy { it.timestamp }
+            return demos
+                .filter { it.userId != null && teamTime(it, runs) != null }
+                .groupBy { Triple(it.userId, it.map, it.teammates) }
                 .values
-                .map { it.minWith(FASTEST_FIRST) }
+                .map { it.minWith(fastestFirst) }
                 .sortedBy { it.timestamp }
+        }
+
+        /**
+         * Returns [recording] with its [Recording.runMedal] taken from [runs], set to [Outdated] if its demo is in
+         * [beaten] and it is [completed][RecordingStatus.isCompleted].
+         */
+        fun rebuilt(
+            recording: Recording,
+            beaten: Set<String>,
+            runs: Map<String, List<Demo>>,
+        ): Recording {
+            val status =
+                when {
+                    recording.demo.capId in beaten && recording.status.isCompleted -> Outdated
+                    else -> recording.status
+                }
+            return recording.copy(status = status, runMedal = runMedal(recording.demo, runs))
+        }
+
+        /**
+         * Returns the medal of the run of [demo]: the highest ranked [Demo.medal] of its run in [runs] if it is a team
+         * demo, or its own [Demo.medal] if it is solo or its run is not in [runs]. If no demo of the run has a medal,
+         * returns `null` instead.
+         */
+        fun runMedal(
+            demo: Demo,
+            runs: Map<String, List<Demo>>,
+        ): Int? {
+            val run = demo.teamRunId?.let { runs[it] } ?: return demo.medal
+            return run
+                .mapNotNull { it.medal }
+                .maxByOrNull { rank(it) }
+        }
 
         /**
          * Returns the rank of [medal]: [medal] itself if it is one of [MEDALS], [CASUAL] otherwise.

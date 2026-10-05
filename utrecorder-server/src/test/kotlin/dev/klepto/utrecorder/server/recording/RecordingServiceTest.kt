@@ -356,7 +356,8 @@ class RecordingServiceTest :
             ) {
                 eventually(5.seconds) {
                     val job = jobs.jobs.first().single()
-                    job.demo.capId shouldBe "cap"
+                    job.recording.demo.capId shouldBe "cap"
+                    job.recording.status shouldBe RecordingStatus.Recording
                     job.attempt shouldBe 1
                     job.progress shouldBe Progress(FetchingDemo, 0.5)
                 }

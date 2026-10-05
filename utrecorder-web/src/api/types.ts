@@ -32,8 +32,8 @@ export type RecorderStage = "FetchingDemo" | "PreparingInstallation" | "Resolvin
 
 /** One running recording, as `/api/jobs` lists it. */
 export interface Job {
-  /** The demo being recorded. */
-  demo: Demo;
+  /** The recording being captured, as it was when the capture was claimed. */
+  recording: Recording;
   /** The number of the current attempt, starting at `1`. */
   attempt: number;
   /** The stage of the current attempt, or `null` if it has not reported yet. */
@@ -88,6 +88,12 @@ export interface Recording {
   height: number | null;
   /** The frames per second of the video, or `null` if the server did not store it. */
   fps: number | null;
+  /**
+   * The medal of the run the demo belongs to, numbered as `Demo.medal`: the highest medal among the caps of its team
+   * run, or the medal of the demo itself for a solo cap. `null` if no cap of the run has a medal, or if the server has
+   * not set it yet.
+   */
+  runMedal: number | null;
 }
 
 /** The size and age of the hot cache of mp4 files. */

@@ -87,15 +87,16 @@ describe("RecordingList", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
-  test("lists the resolution, frame rate, file size and processing time under the video", () => {
-    render(wrap(<RecordingList query={{ data: [recordings[0]], isPending: false, isError: false }} />));
+  test("lists the resolution, frame rate, file size, processing time and views under the video", () => {
+    render(wrap(<RecordingList query={{ data: [recordings[1]], isPending: false, isError: false }} />));
 
     fireEvent.click(screen.getByRole("button"));
 
     expect(screen.getByText("Resolution").nextSibling).toHaveTextContent("1920×1080");
     expect(screen.getByText("Frame rate").nextSibling).toHaveTextContent("60 fps");
-    expect(screen.getByText("File size").nextSibling).toHaveTextContent("19 MB");
-    expect(screen.getByText("Processing time").nextSibling).toHaveTextContent("1 min 30 s");
+    expect(screen.getByText("File size").nextSibling).toHaveTextContent("21 MB");
+    expect(screen.getByText("Processing time").nextSibling).toHaveTextContent("1 min 31 s");
+    expect(screen.getByText("Views").nextSibling).toHaveTextContent("3");
   });
 
   test("leaves out the figures the server did not store", () => {
@@ -105,7 +106,7 @@ describe("RecordingList", () => {
     fireEvent.click(screen.getByRole("button"));
 
     expect(document.querySelector("video")).not.toBeNull();
-    expect(document.querySelector("dl")).toBeNull();
+    expect(Array.from(document.querySelectorAll("dt"), (term) => term.textContent)).toEqual(["Views"]);
   });
 
   test("replaces the video with an alert on a playback error", async () => {
@@ -167,6 +168,16 @@ describe("RecordingList", () => {
     );
   });
 
+  test("shows the medal of the run, and the medal of the demo while the run has none", () => {
+    const [first, second] = recordings;
+    const team = { ...first, demo: { ...first.demo, capId: "team", medal: 5 }, runMedal: 6 };
+    const unset = { ...second, demo: { ...second.demo, capId: "unset", medal: 5 }, runMedal: null };
+    render(wrap(<RecordingList query={{ data: [team, unset], isPending: false, isError: false }} />));
+
+    expect(screen.getByRole("img", { name: "World Record" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Champion Medal" })).toBeInTheDocument();
+  });
+
   test("shows the outdated label on an Outdated recording", () => {
     const outdated = recordings.find((recording) => recording.status === "Outdated")!;
     render(wrap(<RecordingList query={{ data: [outdated], isPending: false, isError: false }} />));
@@ -181,11 +192,11 @@ describe("RecordingList", () => {
     expect(screen.queryByText("outdated")).toBeNull();
   });
 
-  test("renders none of error, md5, views or demoUrl", async () => {
+  test("renders none of error, md5 or demoUrl", async () => {
     render(wrap(<Connected />));
 
     await screen.findAllByRole("button");
-    expect(document.body.textContent).not.toMatch(/9e107d9d|example\.com|views/);
+    expect(document.body.textContent).not.toMatch(/9e107d9d|example\.com/);
   });
 });
 

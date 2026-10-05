@@ -15,22 +15,24 @@ import kotlin.time.Instant
 
 class RecordingJobsTest :
     FunSpec({
-        fun demo(capId: String): Demo =
-            Demo(
-                capId = capId,
-                map = "CTF-BT-Maverick",
-                player = "klepto",
-                capTime = 10.seconds,
-                timestamp = Instant.parse("2026-09-26T12:00:00Z"),
-                demoUrl = "http://api.utbt.net/demos/$capId",
+        fun recording(capId: String): Recording =
+            Recording(
+                Demo(
+                    capId = capId,
+                    map = "CTF-BT-Maverick",
+                    player = "klepto",
+                    capTime = 10.seconds,
+                    timestamp = Instant.parse("2026-09-26T12:00:00Z"),
+                    demoUrl = "http://api.utbt.net/demos/$capId",
+                ),
             )
 
         test("lists a job at its first attempt without progress while its block runs") {
             val jobs = RecordingJobs()
 
-            jobs.track(demo("cap")) {
+            jobs.track(recording("cap")) {
                 val job = jobs.jobs.first().single()
-                job.demo.capId shouldBe "cap"
+                job.recording.demo.capId shouldBe "cap"
                 job.attempt shouldBe 1
                 job.progress shouldBe null
             }
@@ -39,18 +41,18 @@ class RecordingJobsTest :
         test("lists the jobs of nested blocks apart") {
             val jobs = RecordingJobs()
 
-            jobs.track(demo("first")) {
-                jobs.track(demo("second")) {
-                    jobs.jobs.first().map { it.demo.capId } shouldContainExactlyInAnyOrder listOf("first", "second")
+            jobs.track(recording("first")) {
+                jobs.track(recording("second")) {
+                    jobs.jobs.first().map { it.recording.demo.capId } shouldContainExactlyInAnyOrder listOf("first", "second")
                 }
-                jobs.jobs.first().map { it.demo.capId } shouldBe listOf("first")
+                jobs.jobs.first().map { it.recording.demo.capId } shouldBe listOf("first")
             }
         }
 
         test("sets reported progress, and clears it when a new attempt starts") {
             val jobs = RecordingJobs()
 
-            jobs.track(demo("cap")) { tracker ->
+            jobs.track(recording("cap")) { tracker ->
                 tracker.report(Progress(Capturing, 0.5))
                 val reported = jobs.jobs.first().single()
                 reported.progress shouldBe Progress(Capturing, 0.5)
@@ -67,7 +69,7 @@ class RecordingJobsTest :
             lateinit var escaped: RecordingJobs.Tracker
 
             shouldThrow<IllegalStateException> {
-                jobs.track(demo("cap")) {
+                jobs.track(recording("cap")) {
                     escaped = it
                     error("Recording failed")
                 }

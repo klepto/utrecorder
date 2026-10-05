@@ -27,6 +27,9 @@ import kotlin.time.Instant
  * the server began to store it.
  * @property height The height of the video of the mp4 in pixels, or `null` where [width] is.
  * @property fps The frames per second of the video of the mp4, or `null` where [width] is.
+ * @property runMedal The medal of the run [demo] belongs to: the highest [Demo.medal] among the stored demos of its
+ * [Demo.teamRunId], or the medal of [demo] itself for a solo demo. `null` if none of those demos has a medal, or if it
+ * was not set yet.
  */
 @Serializable
 data class Recording(
@@ -44,6 +47,7 @@ data class Recording(
     val width: Int? = null,
     val height: Int? = null,
     val fps: Int? = null,
+    val runMedal: Int? = null,
 ) {
     /**
      * Returns this recording with the frame size and the frame rate of [video]. If [video] is `null`, returns it with
@@ -78,8 +82,8 @@ enum class RecordingStatus(
     Archived(isCompleted = true),
 
     /**
-     * Recorded, uploaded or archived, then beaten by a faster recording of the same player on the same map that has an
-     * mp4. Kept as a tombstone, with every other field unchanged. Its [Recording.lastUpdate] is the time it became
+     * Recorded, uploaded or archived, then beaten by a faster recording of the same player with the same teammates on
+     * the same map that has an mp4. Kept as a tombstone, with every other field unchanged. Its [Recording.lastUpdate] is the time it became
      * outdated.
      */
     Outdated(isCompleted = false),

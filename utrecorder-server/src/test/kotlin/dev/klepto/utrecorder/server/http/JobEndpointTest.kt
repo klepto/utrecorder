@@ -6,6 +6,7 @@ import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.demo.Demo
+import dev.klepto.utrecorder.server.recording.Recording
 import dev.klepto.utrecorder.server.recording.RecordingJobs
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
@@ -39,7 +40,7 @@ class JobEndpointTest :
                 )
             testApplication {
                 application { HttpService(listOf(JobEndpoint(jobs)), config).module(this) }
-                jobs.track(demo) { tracker ->
+                jobs.track(Recording(demo)) { tracker ->
                     tracker.startAttempt(2)
                     tracker.report(Progress(RecorderStage.FetchingDemo, 0.5))
                     val job =
@@ -49,7 +50,10 @@ class JobEndpointTest :
                             .single()
                             .jsonObject
 
-                    job["demo"]!!.jsonObject["capId"]!!.jsonPrimitive.content shouldBe "running"
+                    job["recording"]!!
+                        .jsonObject["demo"]!!
+                        .jsonObject["capId"]!!
+                        .jsonPrimitive.content shouldBe "running"
                     job["attempt"]!!.jsonPrimitive.content shouldBe "2"
                     job["stage"]!!.jsonPrimitive.content shouldBe "FetchingDemo"
                     job["progress"]!!.jsonPrimitive.content shouldBe "0.5"
@@ -63,26 +67,29 @@ class JobEndpointTest :
             val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("paged-home"))
             val config = ServerConfig(ConfigReader.EMPTY, directories = directories)
 
-            fun demo(capId: String) =
-                Demo(
-                    capId = capId,
-                    map = "CTF-BT-Maverick",
-                    player = "klepto",
-                    capTime = 10.seconds,
-                    timestamp = Instant.parse("2026-09-26T12:00:00Z"),
-                    demoUrl = "http://api.utbt.net/demos/$capId",
+            fun recording(capId: String) =
+                Recording(
+                    Demo(
+                        capId = capId,
+                        map = "CTF-BT-Maverick",
+                        player = "klepto",
+                        capTime = 10.seconds,
+                        timestamp = Instant.parse("2026-09-26T12:00:00Z"),
+                        demoUrl = "http://api.utbt.net/demos/$capId",
+                    ),
                 )
             testApplication {
                 application { HttpService(listOf(JobEndpoint(jobs)), config).module(this) }
-                jobs.track(demo("first")) {
-                    jobs.track(demo("second")) {
-                        jobs.track(demo("third")) {
+                jobs.track(recording("first")) {
+                    jobs.track(recording("second")) {
+                        jobs.track(recording("third")) {
                             fun capIds(text: String) =
                                 Json
                                     .parseToJsonElement(text)
                                     .jsonArray
                                     .map {
-                                        it.jsonObject["demo"]!!
+                                        it.jsonObject["recording"]!!
+                                            .jsonObject["demo"]!!
                                             .jsonObject["capId"]!!
                                             .jsonPrimitive.content
                                     }

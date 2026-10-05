@@ -8,7 +8,8 @@ import io.ktor.server.routing.get
  * [Endpoint] that reports the order [queue] records the pending recordings in.
  *
  * The route is:
- * - `GET /api/queue`: the demos of every pending recording of [queue], in queue order, paged by [respondPage] and keyed by cap id.
+ * - `GET /api/queue`: every pending recording of [queue], in queue order, paged by [respondPage] and keyed by the cap id
+ *   of its demo.
  *
  * @property queue The order the pending recordings are recorded in.
  */
@@ -16,6 +17,6 @@ class QueueEndpoint(
     private val queue: RecordingQueue,
 ) : Endpoint {
     override fun install(route: Route) {
-        route.get("/api/queue") { respondPage(queue.get(Int.MAX_VALUE).map { it.demo }) { it.capId } }
+        route.get("/api/queue") { respondPage(queue.get(Int.MAX_VALUE)) { it.demo.capId } }
     }
 }

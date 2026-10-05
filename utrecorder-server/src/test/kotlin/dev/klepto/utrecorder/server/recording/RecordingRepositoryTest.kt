@@ -137,8 +137,8 @@ class RecordingRepositoryTest :
                     now.set(Instant.parse("2026-09-27T09:00:00Z"))
                     it.claim("cap") to it["cap"]
                 }
-            claimed shouldBe
-                (true to Recording(demo("cap", 0), RecordingStatus.Recording, lastUpdate = Instant.parse("2026-09-27T09:00:00Z")))
+            val expected = Recording(demo("cap", 0), RecordingStatus.Recording, lastUpdate = Instant.parse("2026-09-27T09:00:00Z"))
+            claimed shouldBe (expected to expected)
         }
 
         test("does not claim a missing recording or one that is not pending") {
@@ -149,7 +149,7 @@ class RecordingRepositoryTest :
                     it.finish("recording", RecordingStatus.Recording)
                     listOf(it.claim("missing"), it.claim("failed"), it.claim("recording"), it["failed"]?.status)
                 }
-            claimed shouldBe listOf(false, false, false, Failed)
+            claimed shouldBe listOf(null, null, null, Failed)
         }
 
         test("signals status changes once when collected and again after a recording is added, changes status or is removed") {

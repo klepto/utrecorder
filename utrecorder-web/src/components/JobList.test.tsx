@@ -63,6 +63,18 @@ describe("JobList", () => {
     expect(screen.getByRole("progressbar", { name: "Progress unknown" })).toBeInTheDocument();
   });
 
+  test("shows the medal of the run of the job", () => {
+    const { recording } = jobs[1];
+    const job: Job = { ...jobs[1], recording: { ...recording, demo: { ...recording.demo, medal: 5 }, runMedal: 6 } };
+    render(
+      <MantineProvider forceColorScheme="dark">
+        <JobList query={{ data: [job], isPending: false, isError: false, dataUpdatedAt: Date.now() }} />
+      </MantineProvider>,
+    );
+
+    expect(screen.getByRole("img", { name: "World Record" })).toBeInTheDocument();
+  });
+
   test("fills the bar quickly from empty to the reported progress when it appears", () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] });
     renderProgress(0.42);

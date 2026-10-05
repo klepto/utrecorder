@@ -26,22 +26,22 @@ const MEDALS: Medal[] = [
   { name: "World Record", icon: worldRecord, color: "oklch(70.7% .1 254.624)" },
 ];
 
-/** The medal of `demo`, or the casual medal if it has none or one this site does not know. */
-const medalOf = (demo: Demo): Medal => {
-  return (demo.medal !== null && MEDALS[demo.medal]) || MEDALS[0];
+/** The medal numbered `medal`, or the casual medal if it is `null` or a number this site does not know. */
+const medalOf = (medal: number | null): Medal => {
+  return (medal !== null && MEDALS[medal]) || MEDALS[0];
 };
 
 /**
  * The cap time of `demo` as `formatCapTime` writes it, in the color of its medal, after the icon of its medal named by
- * its alt text.
+ * its alt text. If `medal` is provided, shows that medal instead of the medal of `demo`.
  */
-export const CapTime = ({ demo }: { demo: Demo }) => {
-  const medal = medalOf(demo);
+export const CapTime = ({ demo, medal = demo.medal }: { demo: Demo; medal?: number | null }) => {
+  const { name, icon, color } = medalOf(medal);
   return (
-    <span style={{ whiteSpace: "nowrap", color: medal.color }}>
+    <span style={{ whiteSpace: "nowrap", color }}>
       <img
-        src={medal.icon}
-        alt={medal.name}
+        src={icon}
+        alt={name}
         width={14}
         height={14}
         style={{ verticalAlign: "calc(-0.2em + 2px)", marginRight: 4 }}
