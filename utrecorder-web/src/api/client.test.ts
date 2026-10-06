@@ -1,5 +1,7 @@
+import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
-import { fetchJobs, fetchQueue, fetchRecordings, fetchStatistics } from "./client";
+import { server } from "../mocks/server";
+import { fetchJobs, fetchQueue, fetchQueueHead, fetchRecordings, fetchStatistics } from "./client";
 
 describe("client", () => {
   test("fetches the running jobs", async () => {
@@ -14,6 +16,16 @@ describe("client", () => {
     const queue = await fetchQueue();
 
     expect(queue.map((recording) => recording.demo.capId)).toEqual(["1101", "1102", "1103", "1104", "1105"]);
+  });
+
+  test("fetches the head of the queue", async () => {
+    expect(await fetchQueueHead()).toEqual({ capId: "1101", startsAt: "2026-09-28T18:10:22Z" });
+  });
+
+  test("fetches no head for an empty queue", async () => {
+    server.use(http.get("/api/queue/next", () => new HttpResponse(null, { status: 204 })));
+
+    expect(await fetchQueueHead()).toBeNull();
   });
 
   test("fetches a page of recordings", async () => {

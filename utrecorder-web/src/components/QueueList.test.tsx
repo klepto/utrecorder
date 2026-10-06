@@ -3,25 +3,33 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test, vi } from "vitest";
-import { useQueue } from "../api/queries";
-import type { Job } from "../api/types";
+import { useQueue, useQueueHead } from "../api/queries";
+import type { Job, QueueHead } from "../api/types";
 import { jobs, queue } from "../mocks/fixtures";
 import { server } from "../mocks/server";
 import { QueueList } from "./QueueList";
 
 const Connected = () => {
   return (
-    <QueueList query={useQueue()} jobs={{ data: undefined, isPending: false, isError: false, dataUpdatedAt: 0 }} />
+    <QueueList
+      query={useQueue()}
+      jobs={{ data: undefined, isPending: false, isError: false, dataUpdatedAt: 0 }}
+      head={useQueueHead().data}
+    />
   );
 };
 
-/** Returns the queue with the jobs `running`, fetched `age` milliseconds ago, for the test to render. */
-const listWith = (running: Job[] | undefined, age = 0) => {
+/**
+ * Returns the queue with the jobs `running`, fetched `age` milliseconds ago, and the head `head` of the server, for the
+ * test to render.
+ */
+const listWith = (running: Job[] | undefined, age = 0, head?: QueueHead | null) => {
   return (
     <MantineProvider forceColorScheme="dark">
       <QueueList
         query={{ data: queue, isPending: false, isError: false }}
         jobs={{ data: running, isPending: false, isError: false, dataUpdatedAt: Date.now() - age }}
+        head={head}
       />
     </MantineProvider>
   );
@@ -68,6 +76,7 @@ describe("QueueList", () => {
         <QueueList
           query={{ data: [team], isPending: false, isError: false }}
           jobs={{ data: undefined, isPending: false, isError: false, dataUpdatedAt: 0 }}
+          head={undefined}
         />
       </MantineProvider>,
     );
@@ -112,6 +121,37 @@ describe("QueueList", () => {
     rerender(listWith(capturing(0.5)));
     expect(screen.getByText("up next in ~4 minutes")).toBeInTheDocument();
     vi.useRealTimers();
+  });
+
+  test("holds the estimate back until the time the server lets the head start", () => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date", "setInterval", "clearInterval"] });
+    render(listWith(undefined, 0, { capId: "1101", startsAt: "1970-01-01T03:00:00Z" }));
+
+    expect(screen.getByText("up next in ~3 hours")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  test("keeps the capture estimate once it is later than the time the server lets the head start", () => {
+    vi.useFakeTimers({ now: 0, toFake: ["Date", "setInterval", "clearInterval"] });
+    const head = { capId: "1101", startsAt: "1970-01-01T00:02:00Z" };
+    const { rerender } = render(listWith(capturing(0.25), 0, head));
+
+    vi.setSystemTime(100_000);
+    rerender(listWith(capturing(0.5), 0, head));
+    expect(screen.getByText("up next in ~4 minutes")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  test("waits for uploads while the server holds the head back without a start", () => {
+    render(listWith(undefined, 0, { capId: "1101", startsAt: null }));
+
+    expect(screen.getByText("up next once uploads catch up")).toBeInTheDocument();
+  });
+
+  test("ignores a head the server reports for another demo", () => {
+    render(listWith(undefined, 0, { capId: "1102", startsAt: null }));
+
+    expect(screen.getByText("up next in ~1 minute")).toBeInTheDocument();
   });
 
   test("opens the cap on utbt.net when a row is clicked", async () => {

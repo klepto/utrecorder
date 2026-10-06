@@ -40,24 +40,18 @@ class UtbtDemoFetcherTest :
                 respond(body, status, headersOf(HttpHeaders.ContentType, "application/json"))
             }
 
-        test("requests one page of verified caps, newest first") {
+        test("requests one page of verified caps at the offset given, newest first") {
             val requests = CopyOnWriteArrayList<String>()
             val fetcher = UtbtDemoFetcher(config, engine("""{"data":[${cap(0)}]}""", requests))
 
-            fetcher.fetch().map { it.capId } shouldContainExactly listOf(id(0))
-            requests shouldContainExactly listOf("https://gateway.utbt.net/caps?limit=100&order=desc&verified=true")
+            fetcher.fetch(500, 1000).map { it.capId } shouldContainExactly listOf(id(0))
+            requests shouldContainExactly listOf("https://gateway.utbt.net/caps?offset=500&limit=1000&order=desc&verified=true")
         }
 
-        test("bounds the page by the times given, in epoch seconds with microseconds") {
-            val requests = CopyOnWriteArrayList<String>()
-            val fetcher = UtbtDemoFetcher(config, engine("{}", requests))
+        test("reads a page without caps as empty") {
+            val fetcher = UtbtDemoFetcher(config, engine("{}"))
 
-            fetcher.fetch(Instant.parse("2026-09-26T12:01:00.000042Z"), Instant.parse("2026-09-26T12:00:00Z")).shouldBeEmpty()
-            requests shouldContainExactly
-                listOf(
-                    "https://gateway.utbt.net/caps?limit=100&order=desc&verified=true" +
-                        "&before=1790424060.000042&after=1790424000.000000",
-                )
+            fetcher.fetch(0, 1000).shouldBeEmpty()
         }
 
         test("maps every field of a cap") {
@@ -78,7 +72,7 @@ class UtbtDemoFetcherTest :
                 """.trimIndent()
             val fetcher = UtbtDemoFetcher(config, engine(body))
 
-            fetcher.fetch().single() shouldBe
+            fetcher.fetch(0, 1000).single() shouldBe
                 Demo(
                     capId = "0b6f4a9e-3c1d-4f7a-9e2b-5d8c1a2b3c4d",
                     map = "CTF-BT-Maverick",
@@ -100,7 +94,7 @@ class UtbtDemoFetcherTest :
                 """.trimIndent()
             val fetcher = UtbtDemoFetcher(config, engine("""{"data":[$solo,${cap(1)}]}"""))
 
-            val demos = fetcher.fetch()
+            val demos = fetcher.fetch(0, 1000)
 
             demos.map { it.teammates } shouldContainExactly listOf(emptyList(), emptyList())
             demos.map { it.teamRunId } shouldContainExactly listOf(null, null)
@@ -110,12 +104,12 @@ class UtbtDemoFetcherTest :
             val invalid = """{"id":"../etc","map":"CTF-BT-A","alias":"a","cap_time_seconds":1,"added":"2026-09-26 12:01:00"}"""
             val fetcher = UtbtDemoFetcher(config, engine("""{"data":[$invalid,${cap(0)}]}"""))
 
-            fetcher.fetch().map { it.capId } shouldContainExactly listOf(id(0))
+            fetcher.fetch(0, 1000).map { it.capId } shouldContainExactly listOf(id(0))
         }
 
         test("throws when UTBT answers with a failure") {
             val fetcher = UtbtDemoFetcher(config, engine("", status = HttpStatusCode.BadGateway))
 
-            shouldThrow<IOException> { fetcher.fetch() }
+            shouldThrow<IOException> { fetcher.fetch(0, 1000) }
         }
     })

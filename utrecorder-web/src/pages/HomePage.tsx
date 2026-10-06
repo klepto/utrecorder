@@ -1,6 +1,6 @@
 import { Anchor, Container, SimpleGrid, Stack } from "@mantine/core";
 import { Link } from "react-router";
-import { useJobs, useQueue, useRecordings } from "../api/queries";
+import { useJobs, useQueue, useQueueHead, useRecordings } from "../api/queries";
 import { JobList } from "../components/JobList";
 import { QueueList } from "../components/QueueList";
 import { RecordingList } from "../components/RecordingList";
@@ -12,6 +12,7 @@ const LATEST_LIMIT = 6;
 export const HomePage = () => {
   const jobs = useJobs();
   const queue = useQueue();
+  const head = useQueueHead();
   const recordings = useRecordings({ limit: LATEST_LIMIT + 1, offset: 0 });
   const latest = recordings.data?.slice(0, LATEST_LIMIT);
   return (
@@ -22,7 +23,7 @@ export const HomePage = () => {
             <JobList query={jobs} />
           </Section>
           <Section title="Queue">
-            <QueueList query={queue} jobs={jobs} />
+            <QueueList query={queue} jobs={jobs} head={head.data} />
           </Section>
         </Stack>
         <Section title="Latest recordings">

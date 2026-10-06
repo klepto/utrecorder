@@ -5,7 +5,6 @@ import dev.klepto.utrecorder.server.database.DocumentStore
 import dev.klepto.utrecorder.server.database.cachedCollection
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import kotlin.time.Instant
 
 /**
  * Every [Demo] known to the server, kept in the `demos` collection of a [DocumentStore]. Each demo is keyed by its cap
@@ -35,16 +34,6 @@ class DemoRepository(
      * Returns every demo, in the order they were first stored.
      */
     suspend fun all(): List<Demo> = collection.all()
-
-    /**
-     * Returns the time the newest demo was added. If there is no demo, returns `null` instead.
-     */
-    suspend fun newest(): Instant? = all().maxOfOrNull { it.timestamp }
-
-    /**
-     * Returns the time the oldest demo was added. If there is no demo, returns `null` instead.
-     */
-    suspend fun oldest(): Instant? = all().minOfOrNull { it.timestamp }
 
     /**
      * Stores each of [demos], in the order given. A demo whose cap id is stored already is skipped.

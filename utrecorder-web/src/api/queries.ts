@@ -1,6 +1,6 @@
 import { keepPreviousData, type QueryKey, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { fetchJobs, fetchQueue, fetchRecordings, fetchStatistics, type RecordingsPage } from "./client";
+import { fetchJobs, fetchQueue, fetchQueueHead, fetchRecordings, fetchStatistics, type RecordingsPage } from "./client";
 
 /** The time between two fetches of the running jobs, in milliseconds. */
 export const JOBS_INTERVAL = 2_000;
@@ -12,6 +12,7 @@ const STATISTICS_INTERVAL = 60_000;
 const QUERY_KEYS = {
   jobs: ["jobs"],
   queue: ["queue"],
+  queueHead: ["queueHead"],
   statistics: ["statistics"],
   recordings: ["recordings"],
   recordingsPage: (page: RecordingsPage): QueryKey => [...QUERY_KEYS.recordings, page],
@@ -43,6 +44,11 @@ export const useJobs = () => {
 /** Returns the queued demos, polled every 10 s. */
 export const useQueue = () => {
   return useQuery({ queryKey: QUERY_KEYS.queue, queryFn: fetchQueue, refetchInterval: QUEUE_INTERVAL });
+};
+
+/** Returns the head of the queue with the earliest time it may start, polled every 10 s. */
+export const useQueueHead = () => {
+  return useQuery({ queryKey: QUERY_KEYS.queueHead, queryFn: fetchQueueHead, refetchInterval: QUEUE_INTERVAL });
 };
 
 /** Returns the aggregate statistics, polled every 60 s. */

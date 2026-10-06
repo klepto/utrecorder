@@ -102,6 +102,14 @@ describe("format", () => {
     expect(formatRemaining(0, 5_000)).toBe("1 minute");
   });
 
+  test("formatRemaining counts rounded hours from 60 minutes", () => {
+    expect(formatRemaining(3_540_000, 0)).toBe("59 minutes");
+    expect(formatRemaining(3_600_000, 0)).toBe("1 hour");
+    expect(formatRemaining(5_340_000, 0)).toBe("1 hour");
+    expect(formatRemaining(5_400_000, 0)).toBe("2 hours");
+    expect(formatRemaining(10_800_000, 0)).toBe("3 hours");
+  });
+
   test("formatStage labels each stage, and Starting for none", () => {
     expect(formatStage("FetchingDemo")).toBe("Downloading");
     expect(formatStage("PreparingInstallation")).toBe("Preparing");

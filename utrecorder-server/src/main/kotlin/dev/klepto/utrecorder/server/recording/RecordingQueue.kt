@@ -12,21 +12,24 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Instant
 
 /**
  * [Service] that keeps a [Pending] recording in [recordings] for each demo of [demos] that waits for a recorder, and
- * orders those recordings behind a backlog gate.
+ * orders those recordings behind the backlog gates.
  *
  * Only the fastest demo of each player with the same teammates on each map is queued. Players are told apart by
  * [Demo.userId], teams by [Demo.teammates]. The time compared is the team time: its own [Demo.capTime] for a solo demo,
@@ -59,7 +62,7 @@ import kotlin.time.Instant
  *
  * @property demos The demos to choose from.
  * @property recordings The recordings of the chosen demos.
- * @property config The retry interval, the recent age, the backlog buffer and the archive delay.
+ * @property config The retry interval, the recent age, the backlog buffer, the archive delay and the daily uploads.
  * @property clock The source of now, which the age of a demo is measured against.
  */
 class RecordingQueue(
@@ -82,16 +85,43 @@ class RecordingQueue(
 
     /**
      * Returns the head of the queue. Suspends until [start] has built the queue once. Suspends while the queue is empty,
-     * or while the head is a backlog recording and at least [ServerConfig.recordingBacklogBuffer] recordings are
-     * [RecordingStatus.Recording], or [Recorded] at least [ServerConfig.archiveDelay] ago, until
-     * [RecordingRepository.statusChanges] signals a change after which the head may be taken. A [Recorded] recording
+     * or while the head is a backlog recording and either the backlog buffer is full or the pace has no free slot.
+     *
+     * The backlog buffer is full while at least [ServerConfig.recordingBacklogBuffer] recordings are
+     * [RecordingStatus.Recording], or [Recorded] at least [ServerConfig.archiveDelay] ago. A [Recorded] recording
      * without [Recording.recordedAt] counts as recorded long enough ago.
+     *
+     * The pace has a free slot once the recordings started in the last day, laid out one day divided by
+     * [ServerConfig.dailyUploads] apart and each no earlier than it started, end before now. A recording started at its
+     * [Recording.recordedAt] minus its [Recording.processingTime], and a [RecordingStatus.Recording] one at its
+     * [Recording.lastUpdate], the time it was claimed.
+     *
+     * The head is looked up again whenever [RecordingRepository.statusChanges] signals a change, and once the pace
+     * has a free slot.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun first(): Recording {
         built.await()
         return recordings.statusChanges
-            .mapNotNull { head() }
+            .mapLatest { head() }
+            .filterNotNull()
             .first()
+    }
+
+    /**
+     * Returns the head of the queue with the earliest time a recorder may take it. Suspends until [start] has built the
+     * queue once. If the queue is empty, returns `null` instead.
+     *
+     * The time is now for a recent head, and for a backlog head while the pace has a free slot. For a backlog head while
+     * the pace has no free slot, it is the next free slot. While the head is a backlog recording and the backlog buffer
+     * is full, the time is `null`. The gates are those of [first].
+     */
+    suspend fun next(): QueueHead? {
+        built.await()
+        val all = recordings.all()
+        val now = clock.now()
+        val head = sorted(all, now).firstOrNull() ?: return null
+        return QueueHead(head, startsAt(head, all, now))
     }
 
     /**
@@ -177,16 +207,51 @@ class RecordingQueue(
     }
 
     /**
-     * Returns the head of the queue, if it may be taken. If the queue is empty, or its head is a backlog recording while
-     * the backlog buffer is full, returns `null` instead.
+     * Returns the head of the queue once it may be taken. Waits while the head is a backlog recording and the pace has
+     * no free slot. If the queue is empty, or its head is a backlog recording while the backlog buffer is full, returns
+     * `null` instead.
      */
     private suspend fun head(): Recording? {
         val all = recordings.all()
         val now = clock.now()
-        val buffered = all.count { isBuffered(it, now) }
-        return sorted(all, now)
-            .firstOrNull()
-            ?.takeIf { isRecent(it.demo, now) || buffered < config.recordingBacklogBuffer }
+        val head = sorted(all, now).firstOrNull() ?: return null
+        val wait = (startsAt(head, all, now) ?: return null) - now
+        if (!wait.isPositive()) return head
+        delay(wait)
+        return head()
+    }
+
+    /**
+     * Returns the earliest time [head] may be taken at [now], with the recordings of [all]: [now] if it is recent or the
+     * pace has a free slot, or the next free slot of the pace. If [head] is a backlog recording while the backlog buffer
+     * is full, returns `null` instead.
+     */
+    private fun startsAt(
+        head: Recording,
+        all: List<Recording>,
+        now: Instant,
+    ): Instant? =
+        when {
+            isRecent(head.demo, now) -> now
+            all.count { isBuffered(it, now) } >= config.recordingBacklogBuffer -> null
+            else -> maxOf(nextSlot(all, now), now)
+        }
+
+    /**
+     * Returns the time the pace has its next free slot at [now]. The recordings of [all] started in the day before
+     * [now] are laid out one day divided by [ServerConfig.dailyUploads] apart, each no earlier than it started, and the
+     * free slot follows the last of them. If none started in that day, returns a time before [now].
+     */
+    private fun nextSlot(
+        all: List<Recording>,
+        now: Instant,
+    ): Instant {
+        val interval = 1.days / config.dailyUploads
+        return all
+            .mapNotNull(::startedAt)
+            .filter { now - it < 1.days }
+            .sorted()
+            .fold(now - 1.days) { slot, start -> maxOf(slot, start) + interval }
     }
 
     /**
@@ -319,5 +384,27 @@ class RecordingQueue(
          * Returns the rank of [medal]: [medal] itself if it is one of [MEDALS], [CASUAL] otherwise.
          */
         fun rank(medal: Int?): Int = medal?.takeIf { it in MEDALS } ?: CASUAL
+
+        /**
+         * Returns the time [recording] started: its [Recording.lastUpdate], the time it was claimed, if it is
+         * [RecordingStatus.Recording], or its [Recording.recordedAt] minus its [Recording.processingTime]. If it was
+         * not recorded by the server, returns `null` instead.
+         */
+        fun startedAt(recording: Recording): Instant? =
+            when (recording.status) {
+                RecordingStatus.Recording -> recording.lastUpdate
+                else -> recording.recordedAt?.let { it - (recording.processingTime ?: Duration.ZERO) }
+            }
     }
 }
+
+/**
+ * Head of a [RecordingQueue], with the earliest time a recorder may take it.
+ *
+ * @property recording The recording at the head of the queue.
+ * @property startsAt The earliest time a recorder may take [recording], or `null` while the backlog buffer holds it back.
+ */
+data class QueueHead(
+    val recording: Recording,
+    val startsAt: Instant?,
+)

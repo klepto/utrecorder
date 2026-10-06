@@ -44,6 +44,17 @@ export interface Job {
   startedAt: string;
 }
 
+/** The head of the queue, as `/api/queue/next` reports it. */
+export interface QueueHead {
+  /** The `capId` of the demo at the head of the queue. */
+  capId: string;
+  /**
+   * The earliest time a recorder may take the head, as an ISO-8601 instant, or `null` while the backlog waits for
+   * uploads to catch up. Only the backlog limits set it, never a running capture.
+   */
+  startsAt: string | null;
+}
+
 /** State of a recording. */
 export type RecordingStatus =
   | "Pending"

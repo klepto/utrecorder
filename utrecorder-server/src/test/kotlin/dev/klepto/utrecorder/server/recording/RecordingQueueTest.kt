@@ -31,8 +31,10 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
+import kotlin.time.TimeSource
 
 class RecordingQueueTest :
     FunSpec({
@@ -69,21 +71,25 @@ class RecordingQueueTest :
 
         suspend fun <R> stored(
             retryInterval: Duration = 12.hours,
+            dailyUploads: Int = 200,
+            backlogBuffer: Int = 1,
+            source: Clock = clock,
             block: suspend (DemoRepository, RecordingRepository, RecordingQueue) -> R,
         ): R =
             SqliteDocumentStore.open(createTempDirectory("utrecorder-recording-queue-test").resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
-                val repository = RecordingRepository(store, demos, clock = clock)
+                val repository = RecordingRepository(store, demos, clock = source)
                 val config =
                     ServerConfig(
                         ConfigReader.EMPTY,
                         DirectoriesConfig(ConfigReader.EMPTY, home = home),
+                        dailyUploads = dailyUploads,
                         recordingRetryInterval = retryInterval,
                         recordingRecentAge = 1.days,
-                        recordingBacklogBuffer = 1,
+                        recordingBacklogBuffer = backlogBuffer,
                         archiveDelay = 1.days,
                     )
-                block(demos, repository, RecordingQueue(demos, repository, config, clock))
+                block(demos, repository, RecordingQueue(demos, repository, config, source))
             }
 
         suspend fun <R> running(
@@ -95,10 +101,36 @@ class RecordingQueueTest :
                 block().also { job.cancelAndJoin() }
             }
 
-        suspend fun <R> queue(block: suspend (RecordingRepository, RecordingQueue) -> R): R =
-            stored { _, repository, queue -> running(queue) { block(repository, queue) } }
+        suspend fun <R> queue(
+            dailyUploads: Int = 200,
+            backlogBuffer: Int = 1,
+            source: Clock = clock,
+            block: suspend (RecordingRepository, RecordingQueue) -> R,
+        ): R =
+            stored(dailyUploads = dailyUploads, backlogBuffer = backlogBuffer, source = source) { _, repository, queue ->
+                running(queue) { block(repository, queue) }
+            }
+
+        suspend fun startedAt(
+            repository: RecordingRepository,
+            capId: String,
+            start: Instant,
+        ) {
+            repository.update(capId) { it.copy(status = Archived, recordedAt = start + 1.minutes, processingTime = 1.minutes) }
+        }
+
+        suspend fun held(queue: RecordingQueue) {
+            coroutineScope {
+                val first = async { queue.first() }
+                delay(50.milliseconds)
+                first.isActive shouldBe true
+                first.cancelAndJoin()
+            }
+        }
 
         suspend fun capIds(queue: RecordingQueue): List<String> = queue.get(10).map { it.demo.capId }
+
+        suspend fun next(queue: RecordingQueue): Pair<String, Instant?>? = queue.next()?.let { it.recording.demo.capId to it.startsAt }
 
         suspend fun order(vararg demos: Demo): List<String> =
             queue { repository, queue ->
@@ -237,12 +269,7 @@ class RecordingQueueTest :
             queue { repository, queue ->
                 repository += listOf(demo("buffered", 3.days), demo("backlog", 2.days))
                 repository.finish("buffered", Recorded)
-                coroutineScope {
-                    val first = async { queue.first() }
-                    delay(50.milliseconds)
-                    first.isActive shouldBe true
-                    first.cancelAndJoin()
-                }
+                held(queue)
             }
         }
 
@@ -254,6 +281,123 @@ class RecordingQueueTest :
                     queue.first().demo.capId
                 }
             head shouldBe "recent"
+        }
+
+        test("holds back a backlog head until one interval after the last recording started") {
+            queue { repository, queue ->
+                repository += listOf(demo("paced", 3.days), demo("backlog", 2.days))
+                startedAt(repository, "paced", now - 7.minutes)
+                held(queue)
+            }
+        }
+
+        test("returns a backlog head once one interval passed since the last recording started, however late it was recorded") {
+            val head =
+                queue { repository, queue ->
+                    repository += listOf(demo("paced", 3.days), demo("backlog", 2.days))
+                    repository.update("paced") { it.copy(status = Archived, recordedAt = now, processingTime = 8.minutes) }
+                    queue.first().demo.capId
+                }
+            head shouldBe "backlog"
+        }
+
+        test("holds back a backlog head while the recordings of the last day spend the daily uploads, and returns a recent head at once") {
+            val head =
+                queue(dailyUploads = 2) { repository, queue ->
+                    repository += listOf(demo("first", 4.days), demo("second", 3.days), demo("backlog", 2.days))
+                    startedAt(repository, "first", now - 23.hours)
+                    startedAt(repository, "second", now - 22.hours)
+                    coroutineScope {
+                        val first = async { queue.first() }
+                        delay(50.milliseconds)
+                        first.isActive shouldBe true
+                        repository += listOf(demo("recent", 1.hours))
+                        first.await().demo.capId
+                    }
+                }
+            head shouldBe "recent"
+        }
+
+        test("ignores recordings started more than a day ago in the pace") {
+            val head =
+                queue(dailyUploads = 2) { repository, queue ->
+                    repository += listOf(demo("first", 6.days), demo("second", 5.days), demo("third", 4.days), demo("backlog", 2.days))
+                    startedAt(repository, "first", now - 30.hours)
+                    startedAt(repository, "second", now - 29.hours)
+                    startedAt(repository, "third", now - 28.hours)
+                    queue.first().demo.capId
+                }
+            head shouldBe "backlog"
+        }
+
+        test("returns a backlog head once time passing opens the pace") {
+            val start = TimeSource.Monotonic.markNow()
+            val moving =
+                object : Clock {
+                    override fun now(): Instant = now + start.elapsedNow()
+                }
+            val head =
+                queue(dailyUploads = 172_800, source = moving) { repository, queue ->
+                    repository += listOf(demo("paced", 3.days), demo("backlog", 2.days))
+                    repository.recorded("paced", Duration.ZERO, 1_024)
+                    coroutineScope {
+                        val first = async { queue.first() }
+                        delay(100.milliseconds)
+                        first.isActive shouldBe true
+                        first.await().demo.capId
+                    }
+                }
+            head shouldBe "backlog"
+        }
+
+        test("reports now as the start of a recent head while the backlog buffer is full") {
+            val head =
+                queue { repository, queue ->
+                    repository += listOf(demo("recorded", 3.days), demo("backlog", 2.days), demo("recent", 1.hours))
+                    repository.finish("recorded", Recorded)
+                    next(queue)
+                }
+            head shouldBe ("recent" to now)
+        }
+
+        test("reports no start for a backlog head while the backlog buffer is full") {
+            val head =
+                queue { repository, queue ->
+                    repository += listOf(demo("recorded", 3.days), demo("backlog", 2.days))
+                    repository.finish("recorded", Recorded)
+                    next(queue)
+                }
+            head shouldBe ("backlog" to null)
+        }
+
+        test("reports the next free slot as the start of a backlog head the pace holds back") {
+            val head =
+                queue { repository, queue ->
+                    repository += listOf(demo("paced", 3.days), demo("backlog", 2.days))
+                    startedAt(repository, "paced", now - 7.minutes)
+                    next(queue)
+                }
+            head shouldBe ("backlog" to now + 12.seconds)
+        }
+
+        test("reports the slot after a running recording from the time it was claimed") {
+            var at = now
+            val moving =
+                object : Clock {
+                    override fun now(): Instant = at
+                }
+            val head =
+                queue(backlogBuffer = 2, source = moving) { repository, queue ->
+                    repository += listOf(demo("running", 3.days), demo("backlog", 2.days))
+                    repository.claim("running")
+                    at = now + 1.minutes
+                    next(queue)
+                }
+            head shouldBe ("backlog" to now + 432.seconds)
+        }
+
+        test("reports no head for an empty queue") {
+            queue { _, queue -> queue.next() } shouldBe null
         }
 
         test("waits in first and get until start has set recordings pending again and built the queue") {

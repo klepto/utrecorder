@@ -1,4 +1,13 @@
-import type { Demo, Job, PersonalBestDay, RecorderDay, Recording, RecordingStatus, Statistics } from "../api/types";
+import type {
+  Demo,
+  Job,
+  PersonalBestDay,
+  QueueHead,
+  RecorderDay,
+  Recording,
+  RecordingStatus,
+  Statistics,
+} from "../api/types";
 
 /** Returns a sample demo of the cap `capId`, whose medal cycles through every medal and none. */
 const demo = (capId: string, map: string, player: string, capTime: string, timestamp: string): Demo => {
@@ -97,6 +106,9 @@ const recording = (index: number): Recording => {
     runMedal: sample.medal,
   };
 };
+
+/** Sample head of the queue: the first recording of `queue`, which the backlog limits let start at once. */
+export const queueHead: QueueHead = { capId: "1101", startsAt: "2026-09-28T18:10:22Z" };
 
 /**
  * Sample recordings, newest first as the server orders them: 23 recorded by the server, and one last that was not, so

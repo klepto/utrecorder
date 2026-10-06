@@ -97,4 +97,27 @@ class QueueEndpointTest :
                 }
             }
         }
+
+        test("reports the head of the queue with the earliest time it may start, and no content for an empty queue") {
+            val config = ServerConfig(ConfigReader.EMPTY, directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home")))
+            SqliteDocumentStore.open(root.resolve("next.db")) { store ->
+                val demos = DemoRepository(store)
+                val repository = RecordingRepository(store, demos, clock)
+                val queue = RecordingQueue(demos, repository, config, clock)
+                testApplication {
+                    application { HttpService(listOf(QueueEndpoint(queue)), config).module(this) }
+                    coroutineScope {
+                        val job = launch { queue.start() }
+                        client.get("/api/queue/next").status shouldBe HttpStatusCode.NoContent
+                        repository += listOf(demo("recent", Instant.parse("2026-09-27T07:00:00Z")))
+                        eventually(5.seconds) {
+                            val head = Json.parseToJsonElement(client.get("/api/queue/next").bodyAsText()).jsonObject
+                            head["capId"]!!.jsonPrimitive.content shouldBe "recent"
+                            head["startsAt"]!!.jsonPrimitive.content shouldBe "2026-09-27T08:00:00Z"
+                        }
+                        job.cancelAndJoin()
+                    }
+                }
+            }
+        }
     })

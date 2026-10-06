@@ -32,7 +32,8 @@ import kotlin.time.Duration.Companion.seconds
  * [DirectoriesConfig.home].
  * @property uploadInterval How long the upload loop waits between two passes over the uploaded recordings, and between
  * two looks for a recording to upload when there is none.
- * @property dailyUploads The most uploads the upload loop starts in one day, spread evenly across the day.
+ * @property dailyUploads The most uploads the upload loop starts in one day, spread evenly across the day. Also the pace
+ * backlog demos are recorded at, together with the recordings of recent demos.
  * @property archiveDelay How long after it was recorded a recording waits before it is uploaded.
  * @property cacheTtl How long the mp4 of an archived recording stays in [recordings] after it was last viewed, or of
  * an outdated recording after it became outdated.
@@ -54,7 +55,11 @@ import kotlin.time.Duration.Companion.seconds
  * without being uploaded, when a backlog demo is taken.
  * @property utbtApiUrl The base URL of the UTBT API that serves the cap list.
  * @property utbtDemoUrl The base URL a demo downloads from, followed by its cap id.
- * @property utbtCooldown How long the sync waits between two reads of the cap list.
+ * @property utbtCooldown How long the sync waits between two ticks. Each tick reads up to two pages of the cap list.
+ * @property utbtPageLimit The most caps the sync reads in one page of the cap list.
+ * @property utbtTailStride The offset of the first page of a tail scan of the cap list, and the step from the offset of
+ * each page of the scan to the next.
+ * @property utbtTailInterval The time from the start of one tail scan of the cap list to the start of the next.
  * @property archiveAccessKey The S3 access key of the Internet Archive account, or `null` if it is not configured.
  * @property archiveSecretKey The S3 secret key of the Internet Archive account, or `null` if it is not configured.
  * @property archiveCollection The Internet Archive collection every uploaded item is placed in.
@@ -80,10 +85,13 @@ class ServerConfig(
     val recordingCooldown: Duration = reader.duration("server.recording.cooldown", 10.seconds),
     val recordingRetryInterval: Duration = reader.duration("server.recording.retry_interval", 12.hours),
     val recordingRecentAge: Duration = reader.duration("server.recording.recent_age", 1.days),
-    val recordingBacklogBuffer: Int = reader.get("server.recording.backlog_buffer", 1, String::toInt),
+    val recordingBacklogBuffer: Int = reader.get("server.recording.backlog_buffer", 20, String::toInt),
     val utbtApiUrl: String = reader.get("server.utbt.api_url", "https://gateway.utbt.net"),
     val utbtDemoUrl: String = reader.get("server.utbt.demo_url", "http://api.utbt.net/demos"),
-    val utbtCooldown: Duration = reader.duration("server.utbt.cooldown", 10.seconds),
+    val utbtCooldown: Duration = reader.duration("server.utbt.cooldown", 1.minutes),
+    val utbtPageLimit: Int = reader.get("server.utbt.page_limit", 1000, String::toInt),
+    val utbtTailStride: Int = reader.get("server.utbt.tail_stride", 500, String::toInt),
+    val utbtTailInterval: Duration = reader.duration("server.utbt.tail_interval", 3.days),
     val archiveAccessKey: String? = reader["server.archive.access_key"],
     val archiveSecretKey: String? = reader["server.archive.secret_key"],
     val archiveCollection: String = reader.get("server.archive.collection", "test_collection"),

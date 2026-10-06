@@ -44,20 +44,6 @@ class DemoRepositoryTest :
             demos shouldBe listOf(demo("b", 1), demo("a", 0), demo("c", 2))
         }
 
-        test("returns the times of the newest and the oldest demo") {
-            val times =
-                repository {
-                    val empty = it.newest() to it.oldest()
-                    it += listOf(demo("b", 1), demo("c", 2), demo("a", 0))
-                    listOf(empty, it.newest() to it.oldest())
-                }
-            times shouldBe
-                listOf(
-                    null to null,
-                    Instant.parse("2026-09-26T12:02:00Z") to Instant.parse("2026-09-26T12:00:00Z"),
-                )
-        }
-
         test("signals a change once when collected and again after new demos are stored") {
             val changes =
                 repository { repository ->

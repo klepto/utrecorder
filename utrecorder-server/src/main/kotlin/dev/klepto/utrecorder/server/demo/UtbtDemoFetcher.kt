@@ -39,16 +39,15 @@ class UtbtDemoFetcher(
         }
 
     override suspend fun fetch(
-        before: Instant?,
-        after: Instant?,
+        offset: Int,
+        limit: Int,
     ): List<Demo> {
         val response =
             client.get("${config.utbtApiUrl}/caps") {
-                parameter("limit", PAGE_LIMIT)
+                parameter("offset", offset)
+                parameter("limit", limit)
                 parameter("order", "desc")
                 parameter("verified", true)
-                parameter("before", before?.toEpochParameter())
-                parameter("after", after?.toEpochParameter())
             }
         if (!response.status.isSuccess()) throw IOException("UTBT answered ${response.status} for ${response.request.url}")
         return JSON
@@ -115,8 +114,6 @@ class UtbtDemoFetcher(
     )
 
     private companion object {
-        const val PAGE_LIMIT = 100
-
         val JSON: Json = Json { ignoreUnknownKeys = true }
 
         val log = logger<UtbtDemoFetcher>()
@@ -133,11 +130,5 @@ class UtbtDemoFetcher(
                 .filter(String::isNotEmpty)
                 .distinct()
                 .sorted()
-
-        /**
-         * Returns this time as the UTBT query parameter: Unix epoch seconds with a fraction of microseconds, such as
-         * `1790533924.038369`.
-         */
-        fun Instant.toEpochParameter(): String = "$epochSeconds.${(nanosecondsOfSecond / 1_000).toString().padStart(6, '0')}"
     }
 }

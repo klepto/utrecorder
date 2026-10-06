@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { describe, expect, test } from "vitest";
 import { jobs } from "../mocks/fixtures";
 import { server } from "../mocks/server";
-import { useJobs, useQueue, useRecordings, useStatistics } from "./queries";
+import { useJobs, useQueue, useQueueHead, useRecordings, useStatistics } from "./queries";
 
 const wrapper = () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -33,6 +33,13 @@ describe("queries", () => {
       "1104",
       "1105",
     ]);
+  });
+
+  test("useQueueHead returns the head of the queue", async () => {
+    const { result } = renderHook(() => useQueueHead(), { wrapper: wrapper() });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.capId).toBe("1101");
   });
 
   test("useStatistics returns the aggregate statistics", async () => {

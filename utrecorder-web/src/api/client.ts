@@ -1,4 +1,4 @@
-import type { Job, Recording, Statistics } from "./types";
+import type { Job, QueueHead, Recording, Statistics } from "./types";
 
 /** A page of `/api/recordings`: at most `limit` recordings, after skipping the `offset` newest. */
 export interface RecordingsPage {
@@ -6,11 +6,16 @@ export interface RecordingsPage {
   offset: number;
 }
 
-/** Fetches the JSON at `path` of the server, rejecting on a response that is not 2xx. */
-const get = async <T>(path: string): Promise<T> => {
+/** Fetches `path` of the server, rejecting on a response that is not 2xx. */
+const request = async (path: string): Promise<Response> => {
   const response = await fetch(new URL(path, document.baseURI));
   if (!response.ok) throw new Error(`GET ${path} answered ${response.status}`);
-  return (await response.json()) as T;
+  return response;
+};
+
+/** Fetches the JSON at `path` of the server, rejecting on a response that is not 2xx. */
+const get = async <T>(path: string): Promise<T> => {
+  return (await (await request(path)).json()) as T;
 };
 
 /** Fetches every running recording. */
@@ -21,6 +26,12 @@ export const fetchJobs = (): Promise<Job[]> => {
 /** Fetches the next recordings to be captured, in the order they are taken. */
 export const fetchQueue = (): Promise<Recording[]> => {
   return get("/api/queue?limit=10");
+};
+
+/** Fetches the head of the queue with the earliest time it may start, or `null` if the queue is empty. */
+export const fetchQueueHead = async (): Promise<QueueHead | null> => {
+  const response = await request("/api/queue/next");
+  return response.status === 204 ? null : ((await response.json()) as QueueHead);
 };
 
 /** Fetches one page of the finished recordings, newest first. */

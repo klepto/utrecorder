@@ -1,5 +1,5 @@
 import { HttpResponse, http } from "msw";
-import { jobs, queue, recordings, statistics } from "./fixtures";
+import { jobs, queue, queueHead, recordings, statistics } from "./fixtures";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 100;
@@ -15,6 +15,7 @@ export const handlers = [
   http.get("/api/jobs", () => HttpResponse.json(jobs)),
   http.get("/api/statistics", () => HttpResponse.json(statistics)),
   http.get("/api/queue", () => HttpResponse.json(queue)),
+  http.get("/api/queue/next", () => HttpResponse.json(queueHead)),
   http.get("/api/recordings", ({ request }) => {
     const params = new URL(request.url).searchParams;
     const limit = nonNegativeInteger(params.get("limit"), DEFAULT_LIMIT);

@@ -60,11 +60,14 @@ export const formatDate = (value: string, timeZone?: string): string => {
 
 /**
  * Words the time left from `now` until the epoch millisecond `deadline` in whole minutes, rounded, such as "2 minutes".
- * It never reads less than "1 minute", even once the deadline has passed.
+ * From 60 minutes on, it counts rounded hours instead, such as "3 hours". It never reads less than "1 minute", even
+ * once the deadline has passed.
  */
 export const formatRemaining = (deadline: number, now: number = Date.now()): string => {
   const minutes = Math.max(1, Math.round((deadline - now) / 60_000));
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  if (minutes < 60) return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  const hours = Math.round(minutes / 60);
+  return hours === 1 ? "1 hour" : `${hours} hours`;
 };
 
 const STAGES: Record<RecorderStage, string> = {
