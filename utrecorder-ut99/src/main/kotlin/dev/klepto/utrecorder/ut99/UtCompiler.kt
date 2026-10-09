@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.copyToRecursively
@@ -25,6 +26,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.inputStream
 import kotlin.io.path.isDirectory
 import kotlin.io.path.writeText
+import kotlin.time.Duration
 
 /**
  * The UCC utility of an installation, compiling UnrealScript packages and decompressing `.uz` archives.
@@ -34,7 +36,8 @@ import kotlin.io.path.writeText
  * Compilations and extractions in one `System` directory run one at a time, across every compiler of that directory.
  *
  * @property installation The installation the compiler belongs to.
- * @property config The configuration whose directories the workspaces of the compiler runs are opened under.
+ * @property config The configuration whose directories the workspaces of the compiler runs are opened under, and whose
+ * decompress timeout limits each run of a decompression.
  * @throws IllegalStateException if [installation] holds no compiler executable.
  */
 class UtCompiler(
@@ -63,9 +66,15 @@ class UtCompiler(
     /**
      * Returns the result of running the compiler with [arguments], without inspecting its exit code.
      *
-     * The compiler logs to a file of a workspace opened in [directory] for the run.
+     * The compiler logs to a file of a workspace opened in [directory] for the run. If [timeout] is not provided, waits
+     * for the compiler without limit.
+     *
+     * @throws TimeoutException if the compiler does not finish within [timeout].
      */
-    private suspend fun run(vararg arguments: String): ExecutableResult =
+    private suspend fun run(
+        vararg arguments: String,
+        timeout: Duration = Duration.INFINITE,
+    ): ExecutableResult =
         workspace("ucc", directory, config.directoriesConfig) { workspace ->
             Executable
                 .build(executablePath.toAbsolutePath()) {
@@ -74,7 +83,7 @@ class UtCompiler(
                     this.arguments += arguments.toList()
                     this.arguments += "-log=${workspace["ucc.log"].fileName}"
                     this.arguments += installation.platform.homeArguments
-                }.startAndAwait()
+                }.startAndAwait(timeout)
         }
 
     /**
@@ -87,6 +96,7 @@ class UtCompiler(
      *
      * @throws IllegalStateException if the archive header holds no plain file name, if the compiler fails, or if it
      * aborts on every run.
+     * @throws TimeoutException if a run does not finish within the decompress timeout of [config].
      */
     suspend fun extract(
         uzPath: Path,
@@ -110,17 +120,26 @@ class UtCompiler(
      * Runs the compiler decompressing [uzPath], running it again while it aborts, up to [DECOMPRESS_ATTEMPTS] runs.
      *
      * @throws IllegalStateException if the compiler fails, or aborts on every run.
+     * @throws TimeoutException if a run does not finish within the decompress timeout of [config].
      */
     private suspend fun decompress(uzPath: Path) {
         val result =
-            (2..DECOMPRESS_ATTEMPTS).fold(run("decompress", uzPath.absolutePathString())) { previous, _ ->
+            (2..DECOMPRESS_ATTEMPTS).fold(runDecompress(uzPath)) { previous, _ ->
                 when (previous.exitCode) {
-                    ABORT_EXIT_CODE -> run("decompress", uzPath.absolutePathString())
+                    ABORT_EXIT_CODE -> runDecompress(uzPath)
                     else -> previous
                 }
             }
         result.orThrow()
     }
+
+    /**
+     * Returns the result of one run of the compiler decompressing [uzPath], without inspecting its exit code.
+     *
+     * @throws TimeoutException if the run does not finish within the decompress timeout of [config].
+     */
+    private suspend fun runDecompress(uzPath: Path): ExecutableResult =
+        run("decompress", uzPath.absolutePathString(), timeout = config.decompressTimeout)
 
     /**
      * Returns the file name held in the header of the `.uz` archive at [uzPath]. The compiler extracts the archive

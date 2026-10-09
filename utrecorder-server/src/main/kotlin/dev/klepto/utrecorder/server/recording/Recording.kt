@@ -12,6 +12,8 @@ import kotlin.time.Instant
  * @property demo The demo to record.
  * @property status How far the recording has come.
  * @property error The failure of the last capture of [demo], or `null` if none has failed.
+ * @property missingPackage The package the last [RecordingStatus.Unresolvable] capture of [demo] found in no source, or
+ * `null` if no capture was unresolvable.
  * @property md5 The MD5 checksum of the uploaded mp4, or `null` if it was not uploaded.
  * @property lastUpdate The time [status] last changed, or [Instant.DISTANT_PAST] if the recording was never stored.
  * @property views The number of views of the recording written to the store.
@@ -36,6 +38,7 @@ data class Recording(
     val demo: Demo,
     val status: RecordingStatus = RecordingStatus.Pending,
     val error: String? = null,
+    val missingPackage: MissingPackage? = null,
     val md5: String? = null,
     val lastUpdate: Instant = Instant.DISTANT_PAST,
     val views: Int = 0,
@@ -55,6 +58,18 @@ data class Recording(
      */
     fun withVideo(video: VideoStream?): Recording = copy(width = video?.width, height = video?.height, fps = video?.fps)
 }
+
+/**
+ * Package a demo names that no source holds.
+ *
+ * @property name The name of the package.
+ * @property guid The GUID the demo recorded for the package, or an empty string if it recorded none.
+ */
+@Serializable
+data class MissingPackage(
+    val name: String,
+    val guid: String,
+)
 
 /**
  * State of a [Recording].

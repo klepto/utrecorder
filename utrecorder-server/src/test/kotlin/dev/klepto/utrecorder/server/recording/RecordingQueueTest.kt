@@ -487,10 +487,37 @@ class RecordingQueueTest :
                         )
                     running(queue) { capIds(queue) }
                 }
-            got shouldBe listOf("one-b", "two-b")
+            got shouldBe listOf("two-b", "one-b")
         }
 
-        test("sets the run medal of every member of a team run to the highest medal of the run, and of a solo recording to its own medal") {
+        test("puts the members of a team run next to each other, the slowest member first") {
+            val got =
+                stored { demos, _, queue ->
+                    demos +=
+                        listOf(
+                            demo("solo", 1.hours, userId = "3", capTime = 11.seconds),
+                            demo("one", 2.hours, userId = "1", capTime = 10.seconds, teammates = listOf("2"), teamRunId = "A"),
+                            demo("two", 2.hours, userId = "2", capTime = 12.seconds, teammates = listOf("1"), teamRunId = "A"),
+                        )
+                    running(queue) { capIds(queue) }
+                }
+            got shouldBe listOf("solo", "two", "one")
+        }
+
+        test("sets the run medal of every member of a team run to the medal of its fastest member") {
+            val got =
+                stored { demos, _, queue ->
+                    demos +=
+                        listOf(
+                            demo("one", 2.hours, medal = 3, userId = "1", capTime = 10.seconds, teammates = listOf("2"), teamRunId = "A"),
+                            demo("two", 2.hours, medal = 5, userId = "2", capTime = 11.seconds, teammates = listOf("1"), teamRunId = "A"),
+                        )
+                    running(queue) { queue.get(10).associate { it.demo.capId to it.runMedal } }
+                }
+            got shouldBe mapOf("one" to 3, "two" to 3)
+        }
+
+        test("sets the run medal of members tied on cap time to the highest medal, and of a solo recording to its own medal") {
             val got =
                 stored { demos, _, queue ->
                     demos +=
@@ -516,7 +543,7 @@ class RecordingQueueTest :
                         )
                     running(queue) { capIds(queue) }
                 }
-            got shouldBe listOf("two", "one", "gold")
+            got shouldBe listOf("one", "two", "gold")
         }
 
         test("queues a team demo only once the demo of every teammate of its run is stored") {

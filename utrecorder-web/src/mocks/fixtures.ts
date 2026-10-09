@@ -1,6 +1,7 @@
 import type {
   Demo,
   Job,
+  MissingPackage,
   PersonalBestDay,
   QueueHead,
   RecorderDay,
@@ -29,6 +30,7 @@ const unrecorded = (sample: Demo, status: RecordingStatus): Recording => {
     demo: sample,
     status,
     error: null,
+    missingPackage: null,
     md5: null,
     lastUpdate: sample.timestamp,
     views: 0,
@@ -92,6 +94,7 @@ const recording = (index: number): Recording => {
     demo: sample,
     status,
     error: null,
+    missingPackage: null,
     md5: status === "Recorded" ? null : `9e107d9d372bb6826bd81d3542a419${String(index).padStart(2, "0")}`,
     lastUpdate: recordedAt,
     views: index * 3,
@@ -120,6 +123,7 @@ export const recordings: Recording[] = [
     demo: demo("1050", "CTF-BT-Citadel", "Kite", "PT2M5.5S", "2026-09-20T09:00:00Z"),
     status: "Archived",
     error: null,
+    missingPackage: null,
     md5: "e4d909c290d0fb1ca068ffaddf22cbd0",
     lastUpdate: "2026-09-20T12:00:00Z",
     views: 12,
@@ -168,6 +172,39 @@ const personalBestDay = (index: number): PersonalBestDay => {
   const personalBests = index === DAYS - 1 ? 22 : 30 + ((index * 11) % 41);
   return { date, personalBests, players: Math.ceil(personalBests / 3) };
 };
+
+/** Returns the recording of `sample` given up on because no source holds `missingPackage`. */
+const unresolvableRecording = (sample: Demo, missingPackage: MissingPackage | null): Recording => {
+  return {
+    ...unrecorded(sample, "Unresolvable"),
+    error: "dev.klepto.utrecorder.ut99.UtPackageException: No source holds the package",
+    missingPackage,
+  };
+};
+
+/**
+ * Sample recordings whose package resolved nowhere: two missing the same package, one whose demo recorded no GUID, and
+ * one stored before the server kept the package.
+ */
+export const unresolvable: Recording[] = [
+  unresolvableRecording(demo("1201", "CTF-BT-Coolio-v2", "Nightwolf`", "PT8.681S", "2026-09-12T10:00:00Z"), {
+    name: "Colors",
+    guid: "6F1C3A9E4B2D47A1B0C5D8E9F7A6B3C2",
+  }),
+  unresolvableRecording(demo("1202", "CTF-BT-PortalCubeRush", "Juli", "PT5.266S", "2026-09-14T18:30:00Z"), {
+    name: "Colors",
+    guid: "6F1C3A9E4B2D47A1B0C5D8E9F7A6B3C2",
+  }),
+  unresolvableRecording(demo("1203", "CTF-BT-Andromeda", "Kite", "PT41.2S", "2026-09-15T08:12:00Z"), {
+    name: "BTSkins",
+    guid: "",
+  }),
+  unresolvableRecording(demo("1204", "CTF-BT-Skyfall", "Mira", "PT1M2.5S", "2026-09-18T21:45:00Z"), {
+    name: "AmbModern",
+    guid: "0A9B8C7D6E5F40312233445566778899",
+  }),
+  unresolvableRecording(demo("1205", "CTF-BT-Maverick", "Osk", "PT33.04S", "2026-09-20T13:05:00Z"), null),
+];
 
 /** Sample statistics: 30 days oldest first, one day of zeros in the middle and a partial today. */
 export const statistics: Statistics = {

@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "dev:server": "vite --mode server",
+    "dev:live": "vite --mode live",
     "build": "vite build",
     "check": "tsc --noEmit && biome ci && vitest run",
     "format": "biome check --write"

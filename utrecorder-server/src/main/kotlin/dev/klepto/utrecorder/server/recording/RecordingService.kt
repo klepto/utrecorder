@@ -101,7 +101,8 @@ class RecordingService(
 
             is RecorderResult.Unresolvable -> {
                 log.error(result.exception) { "Giving up on recording $capId, couldn't resolve required packages" }
-                repository.finish(capId, Unresolvable, result.exception.toString())
+                val missingPackage = MissingPackage(result.exception.packageName, result.exception.guid)
+                repository.finish(capId, Unresolvable, result.exception.toString(), missingPackage)
             }
         }
     }

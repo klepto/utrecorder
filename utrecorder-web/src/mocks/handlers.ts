@@ -1,5 +1,5 @@
 import { HttpResponse, http } from "msw";
-import { jobs, queue, queueHead, recordings, statistics } from "./fixtures";
+import { jobs, queue, queueHead, recordings, statistics, unresolvable } from "./fixtures";
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 100;
@@ -18,6 +18,7 @@ export const handlers = [
   http.get("/api/queue/next", () => HttpResponse.json(queueHead)),
   http.get("/api/recordings", ({ request }) => {
     const params = new URL(request.url).searchParams;
+    if (params.get("status") === "unresolvable") return HttpResponse.json(unresolvable);
     const limit = nonNegativeInteger(params.get("limit"), DEFAULT_LIMIT);
     const offset = nonNegativeInteger(params.get("offset"), 0);
     if (limit === null || offset === null) {

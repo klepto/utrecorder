@@ -17,8 +17,18 @@ const removeMockServiceWorker = (): Plugin => {
   };
 };
 
-/** The server `npm run dev:server` proxies `/api`, `/mp4`, `/thumbnail` and `/view` to. */
-const serverUrl = "http://localhost:8080";
+/** The server each proxying Vite mode forwards `/api`, `/mp4`, `/thumbnail` and `/view` to. */
+const servers: Partial<Record<string, string>> = {
+  server: "http://localhost:8080",
+  live: "https://recorder.example.com",
+};
+
+/** Returns the proxy of `/api`, `/mp4`, `/thumbnail` and `/view` to `target`, or `undefined` without a target. */
+const proxy = (target: string | undefined) => {
+  if (target === undefined) return undefined;
+  const route = { target, changeOrigin: true };
+  return { "/api": route, "/mp4": route, "/thumbnail": route, "/view": route };
+};
 
 export default defineConfig(({ mode }) => ({
   plugins: [react(), removeMockServiceWorker()],
@@ -28,10 +38,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: true,
     port: 5173,
-    proxy:
-      mode === "server"
-        ? { "/api": serverUrl, "/mp4": serverUrl, "/thumbnail": serverUrl, "/view": serverUrl }
-        : undefined,
+    proxy: proxy(servers[mode]),
   },
   build: {
     outDir,

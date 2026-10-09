@@ -7,6 +7,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.bundles.ktor.server)
     implementation(libs.bundles.ktor.client)
+    implementation(libs.ktor.client.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.sqlite.jdbc)
     implementation(projects.utrecorderCommon)

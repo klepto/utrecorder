@@ -1,6 +1,6 @@
-import { Alert, Group, Paper, Progress, SimpleGrid, Skeleton, Stack, Text } from "@mantine/core";
+import { Alert, Group, Paper, Progress, SimpleGrid, Skeleton, Stack, Text, Tooltip } from "@mantine/core";
 import type { ReactNode } from "react";
-import { useStatistics } from "../api/queries";
+import { useStatistics, useUnresolvable } from "../api/queries";
 import type {
   PersonalBestDay,
   PersonalBestStatistics,
@@ -10,6 +10,8 @@ import type {
   StorageStatistics,
 } from "../api/types";
 import { DayChart } from "../components/DayChart";
+import { hasMissingPackage } from "../components/hasMissingPackage";
+import { MissingPackageList } from "../components/MissingPackageList";
 import { durationSeconds, formatBytes, formatCount, formatHours, formatPace } from "../format";
 import { Page } from "../layout/Page";
 import { Section } from "../layout/Section";
@@ -20,6 +22,11 @@ const formatSeconds = (seconds: number): string => formatHours(`PT${Math.round(s
 
 /** Returns `count` followed by `noun`, adding an `s` unless `count` is 1. */
 const plural = (count: number, noun: string): string => `${formatCount(count)} ${noun}${count === 1 ? "" : "s"}`;
+
+/** Formats a number of seconds in whole hours as `5 hours`, or in whole minutes as `45 minutes` under an hour. */
+const formatLongDuration = (seconds: number): string => {
+  return seconds < 3600 ? plural(Math.floor(seconds / 60), "minute") : plural(Math.floor(seconds / 3600), "hour");
+};
 
 /** Returns the share `part` holds of `whole` as a percentage, 0 for an empty whole. */
 const percent = (part: number, whole: number): number => (whole > 0 ? Math.min(100, (part / whole) * 100) : 0);
@@ -52,53 +59,72 @@ const Headline = ({ figure, caption }: { figure: string; caption: string }) => {
   );
 };
 
-const QueuePanel = ({ queue, pace }: { queue: QueueStatistics; pace: number | null }) => {
-  const queued = durationSeconds(queue.capTime);
-  const lead = pace === null ? `${formatSeconds(queued)} of runs queued` : `${formatSeconds(queued * pace)} remaining`;
-  const counts = (
-    <Group gap="xl">
-      <Text>
-        <Figure>{formatCount(queue.recording)}</Figure> recording now
-      </Text>
-      <Text>
-        <Figure>{formatCount(queue.failed)}</Figure> failed
-      </Text>
-      <Text>
-        <Figure>{formatCount(queue.unresolvable)}</Figure> missing packages
-      </Text>
-    </Group>
-  );
+/** Formats the share `part` holds of `whole` as `89.7%`. */
+const formatShare = (part: number, whole: number): string => shares.format(percent(part, whole) / 100);
+
+const shares = new Intl.NumberFormat("en", { style: "percent", maximumFractionDigits: 1 });
+
+/** The bar of the demos `recorded` against the demos `waiting`, which shows the share of each on hover. */
+const QueueBar = ({ recorded, waiting }: { recorded: number; waiting: number }) => {
+  const total = recorded + waiting;
   return (
-    <Panel title="Queue" aside={counts}>
-      <Group justify="space-between" align="baseline" gap="xs">
-        <Text className={classes.lead}>{lead}</Text>
-        <Text size="lg" c="dimmed">
-          <Figure>{formatCount(queue.size)}</Figure> demos waiting
-        </Text>
-      </Group>
-      <Stack gap={6}>
-        <Progress.Root size={20} className={classes.track}>
-          <Progress.Section
-            value={percent(queue.recent, queue.size)}
-            color="var(--mantine-color-anchor)"
-            aria-label="Recent demos"
-          />
-          <Progress.Section
-            value={percent(queue.backlog, queue.size)}
-            color="var(--mantine-color-dark-3)"
-            aria-label="Backlog"
-          />
-        </Progress.Root>
-        <Group justify="space-between">
-          <Text size="sm" c="dimmed">
-            <Figure>{formatCount(queue.recent)}</Figure> recent
-          </Text>
-          <Text size="sm" c="dimmed">
-            <Figure>{formatCount(queue.backlog)}</Figure> backlog
-          </Text>
+    <Tooltip
+      label={`${formatShare(recorded, total)} recorded – ${formatShare(waiting, total)} waiting`}
+      events={{ hover: true, focus: false, touch: true }}
+    >
+      <Progress.Root size={20} className={classes.track}>
+        <Progress.Section
+          value={percent(recorded, total)}
+          color="var(--mantine-color-anchor)"
+          aria-label="Demos recorded"
+        />
+        <Progress.Section
+          value={percent(waiting, total)}
+          color="var(--mantine-color-body)"
+          aria-label="Demos waiting"
+        />
+      </Progress.Root>
+    </Tooltip>
+  );
+};
+
+/** The untitled main panel: the time left to record the queue, and the demos recorded against the demos waiting. */
+const SummaryPanel = ({ queue, recorder }: { queue: QueueStatistics; recorder: RecorderStatistics }) => {
+  const queued = durationSeconds(queue.capTime);
+  const lead =
+    recorder.pace === null
+      ? `${formatLongDuration(queued)} of runs queued`
+      : `${formatLongDuration(queued * recorder.pace)} remaining`;
+  return (
+    <Paper bg="var(--utrecorder-color-chrome)" p="lg">
+      <Stack>
+        <Group justify="space-between" align="flex-start" gap="xs">
+          <Text className={classes.lead}>{lead}</Text>
+          <Group gap="xl">
+            <Text>
+              <Figure>{formatCount(recorder.lastDay.recordings)}</Figure> recent
+            </Text>
+            <Text>
+              <Figure>{formatCount(queue.failed)}</Figure> failed
+            </Text>
+            <Text>
+              <Figure>{formatCount(queue.unresolvable)}</Figure> missing packages
+            </Text>
+          </Group>
         </Group>
+        <Stack gap={6}>
+          <QueueBar recorded={recorder.completed} waiting={queue.size} />
+          <Group justify="space-between">
+            <Text size="sm" c="dimmed">
+              <Figure>{formatCount(recorder.completed)}</Figure> recorded
+            </Text>
+            <Text size="sm" c="dimmed">
+              <Figure>{formatCount(queue.size)}</Figure> waiting
+            </Text>
+          </Group>
+        </Stack>
       </Stack>
-    </Panel>
+    </Paper>
   );
 };
 
@@ -111,6 +137,7 @@ const RecorderPanel = ({ recorder }: { recorder: RecorderStatistics }) => {
         value={(day: RecorderDay) => durationSeconds(day.capTime)}
         format={formatSeconds}
         label="Recorded run time per day"
+        count={(day: RecorderDay) => plural(day.recordings, "recording")}
       />
       <div>
         <Text className={classes.figure}>
@@ -144,13 +171,18 @@ const StoragePanel = ({ storage }: { storage: StorageStatistics }) => {
             figure={`${formatBytes(cache.bytes)} of ${formatBytes(storage.cacheMaxBytes)}`}
             caption="in the hot cache"
           />
-          <div className={classes.meter} aria-hidden="true">
-            <div className={classes.meterFill} style={{ width: `${percent(cache.bytes, storage.cacheMaxBytes)}%` }} />
-            <div
-              className={classes.tick}
-              style={{ left: `${percent(storage.cacheTargetBytes, storage.cacheMaxBytes)}%` }}
-            />
-          </div>
+          <Tooltip
+            label={`${formatBytes(cache.bytes)}, ${formatShare(cache.bytes, storage.cacheMaxBytes)}`}
+            events={{ hover: true, focus: false, touch: true }}
+          >
+            <div className={classes.meter} aria-hidden="true">
+              <div className={classes.meterFill} style={{ width: `${percent(cache.bytes, storage.cacheMaxBytes)}%` }} />
+              <div
+                className={classes.tick}
+                style={{ left: `${percent(storage.cacheTargetBytes, storage.cacheMaxBytes)}%` }}
+              />
+            </div>
+          </Tooltip>
           <Group justify="space-between">
             <Text size="sm" c="dimmed">
               {plural(cache.files, "file")}
@@ -193,6 +225,7 @@ const PersonalBestsPanel = ({ personalBests }: { personalBests: PersonalBestStat
         value={(day: PersonalBestDay) => day.personalBests}
         format={formatCount}
         label="Personal bests per day"
+        count={(day: PersonalBestDay) => plural(day.personalBests, "personal best")}
       />
       <Text>
         <Figure>{formatCount(personalBests.players)}</Figure> players with a personal best in the last 30 days
@@ -201,7 +234,24 @@ const PersonalBestsPanel = ({ personalBests }: { personalBests: PersonalBestStat
   );
 };
 
-/** The aggregate statistics: the queue, the recorder, storage and personal bests. */
+/**
+ * The demos that name a package no source holds, listed with the package each misses. Hidden once the demos are loaded
+ * and the server has stored the package of none of them.
+ */
+const MissingPackagesPanel = () => {
+  const query = useUnresolvable();
+  if (query.data !== undefined && !query.data.some(hasMissingPackage)) return null;
+  return (
+    <Panel title="Missing packages">
+      <MissingPackageList query={query} />
+    </Panel>
+  );
+};
+
+/**
+ * The aggregate statistics: the summary of the queue, then the recorder, storage and personal bests, and the missing
+ * packages while any demo misses one.
+ */
 export const StatisticsPage = () => {
   const { data, isError } = useStatistics();
   return (
@@ -226,12 +276,13 @@ export const StatisticsPage = () => {
               Reconnecting…
             </Text>
           )}
-          <QueuePanel queue={data.queue} pace={data.recorder.pace} />
+          <SummaryPanel queue={data.queue} recorder={data.recorder} />
           <SimpleGrid cols={{ base: 1, md: 3 }} className={classes.panels}>
             <RecorderPanel recorder={data.recorder} />
             <StoragePanel storage={data.storage} />
             <PersonalBestsPanel personalBests={data.personalBests} />
           </SimpleGrid>
+          {data.queue.unresolvable > 0 && <MissingPackagesPanel />}
         </Stack>
       )}
     </Page>

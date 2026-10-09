@@ -1,4 +1,4 @@
-import { Group, Stack, Text, VisuallyHidden } from "@mantine/core";
+import { Group, Stack, Text, Tooltip, VisuallyHidden } from "@mantine/core";
 import { useId } from "react";
 import { formatDate } from "../format";
 import classes from "./DayChart.module.css";
@@ -12,6 +12,8 @@ interface DayChartProps<T extends { date: string }> {
   format: (value: number) => string;
   /** Names the series, such as "Personal bests per day". */
   label: string;
+  /** Describes what a day counts, such as "23 recordings", shown when its bar is hovered. */
+  count: (day: T) => string;
 }
 
 const SLOT = 10;
@@ -23,9 +25,10 @@ const TILE = 8;
 /**
  * A bar chart of one value per day, drawn as SVG: bars scaled to the largest value, a zero day as a stub in the context
  * color, today in flowing stripes. The maximum is written at the top left, the first date and "today" under the ends,
- * and a visually hidden table lists every day and value.
+ * and a visually hidden table lists every day and value. Hovering anywhere in the column of a day shows its date and
+ * its count.
  */
-export const DayChart = <T extends { date: string }>({ days, value, format, label }: DayChartProps<T>) => {
+export const DayChart = <T extends { date: string }>({ days, value, format, label, count }: DayChartProps<T>) => {
   const pattern = `today-${useId().replace(/[^\w-]/g, "")}`;
   const values = days.map(value);
   const max = Math.max(0, ...values);
@@ -58,17 +61,23 @@ export const DayChart = <T extends { date: string }>({ days, value, format, labe
           const height = amount > 0 ? Math.max(STUB, (amount / max) * HEIGHT) : STUB;
           const fill = amount === 0 ? classes.context : index === last ? undefined : classes.data;
           return (
-            <rect
+            <Tooltip
               key={day.date}
-              className={fill}
-              fill={amount > 0 && index === last ? `url(#${pattern})` : undefined}
-              x={index * SLOT}
-              y={HEIGHT - height}
-              width={BAR}
-              height={height}
+              label={`${index === last ? "Today" : formatDate(day.date, "UTC")}: ${count(day)}`}
+              events={{ hover: true, focus: false, touch: true }}
             >
-              <title>{`${formatDate(day.date, "UTC")}${index === last ? ", today" : ""}: ${format(amount)}`}</title>
-            </rect>
+              <g className={classes.day}>
+                <rect className={classes.column} x={index * SLOT} width={SLOT} height={HEIGHT} />
+                <rect
+                  className={fill}
+                  fill={amount > 0 && index === last ? `url(#${pattern})` : undefined}
+                  x={index * SLOT}
+                  y={HEIGHT - height}
+                  width={BAR}
+                  height={height}
+                />
+              </g>
+            </Tooltip>
           );
         })}
       </svg>

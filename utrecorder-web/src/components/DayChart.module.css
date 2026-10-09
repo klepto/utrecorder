@@ -4,6 +4,14 @@
   height: 64px;
 }
 
+.column {
+  fill: transparent;
+}
+
+.day:hover .column {
+  fill: var(--mantine-color-body);
+}
+
 .data {
   fill: var(--mantine-color-anchor);
 }

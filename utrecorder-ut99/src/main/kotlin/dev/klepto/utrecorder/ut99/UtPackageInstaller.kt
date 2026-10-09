@@ -73,7 +73,10 @@ class UtPackageInstaller(
      */
     private suspend fun install(required: UtPackage) {
         if (installedPackage(required) != null) return
-        fetched += copiedPackage(required) ?: downloadedPackage(required) ?: throw UtPackageException(required.name, sources)
+        fetched +=
+            copiedPackage(required)
+                ?: downloadedPackage(required)
+                ?: throw UtPackageException(required.name, required.guid(), sources)
     }
 
     override suspend fun uninstall() {
@@ -207,9 +210,29 @@ class UtPackageInstaller(
  * Thrown when no source holds [packageName] at the GUID the demo recorded.
  *
  * @property packageName The name of the package that resolved nowhere.
+ * @property guid The GUID the demo recorded for the package, or an empty string if it recorded none.
  * @property sources The sources that were tried, in the order they were tried.
  */
 class UtPackageException(
     val packageName: String,
+    val guid: String,
     val sources: List<String>,
-) : IOException("No source holds $packageName, tried: ${sources.joinToString()}")
+) : IOException(message(packageName, guid, sources)) {
+    private companion object {
+        /**
+         * Returns the message naming [packageName], the [guid] the demo recorded for it if any, and the [sources] tried.
+         */
+        fun message(
+            packageName: String,
+            guid: String,
+            sources: List<String>,
+        ): String {
+            val version =
+                when {
+                    guid.isEmpty() -> ""
+                    else -> " at GUID $guid"
+                }
+            return "No source holds $packageName$version, tried: ${sources.joinToString()}"
+        }
+    }
+}

@@ -315,7 +315,7 @@ class RecordingServiceTest :
                             recorder { demo, _ ->
                                 if (demo.capId == "cap") return@recorder done(demo)
                                 attempts.incrementAndGet()
-                                RecorderResult.Unresolvable(UtPackageException("BTPog", listOf("http://packages.example")))
+                                RecorderResult.Unresolvable(UtPackageException("BTPog", "", listOf("http://packages.example")))
                             },
                         ),
                         config(recordings),
@@ -327,6 +327,30 @@ class RecordingServiceTest :
             }
 
             attempts.get() shouldBe 1
+        }
+
+        test("stores the package and GUID that resolved nowhere on the recording") {
+            val recordings = createTempDirectory(root, "recordings")
+            running(
+                listOf(demo("unresolvable", 0)),
+                { repository, queue ->
+                    RecordingService(
+                        repository,
+                        queue,
+                        listOf(
+                            recorder { _, _ ->
+                                RecorderResult.Unresolvable(
+                                    UtPackageException("BTPog", "123456789ABCDEF0876543210BADF00D", listOf("http://packages.example")),
+                                )
+                            },
+                        ),
+                        config(recordings),
+                    )
+                },
+            ) { repository ->
+                eventually(5.seconds) { repository["unresolvable"]?.status shouldBe Unresolvable }
+                repository["unresolvable"]?.missingPackage shouldBe MissingPackage("BTPog", "123456789ABCDEF0876543210BADF00D")
+            }
         }
 
         test("tracks a recording in jobs with its attempt and last progress until it ends") {

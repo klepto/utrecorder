@@ -386,6 +386,11 @@ class UtPackageInstallerTest :
                 val exception = shouldThrow<UtPackageException> { installer.install() }
 
                 exception.packageName shouldBe "BTPog"
+                exception.guid shouldBe "123456789ABCDEF0876543210BADF00D"
+                exception.message shouldBe
+                    "No source holds BTPog at GUID 123456789ABCDEF0876543210BADF00D, tried: " +
+                    "${root / "mismatched-everywhere" / "install"}, ${packagesDirectory("mismatched-everywhere")}, " +
+                    redirects.joinToString()
                 installer.installed shouldBe emptyList()
                 installationPath(installation, UtDirectory.System, "BTPog.u").exists() shouldBe false
                 packagesDirectory("mismatched-everywhere").listDirectoryEntries() shouldBe emptyList()
@@ -437,6 +442,10 @@ class UtPackageInstallerTest :
                 val exception = shouldThrow<UtPackageException> { installer.install() }
 
                 exception.packageName shouldBe "BTPog"
+                exception.guid shouldBe ""
+                exception.message shouldBe
+                    "No source holds BTPog, tried: ${root / "resolves-nowhere" / "install"}, " +
+                    "${packagesDirectory("resolves-nowhere")}, ${redirects.joinToString()}"
                 exception.sources shouldBe
                     listOf("${root / "resolves-nowhere" / "install"}", "${packagesDirectory("resolves-nowhere")}") + redirects
             }

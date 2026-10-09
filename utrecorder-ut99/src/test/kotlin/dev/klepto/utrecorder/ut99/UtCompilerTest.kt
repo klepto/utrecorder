@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.nio.file.Path
+import java.util.concurrent.TimeoutException
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
@@ -22,6 +23,9 @@ import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Tests [UtCompiler] against a fake UCC in a stub installation.
@@ -29,8 +33,8 @@ import kotlin.io.path.writeText
  * The fake UCC is a shell script on Linux and a C# program built with the .NET Framework compiler on Windows. It writes
  * the package named by `-packages=`, writes the file named by the header of a `.uz` archive, and fails when its
  * directory holds `ucc.fail`. While its directory holds `ucc.abort`, a decompression takes one from the count the file
- * holds and exits with code 134 instead, as a UCC aborted by an assertion does. While its directory holds
- * `ucc.exclusive`, it holds `ucc.running` for 300 milliseconds and fails when another run holds it already.
+ * holds and exits with code 134 instead, as a UCC aborted by an assertion does. While its directory holds `ucc.hang`, a
+ * decompression sleeps for a minute before it does anything else. While its directory holds `ucc.exclusive`, it holds `ucc.running` for 300 milliseconds and fails when another run holds it already.
  */
 class UtCompilerTest :
     FunSpec({
@@ -62,6 +66,9 @@ class UtCompilerTest :
                 exit 3
             fi
             if [ "${'$'}1" = "decompress" ]; then
+                if [ -f "${'$'}DIRECTORY/ucc.hang" ]; then
+                    sleep 60
+                fi
                 if [ -f "${'$'}DIRECTORY/ucc.abort" ]; then
                     ABORTS=${'$'}(cat "${'$'}DIRECTORY/ucc.abort")
                     if [ "${'$'}ABORTS" -gt 0 ]; then
@@ -118,6 +125,11 @@ class UtCompilerTest :
 
                     if (arguments.Length > 1 && arguments[0] == "decompress")
                     {
+                        if (File.Exists(Path.Combine(directory, "ucc.hang")))
+                        {
+                            System.Threading.Thread.Sleep(60000);
+                        }
+
                         string abortPath = Path.Combine(directory, "ucc.abort");
                         if (File.Exists(abortPath))
                         {
@@ -185,6 +197,8 @@ class UtCompilerTest :
             fails: Boolean = false,
             aborts: Int = 0,
             exclusive: Boolean = false,
+            hangs: Boolean = false,
+            decompressTimeout: Duration = 5.minutes,
         ): UtInstallation {
             val systemDirectory = root / name / "System"
             systemDirectory.createDirectories()
@@ -203,10 +217,11 @@ class UtCompilerTest :
             if (exclusive) {
                 (systemDirectory / "ucc.exclusive").writeText("")
             }
-            return UtInstallation(
-                root / name,
-                UtConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = root / "$name-home")),
-            )
+            if (hangs) {
+                (systemDirectory / "ucc.hang").writeText("")
+            }
+            val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root / "$name-home")
+            return UtInstallation(root / name, UtConfig(ConfigReader.EMPTY, directories, decompressTimeout = decompressTimeout))
         }
 
         fun sources(packageName: String): Path {
@@ -362,6 +377,17 @@ class UtCompilerTest :
                 val exception = shouldThrow<IllegalStateException> { compiler.extract(archive, root / "out" / "Aborts.unr") }
 
                 exception.message shouldContain "134"
+            }
+
+            test("throws when a run of UCC does not finish within the decompress timeout") {
+                val compiler = installation("extract-hang", hangs = true, decompressTimeout = 2.seconds).compiler
+                val archive = root / "archives" / "Hang.unr.uz"
+                archive.parent.createDirectories()
+                archive.writeBytes(byteArrayOf(0xD2.toByte(), 0x04, 0, 0, 9) + "Hang.unr".toByteArray() + byteArrayOf(0))
+
+                shouldThrow<TimeoutException> { compiler.extract(archive, root / "out" / "Hang.unr") }
+
+                (root / "out" / "Hang.unr").exists() shouldBe false
             }
 
             test("runs one compiler at a time, so two archives holding one file name both extract") {

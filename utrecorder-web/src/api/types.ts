@@ -66,6 +66,13 @@ export type RecordingStatus =
   | "Failed"
   | "Unresolvable";
 
+/** A package a demo names that no source holds. */
+export interface MissingPackage {
+  name: string;
+  /** The GUID the demo recorded for the package, or an empty string if it recorded none. */
+  guid: string;
+}
+
 /** Recording of one demo, as `/api/recordings` lists it. */
 export interface Recording {
   /** The demo recorded. */
@@ -74,6 +81,8 @@ export interface Recording {
   status: RecordingStatus;
   /** The failure of the last capture, or `null` if none has failed. */
   error: string | null;
+  /** The package the last unresolvable capture found in no source, or `null` if no capture was unresolvable. */
+  missingPackage: MissingPackage | null;
   /** The MD5 checksum of the uploaded mp4, or `null` if it was not uploaded. */
   md5: string | null;
   /** The time `status` last changed, as an ISO-8601 instant. */

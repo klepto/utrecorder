@@ -1,0 +1,13 @@
+.anchor {
+  transition: text-shadow 150ms ease;
+}
+
+.anchor:hover {
+  text-shadow: 0 0 8px currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anchor {
+    transition: none;
+  }
+}

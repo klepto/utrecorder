@@ -48,11 +48,13 @@ import kotlin.time.Instant
  * [RecordingRepository.statusChanges] signals a change, and every [Failed] or [Unresolvable] recording is set to
  * [Pending] again once every [ServerConfig.recordingRetryInterval]. A build that changes nothing changes no status.
  *
- * Every build sets the [Recording.runMedal] of each recording: the highest ranked [Demo.medal] among the stored demos of
- * its [Demo.teamRunId], or its own [Demo.medal] for a solo demo.
+ * Every build sets the [Recording.runMedal] of each recording: the [Demo.medal] of the fastest stored demo of its
+ * [Demo.teamRunId] that has a medal, or its own [Demo.medal] for a solo demo.
  *
- * The recordings are ordered key by key: recent first, then higher [Recording.runMedal], then shorter [Demo.capTime],
- * then newer [Demo.timestamp]. Ties keep the order [RecordingRepository.all] gives. A demo is recent while it is at most
+ * The recordings are ordered key by key: recent first, then higher [Recording.runMedal], then shorter team time, then
+ * longer [Demo.capTime], then newer [Demo.timestamp]. The team time of a recording is its own [Demo.capTime] for a solo
+ * demo, and the slowest [Demo.capTime] among the recordings of its [Demo.teamRunId] for a team demo. Ties keep the order
+ * [RecordingRepository.all] gives. A demo is recent while it is at most
  * [ServerConfig.recordingRecentAge] old, a demo whose timestamp lies in the future included; any other demo is a backlog
  * demo. A recording whose [Recording.runMedal] is not set yet ranks by its [Demo.medal]. A medal that is `null` or
  * outside `0` to `6` ranks as `0`, casual.
@@ -277,15 +279,20 @@ class RecordingQueue(
     ): List<Recording> =
         all
             .filter { it.status == Pending }
-            .sortedWith(order(now))
+            .sortedWith(order(runTimes(all), now))
 
     /**
-     * Returns the queue order, with the age of each demo measured at [now].
+     * Returns the queue order, with the age of each demo measured at [now] and the team time of each team recording
+     * taken from [runTimes].
      */
-    private fun order(now: Instant): Comparator<Recording> =
+    private fun order(
+        runTimes: Map<String, Duration>,
+        now: Instant,
+    ): Comparator<Recording> =
         compareByDescending<Recording> { isRecent(it.demo, now) }
             .thenByDescending { rank(it.runMedal ?: it.demo.medal) }
-            .thenBy { it.demo.capTime }
+            .thenBy { runTimes[it.demo.teamRunId] ?: it.demo.capTime }
+            .thenByDescending { it.demo.capTime }
             .thenByDescending { it.demo.timestamp }
 
     /**
@@ -312,6 +319,13 @@ class RecordingQueue(
             demos
                 .filter { it.teamRunId != null }
                 .groupBy { it.teamRunId!! }
+
+        /**
+         * Returns the slowest [Demo.capTime] among the recordings of [all] for each [Demo.teamRunId] present among them.
+         */
+        fun runTimes(all: List<Recording>): Map<String, Duration> =
+            runs(all.map { it.demo })
+                .mapValues { (_, run) -> run.maxOf { it.capTime } }
 
         /**
          * Returns the team time of [demo]: its own [Demo.capTime] if it is solo, the slowest [Demo.capTime] of its run in
@@ -366,18 +380,23 @@ class RecordingQueue(
         }
 
         /**
-         * Returns the medal of the run of [demo]: the highest ranked [Demo.medal] of its run in [runs] if it is a team
-         * demo, or its own [Demo.medal] if it is solo or its run is not in [runs]. If no demo of the run has a medal,
-         * returns `null` instead.
+         * Returns the medal of the run of [demo]: the [Demo.medal] of the fastest demo of its run in [runs] that has a
+         * medal if it is a team demo, or its own [Demo.medal] if it is solo or its run is not in [runs]. Of demos with
+         * the same [Demo.capTime], the highest ranked medal wins. If no demo of the run has a medal, returns `null`
+         * instead.
          */
         fun runMedal(
             demo: Demo,
             runs: Map<String, List<Demo>>,
         ): Int? {
             val run = demo.teamRunId?.let { runs[it] } ?: return demo.medal
+            val fastestFirst =
+                compareBy<Demo> { it.capTime }
+                    .thenByDescending { rank(it.medal) }
             return run
-                .mapNotNull { it.medal }
-                .maxByOrNull { rank(it) }
+                .filter { it.medal != null }
+                .minWithOrNull(fastestFirst)
+                ?.medal
         }
 
         /**

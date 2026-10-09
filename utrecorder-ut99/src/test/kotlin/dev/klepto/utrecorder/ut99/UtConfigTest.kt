@@ -10,6 +10,8 @@ import io.kotest.matchers.shouldBe
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 class UtConfigTest :
     FunSpec({
@@ -77,5 +79,15 @@ class UtConfigTest :
             val config = UtConfig(ConfigReader.EMPTY, directories)
 
             config.redirectUrls shouldBe listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com")
+        }
+
+        test("reads decompress_timeout as a duration") {
+            val reader = readerOf("utrecorder.decompress_timeout" to "90s")
+
+            UtConfig(reader, directories).decompressTimeout shouldBe 90.seconds
+        }
+
+        test("gives a decompression five minutes when decompress_timeout is not set") {
+            UtConfig(ConfigReader.EMPTY, directories).decompressTimeout shouldBe 5.minutes
         }
     })

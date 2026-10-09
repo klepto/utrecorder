@@ -40,6 +40,11 @@ export const fetchRecordings = ({ limit, offset }: RecordingsPage): Promise<Reco
   return get(`/api/recordings?${query}`);
 };
 
+/** Fetches the recordings whose demo names a package no source holds, at most 100. */
+export const fetchUnresolvable = (): Promise<Recording[]> => {
+  return get("/api/recordings?status=unresolvable");
+};
+
 /** Fetches the aggregate statistics of the queue, recorder, storage and personal bests. */
 export const fetchStatistics = (): Promise<Statistics> => {
   return get("/api/statistics");

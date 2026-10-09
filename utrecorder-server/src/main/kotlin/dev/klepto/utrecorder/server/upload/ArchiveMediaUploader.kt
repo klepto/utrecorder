@@ -6,7 +6,7 @@ import dev.klepto.utrecorder.server.ServerConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.content.LocalFileContent
 import io.ktor.client.engine.HttpClientEngine
-import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.expectSuccess
@@ -39,13 +39,14 @@ import kotlin.io.path.name
  * limit, only the socket timeout.
  *
  * @property config The keys, collection and identifier prefix of the Archive account.
- * @param engine The Ktor client engine the requests run over.
+ * @param engine The Ktor client engine the requests run over. If [engine] is not provided, uses OkHttp, which tries
+ * every address of a host before the connection fails.
  * @throws IllegalArgumentException If [ServerConfig.archiveAccessKey] or [ServerConfig.archiveSecretKey] is not
  * configured.
  */
 class ArchiveMediaUploader(
     private val config: ServerConfig = ServerConfig(),
-    engine: HttpClientEngine = CIO.create(),
+    engine: HttpClientEngine = OkHttp.create(),
 ) : MediaUploader {
     private val authorization: String = authorization(config)
     private val client: HttpClient = createClient(engine)

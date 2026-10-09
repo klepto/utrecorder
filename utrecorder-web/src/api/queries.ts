@@ -1,6 +1,14 @@
 import { keepPreviousData, type QueryKey, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import { fetchJobs, fetchQueue, fetchQueueHead, fetchRecordings, fetchStatistics, type RecordingsPage } from "./client";
+import {
+  fetchJobs,
+  fetchQueue,
+  fetchQueueHead,
+  fetchRecordings,
+  fetchStatistics,
+  fetchUnresolvable,
+  type RecordingsPage,
+} from "./client";
 
 /** The time between two fetches of the running jobs, in milliseconds. */
 export const JOBS_INTERVAL = 2_000;
@@ -14,6 +22,7 @@ const QUERY_KEYS = {
   queue: ["queue"],
   queueHead: ["queueHead"],
   statistics: ["statistics"],
+  unresolvable: ["unresolvable"],
   recordings: ["recordings"],
   recordingsPage: (page: RecordingsPage): QueryKey => [...QUERY_KEYS.recordings, page],
 } as const;
@@ -54,6 +63,15 @@ export const useQueueHead = () => {
 /** Returns the aggregate statistics, polled every 60 s. */
 export const useStatistics = () => {
   return useQuery({ queryKey: QUERY_KEYS.statistics, queryFn: fetchStatistics, refetchInterval: STATISTICS_INTERVAL });
+};
+
+/** Returns the recordings whose demo names a package no source holds, polled every 60 s. */
+export const useUnresolvable = () => {
+  return useQuery({
+    queryKey: QUERY_KEYS.unresolvable,
+    queryFn: fetchUnresolvable,
+    refetchInterval: STATISTICS_INTERVAL,
+  });
 };
 
 /**

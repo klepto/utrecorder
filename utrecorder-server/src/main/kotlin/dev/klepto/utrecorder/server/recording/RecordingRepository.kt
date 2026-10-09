@@ -100,14 +100,19 @@ class RecordingRepository(
         }
 
     /**
-     * Sets the recording stored under [capId] to [status], with [error] as its failure. If there is none, does nothing.
+     * Sets the recording stored under [capId] to [status], with [error] as its failure and [missingPackage] as the
+     * package it found in no source. A `null` [error] or [missingPackage] keeps the stored one. If there is no
+     * recording, does nothing.
      */
     suspend fun finish(
         capId: String,
         status: RecordingStatus,
         error: String? = null,
+        missingPackage: MissingPackage? = null,
     ) {
-        update(capId) { it.copy(status = status, error = error ?: it.error) }
+        update(capId) {
+            it.copy(status = status, error = error ?: it.error, missingPackage = missingPackage ?: it.missingPackage)
+        }
     }
 
     /**
@@ -213,6 +218,7 @@ class RecordingRepository(
         val capId: String,
         val status: RecordingStatus = Pending,
         val error: String? = null,
+        val missingPackage: MissingPackage? = null,
         val md5: String? = null,
         val lastUpdate: Instant = Instant.DISTANT_PAST,
         val views: Int = 0,
@@ -267,6 +273,7 @@ class RecordingRepository(
                 demo = checkNotNull(demos[recording.capId]) { "No demo is stored for recording ${recording.capId}" },
                 status = recording.status,
                 error = recording.error,
+                missingPackage = recording.missingPackage,
                 md5 = recording.md5,
                 lastUpdate = recording.lastUpdate,
                 views = recording.views,
@@ -289,6 +296,7 @@ class RecordingRepository(
                 capId = recording.demo.capId,
                 status = recording.status,
                 error = recording.error,
+                missingPackage = recording.missingPackage,
                 md5 = recording.md5,
                 lastUpdate = recording.lastUpdate,
                 views = recording.views,

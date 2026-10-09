@@ -203,6 +203,39 @@ class RecordingRepositoryTest :
             entry shouldBe Recording(demo("cap", 0), Unresolvable, "Missing BTPog", lastUpdate = now.get())
         }
 
+        test("stores the missing package of a finished recording and reads it once reopened") {
+            val file = file()
+            SqliteDocumentStore.open(file) { store ->
+                val repository = RecordingRepository(store, DemoRepository(store), clock)
+                repository += listOf(demo("cap", 0))
+                repository.finish("cap", Unresolvable, "Missing BTPog", MissingPackage("BTPog", "123456789ABCDEF0876543210BADF00D"))
+            }
+
+            val entry = SqliteDocumentStore.open(file) { store -> RecordingRepository(store, DemoRepository(store), clock)["cap"] }
+            entry shouldBe
+                Recording(
+                    demo("cap", 0),
+                    Unresolvable,
+                    "Missing BTPog",
+                    MissingPackage("BTPog", "123456789ABCDEF0876543210BADF00D"),
+                    lastUpdate = now.get(),
+                )
+        }
+
+        test("keeps the stored missing package when a later finish names none, also once reopened") {
+            val file = file()
+            SqliteDocumentStore.open(file) { store ->
+                val repository = RecordingRepository(store, DemoRepository(store), clock)
+                repository += listOf(demo("cap", 0))
+                repository.finish("cap", Unresolvable, "Missing BTPog", MissingPackage("BTPog", "123456789ABCDEF0876543210BADF00D"))
+                repository.finish("cap", Failed)
+            }
+
+            val entry = SqliteDocumentStore.open(file) { store -> RecordingRepository(store, DemoRepository(store), clock)["cap"] }
+            entry?.status shouldBe Failed
+            entry?.missingPackage shouldBe MissingPackage("BTPog", "123456789ABCDEF0876543210BADF00D")
+        }
+
         test("replaces every recording with the result of a transform") {
             val all =
                 repository {

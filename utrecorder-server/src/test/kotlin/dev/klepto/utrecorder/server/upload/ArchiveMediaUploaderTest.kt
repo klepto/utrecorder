@@ -10,12 +10,22 @@ import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.ServerResponseException
 import io.ktor.client.request.forms.FormDataContent
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.server.application.call
+import io.ktor.server.cio.CIO
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.respond
+import io.ktor.server.routing.put
+import io.ktor.server.routing.routing
+import okhttp3.Dns
+import java.net.InetAddress
 import java.nio.file.Path
 import kotlin.io.path.createTempFile
 import kotlin.io.path.deleteIfExists
@@ -87,6 +97,57 @@ class ArchiveMediaUploaderTest :
                 request.headers["x-archive-meta01-subject"] shouldBe "uri(Speedrunning)"
                 request.headers["x-archive-meta02-subject"] shouldBe "uri(Bunny%20Track)"
                 request.headers["x-archive-queue-derive"] shouldBe "0"
+            }
+        }
+
+        test("uploads through the next address of the host when one refuses the connection") {
+            withMp4 { file ->
+                val received = mutableListOf<String>()
+                val server =
+                    embeddedServer(CIO, port = 0, host = "127.0.0.1") {
+                        routing {
+                            put("{...}") {
+                                received += "${call.request.local.uri} ${call.receiveText()}"
+                                call.respond(HttpStatusCode.OK)
+                            }
+                        }
+                    }
+                server.startSuspend()
+                try {
+                    val port =
+                        server.engine
+                            .resolvedConnectors()
+                            .single()
+                            .port
+                    val refusing = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 2))
+                    val listening = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
+                    val engine =
+                        OkHttp.create {
+                            config {
+                                dns(Dns { listOf(refusing, listening) })
+                                addInterceptor { chain ->
+                                    val request = chain.request()
+                                    val url =
+                                        request.url
+                                            .newBuilder()
+                                            .scheme("http")
+                                            .port(port)
+                                            .build()
+                                    val local =
+                                        request
+                                            .newBuilder()
+                                            .url(url)
+                                            .build()
+                                    chain.proceed(local)
+                                }
+                            }
+                        }
+                    ArchiveMediaUploader(config, engine).upload(id, file, metadata)
+
+                    received shouldBe listOf("/ut99-bt-$id/${file.fileName} mp4")
+                } finally {
+                    server.stopSuspend()
+                }
             }
         }
 

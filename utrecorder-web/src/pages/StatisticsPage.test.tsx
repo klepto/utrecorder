@@ -1,10 +1,10 @@
 import { MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { describe, expect, test } from "vitest";
 import type { Statistics } from "../api/types";
-import { statistics } from "../mocks/fixtures";
+import { statistics, unresolvable } from "../mocks/fixtures";
 import { server } from "../mocks/server";
 import { StatisticsPage } from "./StatisticsPage";
 
@@ -38,26 +38,41 @@ describe("StatisticsPage", () => {
   test("opens with the time left to record the queue and the demos waiting", async () => {
     renderPage();
 
-    expect(await screen.findByText("5 h 10 min remaining")).toBeInTheDocument();
-    expect(screen.getByText(line("148 demos waiting"))).toBeInTheDocument();
-    expect(screen.getByText(line("31 recent"))).toBeInTheDocument();
-    expect(screen.getByText(line("117 backlog"))).toBeInTheDocument();
+    expect(await screen.findByText("5 hours remaining")).toBeInTheDocument();
+    expect(screen.getByText(line("148 waiting"))).toBeInTheDocument();
+    expect(screen.getByText(line("1,284 recorded"))).toBeInTheDocument();
     expect(screen.getByText(line("5 missing packages"))).toBeInTheDocument();
+    expect(screen.getByText(line("23 recent"))).toBeInTheDocument();
+  });
+
+  test("shows the share of both parts of the bar on hover anywhere over it", async () => {
+    renderPage();
+
+    const recorded = await screen.findByRole("progressbar", { name: "Demos recorded" });
+    fireEvent.mouseEnter(recorded.parentElement as HTMLElement);
+    expect(await screen.findByText("89.7% recorded – 10.3% waiting")).toBeInTheDocument();
+  });
+
+  test("shows the time remaining in minutes under an hour", async () => {
+    serve({ ...statistics, recorder: { ...statistics.recorder, pace: 0.25 } });
+    renderPage();
+
+    expect(await screen.findByText("31 minutes remaining")).toBeInTheDocument();
   });
 
   test("shows the queued run time when there is no pace", async () => {
     serve({ ...statistics, recorder: { ...statistics.recorder, pace: null } });
     renderPage();
 
-    expect(await screen.findByText("2 h 4 min of runs queued")).toBeInTheDocument();
+    expect(await screen.findByText("2 hours of runs queued")).toBeInTheDocument();
     expect(screen.getByText("Not enough data")).toBeInTheDocument();
   });
 
   test("titles each panel", async () => {
     renderPage();
 
-    await screen.findByText("5 h 10 min remaining");
-    for (const title of ["Statistics", "Queue", "Recorder", "Storage", "Personal bests"]) {
+    await screen.findByText("5 hours remaining");
+    for (const title of ["Statistics", "Recorder", "Storage", "Personal bests"]) {
       expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
     }
   });
@@ -74,6 +89,35 @@ describe("StatisticsPage", () => {
     expect(
       screen.getByRole("img", { name: "Recorded run time per day for the last 30 days, 7 min today" }),
     ).toBeInTheDocument();
+  });
+
+  test("shows the date and count of a day on hover over its column", async () => {
+    renderPage();
+
+    const chart = await screen.findByRole("img", { name: /^Recorded run time per day/ });
+    const days = chart.querySelectorAll(":scope > g");
+    expect(days).toHaveLength(30);
+    fireEvent.mouseEnter(days[14]);
+    expect(await screen.findByText("13 Sept 2026: 0 recordings")).toBeInTheDocument();
+    fireEvent.mouseEnter(days[29]);
+    expect(await screen.findByText("Today: 9 recordings")).toBeInTheDocument();
+  });
+
+  test("lists the demos missing a package while any is unresolvable", async () => {
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Missing packages" })).toBeInTheDocument();
+    expect(await screen.findByText("BTSkins")).toBeInTheDocument();
+  });
+
+  test("hides the missing packages when no unresolvable demo has a known package", async () => {
+    const unknown = unresolvable.filter((recording) => recording.missingPackage === null);
+    server.use(http.get("/api/recordings", () => HttpResponse.json(unknown)));
+    renderPage();
+
+    await screen.findByText("5 hours remaining");
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Missing packages" })).toBeNull());
+    expect(screen.queryByText("No package is missing.")).toBeNull();
   });
 
   test("lists every day of personal bests in the chart's table", async () => {
@@ -125,8 +169,8 @@ describe("StatisticsPage", () => {
     });
     renderPage();
 
-    expect(await screen.findByText("0 min remaining")).toBeInTheDocument();
-    expect(screen.getByText(line("0 demos waiting"))).toBeInTheDocument();
+    expect(await screen.findByText("0 minutes remaining")).toBeInTheDocument();
+    expect(screen.getByText(line("0 waiting"))).toBeInTheDocument();
     const table = screen.getByRole("table", { name: "Recorded run time per day" });
     expect(within(table).getAllByRole("row").slice(1)[29]).toHaveTextContent("28 Sept 20260 min");
   });
