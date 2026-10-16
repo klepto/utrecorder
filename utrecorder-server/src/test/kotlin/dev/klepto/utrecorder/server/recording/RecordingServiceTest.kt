@@ -7,6 +7,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
 import dev.klepto.utrecorder.core.capture.video.VideoStream
+import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
@@ -324,6 +325,33 @@ class RecordingServiceTest :
             ) { repository ->
                 eventually(5.seconds) { names(recordings) shouldContainExactly listOf("cap.mp4") }
                 repository["unresolvable"]?.status shouldBe Unresolvable
+            }
+
+            attempts.get() shouldBe 1
+        }
+
+        test("gives up on a demo at once when the game cannot play it") {
+            val recordings = createTempDirectory(root, "recordings")
+            val attempts = AtomicInteger()
+            running(
+                listOf(demo("unplayable", 1), demo("cap", 0)),
+                { repository, queue ->
+                    RecordingService(
+                        repository,
+                        queue,
+                        listOf(
+                            recorder { demo, _ ->
+                                if (demo.capId == "cap") return@recorder done(demo)
+                                attempts.incrementAndGet()
+                                RecorderResult.Unplayable(DemoUnplayableException("Demo connection failed"))
+                            },
+                        ),
+                        config(recordings),
+                    )
+                },
+            ) { repository ->
+                eventually(5.seconds) { names(recordings) shouldContainExactly listOf("cap.mp4") }
+                repository["unplayable"]?.status shouldBe Failed
             }
 
             attempts.get() shouldBe 1

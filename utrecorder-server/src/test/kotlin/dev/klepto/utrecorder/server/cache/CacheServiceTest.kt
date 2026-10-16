@@ -198,12 +198,34 @@ class CacheServiceTest :
             }
         }
 
-        test("keeps the mp4 of an archived recording never viewed until the cache TTL passes from its archiving") {
+        test("keeps the mp4 of an archived recording without a recording time until the cache TTL passes from its archiving") {
             cache(mapOf("fresh" to Archived), listOf("fresh")) { service, _, recordings ->
                 now.set(now.get() + 13.days)
                 service.evict()
 
                 recordings.resolve("fresh.mp4").shouldExist()
+            }
+        }
+
+        test("deletes the mp4 of an archived recording once the cache TTL passes from its recording, however lately it was archived") {
+            cache(mapOf("early" to Archived), listOf("early")) { service, repository, recordings ->
+                repository.update("early") { it.copy(recordedAt = Instant.parse("2026-09-17T08:00:00Z")) }
+                now.set(now.get() + 5.days)
+                service.evict()
+
+                recordings.resolve("early.mp4").shouldNotExist()
+                repository["early"]?.status shouldBe Archived
+            }
+        }
+
+        test("keeps the mp4 of an archived recording recorded within the cache TTL, though its last view is older") {
+            cache(mapOf("viewed" to Archived), listOf("viewed")) { service, repository, recordings ->
+                service.view("viewed")
+                repository.update("viewed") { it.copy(recordedAt = Instant.parse("2026-10-07T08:00:00Z")) }
+                now.set(now.get() + 20.days)
+                service.evict()
+
+                recordings.resolve("viewed.mp4").shouldExist()
             }
         }
 

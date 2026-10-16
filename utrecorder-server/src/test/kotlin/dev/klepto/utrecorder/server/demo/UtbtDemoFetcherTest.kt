@@ -40,12 +40,17 @@ class UtbtDemoFetcherTest :
                 respond(body, status, headersOf(HttpHeaders.ContentType, "application/json"))
             }
 
-        test("requests one page of verified caps at the offset given, newest first") {
+        test("requests one page of verified caps at the offset given, most recently verified first, with the fields of a demo") {
             val requests = CopyOnWriteArrayList<String>()
             val fetcher = UtbtDemoFetcher(config, engine("""{"data":[${cap(0)}]}""", requests))
 
             fetcher.fetch(500, 1000).map { it.capId } shouldContainExactly listOf(id(0))
-            requests shouldContainExactly listOf("https://gateway.utbt.net/caps?offset=500&limit=1000&order=desc&verified=true")
+            requests shouldContainExactly
+                listOf(
+                    "https://gateway.utbt.net/caps?offset=500&limit=1000&order=desc&verified=true&sort=verified_at" +
+                        "&columns=id%2Cmap%2Calias%2Cuser%2Ccap_time_seconds%2Cadded%2Cmedal" +
+                        "%2Ccustom_id_other_players_on_team%2Cteam_run_id",
+                )
         }
 
         test("reads a page without caps as empty") {

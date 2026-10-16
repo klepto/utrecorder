@@ -12,6 +12,7 @@ import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.core.demo.DemoPlaybackHooks
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
+import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.MediaProgress
 import dev.klepto.utrecorder.core.media.MediaTool
@@ -38,7 +39,8 @@ import kotlin.time.DurationUnit
  * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. Every line the hook library prints is logged at
  * DEBUG. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A
  * run whose hook library reports that it stopped the frame capture fails with an [IllegalStateException] naming the
- * reason it gave. Every run renders and encodes in the [VideoFormat] that [VideoCaptureConfig.format] picks from
+ * reason it gave. A run whose game reports that it cannot play the demo fails with a [DemoUnplayableException] naming
+ * the report, whatever the run ended with. Every run renders and encodes in the [VideoFormat] that [VideoCaptureConfig.format] picks from
  * [DemoPlaybackConfig.runDuration] and [audioBitrate].
  *
  * @property config The video capture configuration, carrying the tiers, the fps, the idle timeout and the renderer
@@ -98,6 +100,7 @@ class FfmpegVideoCapture(
      * run is killed once [frames], the frames encoded so far, has not grown for [VideoCaptureConfig.idleTimeout].
      *
      * @throws java.util.concurrent.TimeoutException if no new frame is encoded for [VideoCaptureConfig.idleTimeout].
+     * @throws DemoUnplayableException if the game reports that it cannot play the demo, naming the report.
      * @throws IllegalStateException if the hook library reports that it stopped the frame capture, naming its reason.
      */
     private suspend fun play(
@@ -108,27 +111,31 @@ class FfmpegVideoCapture(
         frames: StateFlow<Long>,
     ): UtProcessResult {
         val stop = MutableStateFlow<String?>(null)
+        val unplayable = MutableStateFlow<String?>(null)
         val (result, _) =
             try {
-                encoder.encode { launchWatched(process(description, format, port, hooks), frames, stop) }
+                encoder.encode { launchWatched(process(description, format, port, hooks), frames, stop, unplayable) }
             } catch (failure: Exception) {
-                throw stopFailure(failure, stop.value)
+                throw DemoUnplayableException.wrap(stopFailure(failure, stop.value), unplayable.value)
             }
+        unplayable.value?.let { throw DemoUnplayableException(it) }
         stop.value?.let { error("Frame capture was stopped by the hook library: $it") }
         return result
     }
 
     /**
      * Returns the result of [run], killed once [frames] has not grown for [VideoCaptureConfig.idleTimeout]. Records in
-     * [stop] the reason of a frame capture stop the hook library reports in the output of [run].
+     * [stop] the reason of a frame capture stop the hook library reports in the output of [run], and in [unplayable]
+     * the first report of the game that it cannot play the demo.
      */
     private suspend fun launchWatched(
         run: UtProcess,
         frames: StateFlow<Long>,
         stop: MutableStateFlow<String?>,
+        unplayable: MutableStateFlow<String?>,
     ): UtProcessResult =
         coroutineScope {
-            launch { watchStop(run, stop) }
+            launch { watchOutput(run, stop, unplayable) }
             withProgressTimeout(frames, config.idleTimeout) { run.launch() }
         }
 
@@ -139,16 +146,19 @@ class FfmpegVideoCapture(
     fun stopReason(line: String): String? = HOOK_STOP.matchEntire(line.trim())?.groupValues?.get(1)
 
     /**
-     * Logs every line the hook library prints in the output of [run], and records in [stop] the reason of the last line
-     * that reports a frame capture stop, until the output ends.
+     * Logs every line the hook library prints in the output of [run], records in [stop] the reason of the last line
+     * that reports a frame capture stop, and in [unplayable] the first report of the game that it cannot play the demo,
+     * until the output ends.
      */
-    private suspend fun watchStop(
+    private suspend fun watchOutput(
         run: UtProcess,
         stop: MutableStateFlow<String?>,
+        unplayable: MutableStateFlow<String?>,
     ) {
         run.drain().collect { line ->
             DemoPlaybackHooks.message(line)?.let { message -> log.debug { message } }
             stopReason(line)?.let { stop.value = it }
+            DemoUnplayableException.reason(line)?.let { unplayable.compareAndSet(null, it) }
         }
     }
 

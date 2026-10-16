@@ -23,6 +23,9 @@ import kotlin.io.path.PathWalkOption
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createParentDirectories
+import kotlin.io.path.createTempFile
+import kotlin.io.path.deleteExisting
+import kotlin.io.path.deleteIfExists
 import kotlin.io.path.deleteRecursively
 import kotlin.io.path.exists
 import kotlin.io.path.fileSize
@@ -194,27 +197,47 @@ private fun Path.moveDirectory(target: Path) {
 }
 
 /**
- * Moves a single file by atomic rename or by a replacing move on a filesystem without atomic rename.
+ * Moves a single file by atomic rename, or by a staged copy when the atomic rename is not supported, such as across
+ * filesystems.
+ *
+ * Either way, [target] never holds part of the file.
  */
 private fun Path.moveFile(target: Path): Path =
     try {
         moveTo(target, StandardCopyOption.ATOMIC_MOVE)
     } catch (unsupported: AtomicMoveNotSupportedException) {
-        moveFileReplacing(target, unsupported)
+        moveFileStaged(target, unsupported)
     }
 
 /**
- * Moves a single file by a replacing move, attaching [unsupported] to the failure if the move fails too.
+ * Moves a single file by a staged copy to [target], then deletes the file at this path. If the move fails too,
+ * attaches [unsupported] to the failure.
  */
-private fun Path.moveFileReplacing(
+private fun Path.moveFileStaged(
     target: Path,
     unsupported: AtomicMoveNotSupportedException,
 ): Path =
     try {
-        moveTo(target, StandardCopyOption.REPLACE_EXISTING)
+        copyStaged(target).also { deleteExisting() }
     } catch (failure: IOException) {
         throw failure.apply { addSuppressed(unsupported) }
     }
+
+/**
+ * Copies the file at this path to a temporary file in the directory of [target], then renames the temporary file to
+ * [target] in one step, and returns [target].
+ *
+ * If the copy or the rename fails, deletes the temporary file.
+ */
+private fun Path.copyStaged(target: Path): Path {
+    val staged = createTempFile(target.parent, ".${target.fileName}-", ".tmp")
+    return try {
+        copyTo(staged, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES)
+            .moveTo(target, StandardCopyOption.ATOMIC_MOVE)
+    } catch (failure: IOException) {
+        throw failure.apply { runCatching { staged.deleteIfExists() }.exceptionOrNull()?.let(::addSuppressed) }
+    }
+}
 
 /**
  * Writes [bytes] to the file at this path unless the file already holds them, and returns this path.

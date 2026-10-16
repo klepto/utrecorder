@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.core.capture.video.VideoStream
+import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.ut99.UtPackageException
 import java.nio.file.Path
 
@@ -37,5 +38,14 @@ sealed interface RecorderResult {
      */
     data class Unresolvable(
         val exception: UtPackageException,
+    ) : RecorderResult
+
+    /**
+     * The game reported that it cannot play the demo, so no later capture can succeed.
+     *
+     * @property exception The failure that names the report of the game.
+     */
+    data class Unplayable(
+        val exception: DemoUnplayableException,
     ) : RecorderResult
 }

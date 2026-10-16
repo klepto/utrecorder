@@ -16,10 +16,12 @@ import dev.klepto.utrecorder.core.demo.DemoPlaybackHooks
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMark
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
 import dev.klepto.utrecorder.core.demo.DemoPlaybackRenderDevice
+import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.core.media.FfmpegMediaTool
 import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtProcess
+import dev.klepto.utrecorder.ut99.UtProcessResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -49,7 +51,8 @@ import kotlin.time.DurationUnit
  * moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in the wav out of
  * [DemoPlaybackConfig.runDuration], read once a second while the run plays. Every line the hook library prints is logged
  * at DEBUG. A run that produces no wav, no marks, or marks outside its wav fails with an
- * [IllegalStateException].
+ * [IllegalStateException]. A run whose game reports that it cannot play the demo fails with a [DemoUnplayableException]
+ * naming the report, whatever the run ended with.
  *
  * @property config The audio capture configuration, carrying the sound viewport, its frame rate limit and the idle
  * timeout.
@@ -76,23 +79,50 @@ class OpenalAudioCapture(
             playback.play(demo, STAGED_DEMO_PREFIX, AUDIO_CAPTURE) { description, system ->
                 val wav = system[WAVE_NAME]
                 val run = process(description, openAl(system), DemoPlaybackHooks.extract(system))
-                val written = MutableStateFlow(0L)
-                val result =
-                    coroutineScope {
-                        val progress = launch { reportProgress(wav, description, written, onProgress) }
-                        launch { logHookMessages(run) }
-                        withProgressTimeout(written, config.idleTimeout) { run.launch() }.also { progress.cancel() }
+                val unplayable = MutableStateFlow<String?>(null)
+                val track =
+                    try {
+                        val result = capture(run, wav, description, unplayable, onProgress)
+                        unplayable.value?.let { throw DemoUnplayableException(it) }
+                        track(wav, result.log, ffmpeg.duration(wav))
+                    } catch (failure: Exception) {
+                        throw DemoUnplayableException.wrap(failure, unplayable.value)
                     }
-                val track = track(wav, result.log, ffmpeg.duration(wav))
                 track.copy(file = wav.move(output[WAVE_NAME]))
             }
         }
 
     /**
-     * Logs every line the hook library prints in the output of [run], until the output ends.
+     * Returns the result of [run], killed once [wav] has not grown for [AudioCaptureConfig.idleTimeout]. Reports the
+     * progress of the run of [description] to [onProgress], and records in [unplayable] the first report of the game
+     * that it cannot play the demo.
      */
-    private suspend fun logHookMessages(run: UtProcess) {
-        run.drain().collect { line -> DemoPlaybackHooks.message(line)?.let { message -> log.debug { message } } }
+    private suspend fun capture(
+        run: UtProcess,
+        wav: Path,
+        description: DemoPlaybackConfig,
+        unplayable: MutableStateFlow<String?>,
+        onProgress: ProgressListener<Unit>,
+    ): UtProcessResult =
+        coroutineScope {
+            val written = MutableStateFlow(0L)
+            val progress = launch { reportProgress(wav, description, written, onProgress) }
+            launch { watchOutput(run, unplayable) }
+            withProgressTimeout(written, config.idleTimeout) { run.launch() }.also { progress.cancel() }
+        }
+
+    /**
+     * Logs every line the hook library prints in the output of [run], and records in [unplayable] the first report of
+     * the game that it cannot play the demo, until the output ends.
+     */
+    private suspend fun watchOutput(
+        run: UtProcess,
+        unplayable: MutableStateFlow<String?>,
+    ) {
+        run.drain().collect { line ->
+            DemoPlaybackHooks.message(line)?.let { message -> log.debug { message } }
+            DemoUnplayableException.reason(line)?.let { unplayable.compareAndSet(null, it) }
+        }
     }
 
     /**

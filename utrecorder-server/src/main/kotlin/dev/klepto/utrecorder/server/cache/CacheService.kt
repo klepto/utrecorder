@@ -33,8 +33,8 @@ import kotlin.time.Instant
 /**
  * [Service] that keeps in [ServerConfig.recordings] only the mp4 files worth holding locally.
  *
- * On start, and then once a minute, [evict] deletes the mp4 of every [Archived] recording not viewed within
- * [ServerConfig.cacheTtl], and of every [Outdated] recording whose [Recording.lastUpdate] is older than
+ * On start, and then once a minute, [evict] deletes the mp4 of every [Archived] recording neither recorded nor viewed
+ * within [ServerConfig.cacheTtl], and of every [Outdated] recording whose [Recording.lastUpdate] is older than
  * [ServerConfig.cacheTtl], and every mp4 that has no recording in [repository]. If the mp4 files still take more than
  * [ServerConfig.cacheMaxBytes], it deletes more of them until they take at most [ServerConfig.cacheTargetBytes]: first
  * [Archived], then [Outdated]. The mp4 of a `Recorded`, `Uploaded` or `Recording` recording is never deleted.
@@ -123,17 +123,17 @@ class CacheService(
     }
 
     /**
-     * Deletes from [ServerConfig.recordings] the mp4 of every [Archived] recording last viewed more than
-     * [ServerConfig.cacheTtl] ago, measured from [Recording.lastUpdate] when never viewed, and of every [Outdated]
-     * recording whose [Recording.lastUpdate] is older than [ServerConfig.cacheTtl]. Also deletes every mp4 that has no
+     * Deletes from [ServerConfig.recordings] the mp4 of every [Archived] recording recorded more than
+     * [ServerConfig.cacheTtl] ago and not viewed since then, and of every [Outdated] recording whose
+     * [Recording.lastUpdate] is older than [ServerConfig.cacheTtl]. An [Archived] recording without
+     * [Recording.recordedAt] is measured from [Recording.lastUpdate] instead. Also deletes every mp4 that has no
      * recording in [repository]. The recordings stay in [repository].
      *
      * If the mp4 files left take more than [ServerConfig.cacheMaxBytes], deletes more of them until they take at most
      * [ServerConfig.cacheTargetBytes]: first those of [Archived] recordings, then, only once no [Archived] mp4 is left,
-     * those of [Outdated] recordings. Within [Archived], the least recently viewed goes first, measured from
-     * [Recording.lastUpdate] when never viewed; within [Outdated], the oldest [Recording.lastUpdate] goes first. The mp4
-     * of any other recording is never deleted. When only such mp4 files are left above [ServerConfig.cacheTargetBytes],
-     * logs a warning and stops.
+     * those of [Outdated] recordings. Within [Archived], the one recorded or viewed longest ago goes first; within
+     * [Outdated], the oldest [Recording.lastUpdate] goes first. The mp4 of any other recording is never deleted. When
+     * only such mp4 files are left above [ServerConfig.cacheTargetBytes], logs a warning and stops.
      *
      * Before deleting anything, sets the [Recording.size] of every recording without one whose mp4 is in
      * [ServerConfig.recordings], as one transaction that changes no status. If no recording needs a size, writes nothing.
@@ -263,15 +263,13 @@ class CacheService(
     }
 
     /**
-     * Returns `true` if the mp4 of [recording] may be deleted: [recording] is `null`, it is [Archived] and was last
-     * viewed, or else set to [Archived], more than [ServerConfig.cacheTtl] ago, or it is [Outdated] and its
-     * [Recording.lastUpdate] is more than [ServerConfig.cacheTtl] ago.
+     * Returns `true` if the mp4 of [recording] may be deleted: [recording] is `null`, or it is [Archived] or [Outdated]
+     * and its [ageStart] is more than [ServerConfig.cacheTtl] ago.
      */
     private fun isExpired(recording: Recording?): Boolean =
         when {
             recording == null -> true
-            recording.status == Archived -> clock.now() - (recording.lastView ?: recording.lastUpdate) > config.cacheTtl
-            recording.status == Outdated -> clock.now() - recording.lastUpdate > config.cacheTtl
+            recording.status in TRIM_ORDER -> clock.now() - ageStart(recording) > config.cacheTtl
             else -> false
         }
 
@@ -322,18 +320,19 @@ class CacheService(
 
         val TRIM_COMPARATOR: Comparator<Recording> =
             compareBy<Recording> { TRIM_ORDER.indexOf(it.status) }
-                .thenBy { trimAge(it) }
+                .thenBy { ageStart(it) }
 
         val log = logger<CacheService>()
 
         /**
-         * Returns the time [recording] is trimmed from: the last view, or else [Recording.lastUpdate], for [Archived];
-         * [Recording.lastUpdate] alone, ignoring any view, for [Outdated].
+         * Returns the time the mp4 of [recording] ages from. For [Outdated], this is [Recording.lastUpdate], ignoring
+         * any view. For any other status, it is the later of [Recording.recordedAt] and [Recording.lastView]. If the
+         * recording has neither, returns [Recording.lastUpdate] instead.
          */
-        fun trimAge(recording: Recording): Instant =
+        fun ageStart(recording: Recording): Instant =
             when (recording.status) {
                 Outdated -> recording.lastUpdate
-                else -> recording.lastView ?: recording.lastUpdate
+                else -> listOfNotNull(recording.recordedAt, recording.lastView).maxOrNull() ?: recording.lastUpdate
             }
 
         /**

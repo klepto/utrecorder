@@ -30,9 +30,10 @@ import kotlin.time.measureTimedValue
  * [repository]. If another claimed it in between, the recorder takes the head of [queue] again. Each records one demo
  * at a time. It waits [ServerConfig.recordingCooldown] after each attempt before it records again. The cooldown after
  * the last attempt starts once the recording is stored. A failed demo is recorded again on the same recorder, up to
- * [ServerConfig.recordingMaxAttempts] attempts. A demo that names a package no source holds is given up on at once. A demo
- * whose mp4 is already stored is set to [Recorded] without recording it. Each recording is tracked in [jobs] from its
- * first attempt until its last one ends, and its outcome is set on [repository].
+ * [ServerConfig.recordingMaxAttempts] attempts. A demo that names a package no source holds, or that the game reports it
+ * cannot play, is given up on at once. A demo whose mp4 is already stored is set to [Recorded] without recording it.
+ * Each recording is tracked in [jobs] from its first attempt until its last one ends, and its outcome is set on
+ * [repository].
  *
  * @property repository The recordings, which a recorder claims a recording on.
  * @property queue The order the recordings are taken in.
@@ -96,6 +97,11 @@ class RecordingService(
 
             is RecorderResult.Failed -> {
                 log.error(result.exception) { "Giving up on recording $capId after ${config.recordingMaxAttempts} attempts" }
+                repository.finish(capId, Failed, result.exception.toString())
+            }
+
+            is RecorderResult.Unplayable -> {
+                log.error(result.exception) { "Giving up on recording $capId, the game cannot play its demo" }
                 repository.finish(capId, Failed, result.exception.toString())
             }
 

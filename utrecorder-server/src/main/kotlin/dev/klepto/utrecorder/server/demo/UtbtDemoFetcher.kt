@@ -23,8 +23,9 @@ import kotlin.uuid.Uuid
 /**
  * [DemoFetcher] over the verified cap list of UTBT.
  *
- * Each cap becomes one [Demo] whose [Demo.demoUrl] names its download under [ServerConfig.utbtDemoUrl]. A cap whose id
- * is not a UUID is skipped with a warning.
+ * A page holds the caps UTBT verified most recently first, and only the fields a [Demo] is built from. Each cap becomes
+ * one [Demo] whose [Demo.demoUrl] names its download under [ServerConfig.utbtDemoUrl]. A cap whose id is not a UUID is
+ * skipped with a warning.
  *
  * @property config The base URLs of the cap list and of the demo downloads.
  * @param engine The Ktor client engine the requests run over.
@@ -48,6 +49,8 @@ class UtbtDemoFetcher(
                 parameter("limit", limit)
                 parameter("order", "desc")
                 parameter("verified", true)
+                parameter("sort", "verified_at")
+                parameter("columns", "id,map,alias,user,cap_time_seconds,added,medal,custom_id_other_players_on_team,team_run_id")
             }
         if (!response.status.isSuccess()) throw IOException("UTBT answered ${response.status} for ${response.request.url}")
         return JSON
@@ -78,7 +81,7 @@ class UtbtDemoFetcher(
     /**
      * One page of the UTBT cap list.
      *
-     * @property data The caps of the page, newest first. UTBT leaves it out of a page without caps.
+     * @property data The caps of the page, most recently verified first. UTBT leaves it out of a page without caps.
      */
     @Serializable
     private data class CapList(

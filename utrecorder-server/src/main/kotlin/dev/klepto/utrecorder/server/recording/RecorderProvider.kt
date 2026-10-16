@@ -4,6 +4,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.core.Recorder
 import dev.klepto.utrecorder.core.RecorderConfig
 import dev.klepto.utrecorder.core.RecorderStage
+import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.ut99.UtPackageException
 import kotlinx.coroutines.CancellationException
@@ -45,6 +46,8 @@ class DefaultRecorderProvider(
             throw exception
         } catch (exception: UtPackageException) {
             RecorderResult.Unresolvable(exception)
+        } catch (exception: DemoUnplayableException) {
+            RecorderResult.Unplayable(exception)
         } catch (exception: Exception) {
             RecorderResult.Failed(exception)
         }

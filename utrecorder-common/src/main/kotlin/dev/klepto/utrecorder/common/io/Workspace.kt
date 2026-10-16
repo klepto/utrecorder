@@ -209,7 +209,7 @@ class Workspace private constructor(
         /**
          * How long an entry left behind by a workspace is kept.
          */
-        private val RETENTION = 7.days
+        private val RETENTION = 3.days
 
         /**
          * Source of the ids that workspaces carry.

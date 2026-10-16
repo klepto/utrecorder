@@ -46,7 +46,7 @@ class WorkspaceTest :
 
         val windowsOnly = { _: TestCase -> OperatingSystem.current() == WINDOWS }
 
-        fun expire(path: Path) = path.setLastModifiedTime(FileTime.from(Instant.now().minus(8, ChronoUnit.DAYS)))
+        fun expire(path: Path) = path.setLastModifiedTime(FileTime.from(Instant.now().minus(4, ChronoUnit.DAYS)))
 
         // Holds the directory of every id the next 10 minutes can produce, as another process sharing the home would.
         fun claimAhead(
@@ -354,7 +354,7 @@ class WorkspaceTest :
         }
 
         context("prune") {
-            test("removes an entry of the workspace directory older than 7 days when a workspace starts, and keeps a fresh one") {
+            test("removes an entry of the workspace directory older than 3 days when a workspace starts, and keeps a fresh one") {
                 val stale = (root / "prune-owned" / "workspace" / "stale").createDirectories()
                 val fresh = (root / "prune-owned" / "workspace" / "fresh").createDirectories()
                 expire(stale)

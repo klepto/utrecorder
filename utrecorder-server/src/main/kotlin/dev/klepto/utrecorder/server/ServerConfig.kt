@@ -35,8 +35,8 @@ import kotlin.time.Duration.Companion.seconds
  * @property dailyUploads The most uploads the upload loop starts in one day, spread evenly across the day. Also the pace
  * backlog demos are recorded at, together with the recordings of recent demos.
  * @property archiveDelay How long after it was recorded a recording waits before it is uploaded.
- * @property cacheTtl How long the mp4 of an archived recording stays in [recordings] after it was last viewed, or of
- * an outdated recording after it became outdated.
+ * @property cacheTtl How long the mp4 of an archived recording stays in [recordings] after it was recorded or last
+ * viewed, whichever is later, or of an outdated recording after it became outdated.
  * @property cacheMaxBytes The size in bytes the mp4 files in [recordings] may take before they are deleted down to
  * [cacheTargetBytes]. Configured in gigabytes.
  * @property cacheTargetBytes The size in bytes the mp4 files in [recordings] are deleted down to once they take
@@ -74,10 +74,10 @@ class ServerConfig(
     val database: Path = reader.get("server.database", directories.home["database/server.db"], String::toAbsolutePath),
     val uploadInterval: Duration = reader.duration("server.upload_interval", 1.minutes),
     val dailyUploads: Int = reader.get("server.daily_uploads", 200, String::toInt),
-    val archiveDelay: Duration = reader.duration("server.archive_delay", 1.days),
-    val cacheTtl: Duration = reader.duration("server.cache_ttl", 2.days),
-    val cacheMaxBytes: Long = reader.get("server.cache_max_gigabytes", 100L, String::toLong) * BYTES_PER_GIGABYTE,
-    val cacheTargetBytes: Long = reader.get("server.cache_target_gigabytes", 50L, String::toLong) * BYTES_PER_GIGABYTE,
+    val archiveDelay: Duration = reader.duration("server.archive_delay", 2.days),
+    val cacheTtl: Duration = reader.duration("server.cache_ttl", 4.days),
+    val cacheMaxBytes: Long = reader.get("server.cache_max_gigabytes", 80L, String::toLong) * BYTES_PER_GIGABYTE,
+    val cacheTargetBytes: Long = reader.get("server.cache_target_gigabytes", 65L, String::toLong) * BYTES_PER_GIGABYTE,
     val viewFlushInterval: Duration = reader.duration("server.view_flush_interval", 5.minutes),
     val port: Int = reader.get("server.port", 8080, String::toInt),
     val trustForwardedHeaders: Boolean = reader.get("server.trust_forwarded_headers", false, String::toBoolean),

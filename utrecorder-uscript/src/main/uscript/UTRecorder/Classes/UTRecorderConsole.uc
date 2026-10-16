@@ -7,7 +7,8 @@
 // and an end mark around the demo, then stops playback and exits the process
 // once the demo passes the end TimerStop set, the demo is over, the demo
 // spectator is gone, or a timeout runs out. While bAutoExit is on, it also
-// stops warp zones from moving actors on the client.
+// stops warp zones from moving actors on the client and NPLoader's client
+// checks from running.
 //
 // Exec commands, typically run from an -EXEC script. They act whether
 // bAutoExit is on or not:
@@ -103,6 +104,7 @@ var int SettledTicks;     // settled ticks in a row before the start seek
 var float TimerEnd;       // demo time the end mark is due at, 0 when TimerStop was not run
 var bool bSmoothRecorder; // SmoothRecorder was run
 var UTRecorderSmooth Smoother; // the smoother spawned in the demo level
+var UTRecorderNPLoaderGuard NPLoaderGuard; // the NPLoader guard spawned in the demo level
 
 var float Elapsed;        // seconds since this console was created
 var float SinceEnd;       // seconds since the demo last looked finished
@@ -166,7 +168,10 @@ event Tick(float Delta)
 		SpawnSmoother();
 
 	if (bAutoExit)
+	{
 		DisableWarpSimulation();
+		DisableNPLoader();
+	}
 
 	Super.Tick(Delta);
 
@@ -227,6 +232,32 @@ function DisableWarpSimulation()
 		Zone.OtherSideActor = None;
 		Log("UTRecorder: disabled warp simulation of" @ Zone, 'UTRecorder');
 	}
+}
+
+// Keeps a UTRecorderNPLoaderGuard spawned in the demo level, which destroys
+// every NPLoader replication info the demo spawns from then on, and destroys
+// those spawned before it.
+function DisableNPLoader()
+{
+	local DemoPlaybackSpec Spec;
+	local ReplicationInfo Info;
+
+	if (Viewport == None)
+		return;
+
+	Spec = DemoPlaybackSpec(Viewport.Actor);
+	if (Spec == None)
+		return;
+
+	if (NPLoaderGuard == None || NPLoaderGuard.bDeleteMe)
+	{
+		NPLoaderGuard = Spec.Spawn(class'UTRecorderNPLoaderGuard');
+		if (NPLoaderGuard != None)
+			Log("UTRecorder: spawned NPLoader guard" @ NPLoaderGuard, 'UTRecorder');
+	}
+
+	foreach Spec.AllActors(class'ReplicationInfo', Info)
+		class'UTRecorderNPLoaderGuard'.static.DisableActor(Info);
 }
 
 // Logs the tick delta and the level and demo clocks.
