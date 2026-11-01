@@ -10,6 +10,9 @@ export const AUTHOR_NAME = "kleps";
 /** The utbt.net user id of the author of the project. */
 export const AUTHOR_USER_ID = "424992398657978370";
 
+/** URL of utbt.net, the cap list the server records from. */
+export const UTBT_URL = "https://utbt.net";
+
 /** Returns the URL of the utbt.net page of the cap `capId`. */
 export const capUrl = (capId: string): string => {
   return `https://utbt.net/caps/${encodeURIComponent(capId)}`;

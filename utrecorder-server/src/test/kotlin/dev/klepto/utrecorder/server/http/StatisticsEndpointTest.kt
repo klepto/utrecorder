@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.server.http
 
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.server.DiskSpace
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.cache.CacheService
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
@@ -39,7 +40,13 @@ class StatisticsEndpointTest :
             }
 
         test("answers the statistics document with its field names, ISO-8601 durations, instants and dates") {
-            val config = ServerConfig(ConfigReader.EMPTY, directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home")))
+            val config =
+                ServerConfig(
+                    ConfigReader.EMPTY,
+                    directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home")),
+                    cacheMinFreeBytes = 1_000,
+                    cacheTargetFreeBytes = 2_000,
+                )
             SqliteDocumentStore.open(root.resolve("server.db")) { store ->
                 val demos = DemoRepository(store)
                 val repository = RecordingRepository(store, demos, clock)
@@ -57,7 +64,7 @@ class StatisticsEndpointTest :
                     )
                 val queue = RecordingQueue(demos, repository, config, clock)
                 val jobs = RecordingJobs()
-                val cache = CacheService(repository, null, config, clock)
+                val cache = CacheService(repository, null, config, clock, DiskSpace { 5_000 })
                 val report = StatisticsReport(demos, repository, queue, jobs, cache, config, clock)
                 testApplication {
                     application { HttpService(listOf(StatisticsEndpoint(report)), config).module(this) }
@@ -93,6 +100,8 @@ class StatisticsEndpointTest :
                                 "dailyUploads",
                             )
                         storage["cache"] shouldBe JsonNull
+                        storage["cacheMaxBytes"] shouldBe JsonNull
+                        storage["cacheTargetBytes"] shouldBe JsonNull
                         val personalBests = statistics["personalBests"]!!.jsonObject
                         personalBests.keys shouldBe setOf("lastDay", "days", "players", "demos", "maps")
                         val personalBestDay = personalBests["days"]!!.jsonArray.last().jsonObject
@@ -101,6 +110,14 @@ class StatisticsEndpointTest :
                             .jsonArray
                             .single()
                             .jsonObject.keys shouldBe setOf("map", "personalBests")
+
+                        cache.evict()
+                        val evicted = Json.parseToJsonElement(client.get("/api/statistics").bodyAsText()).jsonObject
+                        val limits = evicted["storage"]!!.jsonObject
+                        limits["cache"]!!.jsonObject.keys shouldBe setOf("bytes", "files", "measuredAt", "usableBytes")
+                        limits["cache"]!!.jsonObject["usableBytes"]!!.jsonPrimitive.content shouldBe "5000"
+                        limits["cacheMaxBytes"]!!.jsonPrimitive.content shouldBe "4000"
+                        limits["cacheTargetBytes"]!!.jsonPrimitive.content shouldBe "3000"
                         job.cancelAndJoin()
                     }
                 }

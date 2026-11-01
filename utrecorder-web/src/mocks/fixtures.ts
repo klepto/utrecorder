@@ -218,7 +218,7 @@ export const statistics: Statistics = {
     views: 20_417,
   },
   storage: {
-    cache: { bytes: 6_012_954_214, files: 262, measuredAt: "2026-09-28T17:44:00Z" },
+    cache: { bytes: 6_012_954_214, files: 262, measuredAt: "2026-09-28T17:44:00Z", usableBytes: 20_830_591_386 },
     cacheTargetBytes: 5_368_709_120,
     cacheMaxBytes: 10_737_418_240,
     archived: 912,

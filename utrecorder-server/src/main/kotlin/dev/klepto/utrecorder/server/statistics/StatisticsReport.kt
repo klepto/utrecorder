@@ -32,13 +32,16 @@ import kotlin.time.Instant
  * - A personal best is a demo with a [Demo.userId] whose [Demo.capTime] is strictly less than that of every earlier demo
  *   of the same player on the same map, by [Demo.timestamp], then [Demo.capId]. It counts on the day of its timestamp.
  * - The queue is [RecordingQueue.get] of every recording, and a queued demo is recent as [RecordingQueue.isRecent] says.
+ * - The cache limits are the bytes of [CacheService.usage] plus the usable bytes it left, minus
+ *   [ServerConfig.cacheMinFreeBytes] for the maximum and [ServerConfig.cacheTargetFreeBytes] for the target, each at
+ *   least 0. Both are `null` before the first pass, or when the pass could not read the usable bytes.
  *
  * @property demos The demos personal bests are found among.
  * @property recordings The recordings the recorder and storage figures are computed from.
  * @property queue The queue whose recordings are counted.
  * @property jobs The running recordings.
  * @property cache The cache whose usage is reported.
- * @property config The cache limits and the daily uploads reported.
+ * @property config The free space limits the cache limits derive from, and the daily uploads reported.
  * @property clock The source of now.
  */
 class StatisticsReport(
@@ -136,10 +139,12 @@ class StatisticsReport(
         now: Instant,
     ): StorageStatistics {
         val archived = all.filter { it.status == Archived }
+        val usage = cache.usage
+        val capacity = usage?.usableBytes?.let { usage.bytes + it }
         return StorageStatistics(
-            cache = cache.usage,
-            cacheTargetBytes = config.cacheTargetBytes,
-            cacheMaxBytes = config.cacheMaxBytes,
+            cache = usage,
+            cacheTargetBytes = capacity?.let { maxOf(0, it - config.cacheTargetFreeBytes) },
+            cacheMaxBytes = capacity?.let { maxOf(0, it - config.cacheMinFreeBytes) },
             archived = archived.size,
             archivedBytes = archived.sumOf { it.size ?: 0L },
             archivedUnsized = archived.count { it.size == null },

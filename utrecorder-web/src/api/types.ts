@@ -124,6 +124,8 @@ export interface CacheUsage {
   files: number;
   /** The time the cache was measured, as an ISO-8601 instant. */
   measuredAt: string;
+  /** The usable bytes the measuring pass left on the disk, or `null` if they could not be read. */
+  usableBytes: number | null;
 }
 
 /** The demos waiting to be recorded and the recordings that did not finish. */
@@ -174,8 +176,10 @@ export interface RecorderStatistics {
 export interface StorageStatistics {
   /** The hot cache, or `null` if it has not been measured. */
   cache: CacheUsage | null;
-  cacheTargetBytes: number;
-  cacheMaxBytes: number;
+  /** The size a trim of the cache cuts down to, or `null` if the free space is not known. */
+  cacheTargetBytes: number | null;
+  /** The size at which a trim of the cache starts, or `null` if the free space is not known. */
+  cacheMaxBytes: number | null;
   archived: number;
   archivedBytes: number;
   /** The archived recordings whose size is not known. */

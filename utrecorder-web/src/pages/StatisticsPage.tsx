@@ -2,6 +2,7 @@ import { Alert, Group, Paper, Progress, SimpleGrid, Skeleton, Stack, Text, Toolt
 import type { ReactNode } from "react";
 import { useStatistics, useUnresolvable } from "../api/queries";
 import type {
+  CacheUsage,
   PersonalBestDay,
   PersonalBestStatistics,
   QueueStatistics,
@@ -159,6 +160,46 @@ const RecorderPanel = ({ recorder }: { recorder: RecorderStatistics }) => {
   );
 };
 
+/**
+ * The hot cache: its bytes against the size at which a trim starts, with the size a trim cuts down to marked on the
+ * meter. Shows the bytes and files alone while either limit is not known.
+ */
+const CacheMeter = ({ cache, storage }: { cache: CacheUsage; storage: StorageStatistics }) => {
+  const { cacheMaxBytes: max, cacheTargetBytes: target } = storage;
+  if (max === null || target === null) {
+    return (
+      <Stack gap={6}>
+        <Headline figure={formatBytes(cache.bytes)} caption="in the hot cache" />
+        <Text size="sm" c="dimmed">
+          {plural(cache.files, "file")}
+        </Text>
+      </Stack>
+    );
+  }
+  return (
+    <Stack gap={6}>
+      <Headline figure={`${formatBytes(cache.bytes)} of ${formatBytes(max)}`} caption="in the hot cache" />
+      <Tooltip
+        label={`${formatBytes(cache.bytes)}, ${formatShare(cache.bytes, max)}`}
+        events={{ hover: true, focus: false, touch: true }}
+      >
+        <div className={classes.meter} aria-hidden="true">
+          <div className={classes.meterFill} style={{ width: `${percent(cache.bytes, max)}%` }} />
+          <div className={classes.tick} style={{ left: `${percent(target, max)}%` }} />
+        </div>
+      </Tooltip>
+      <Group justify="space-between">
+        <Text size="sm" c="dimmed">
+          {plural(cache.files, "file")}
+        </Text>
+        <Text size="sm" c="dimmed">
+          target {formatBytes(target)}
+        </Text>
+      </Group>
+    </Stack>
+  );
+};
+
 const StoragePanel = ({ storage }: { storage: StorageStatistics }) => {
   const { cache } = storage;
   return (
@@ -166,32 +207,7 @@ const StoragePanel = ({ storage }: { storage: StorageStatistics }) => {
       {cache === null ? (
         <Headline figure="Measuring…" caption="in the hot cache" />
       ) : (
-        <Stack gap={6}>
-          <Headline
-            figure={`${formatBytes(cache.bytes)} of ${formatBytes(storage.cacheMaxBytes)}`}
-            caption="in the hot cache"
-          />
-          <Tooltip
-            label={`${formatBytes(cache.bytes)}, ${formatShare(cache.bytes, storage.cacheMaxBytes)}`}
-            events={{ hover: true, focus: false, touch: true }}
-          >
-            <div className={classes.meter} aria-hidden="true">
-              <div className={classes.meterFill} style={{ width: `${percent(cache.bytes, storage.cacheMaxBytes)}%` }} />
-              <div
-                className={classes.tick}
-                style={{ left: `${percent(storage.cacheTargetBytes, storage.cacheMaxBytes)}%` }}
-              />
-            </div>
-          </Tooltip>
-          <Group justify="space-between">
-            <Text size="sm" c="dimmed">
-              {plural(cache.files, "file")}
-            </Text>
-            <Text size="sm" c="dimmed">
-              target {formatBytes(storage.cacheTargetBytes)}
-            </Text>
-          </Group>
-        </Stack>
+        <CacheMeter cache={cache} storage={storage} />
       )}
       <div>
         <Text>

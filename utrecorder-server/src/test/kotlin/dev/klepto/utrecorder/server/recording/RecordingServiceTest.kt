@@ -1,5 +1,9 @@
 package dev.klepto.utrecorder.server.recording
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.Progress
@@ -8,6 +12,7 @@ import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
 import dev.klepto.utrecorder.core.capture.video.VideoStream
 import dev.klepto.utrecorder.core.demo.DemoUnplayableException
+import dev.klepto.utrecorder.server.DiskSpace
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.database.SqliteDocumentStore
@@ -35,9 +40,12 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.exists
@@ -57,6 +65,7 @@ class RecordingServiceTest :
     FunSpec({
         val root = tempdir().toPath()
         val directories = DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home"))
+        val enough = DiskSpace { 10L * 1_073_741_824 }
 
         fun demo(
             capId: String,
@@ -88,7 +97,21 @@ class RecordingServiceTest :
                 recordings = recordings,
                 recordingMaxAttempts = maxAttempts,
                 recordingCooldown = cooldown,
+                recordingMinFreeBytes = 5L * 1_073_741_824,
+                recordingFreeSpaceInterval = 20.milliseconds,
             )
+
+        suspend fun logged(block: suspend () -> Unit): List<ILoggingEvent> {
+            val logger = LoggerFactory.getLogger(RecordingService::class.java.name) as Logger
+            val appender = ListAppender<ILoggingEvent>().also { it.start() }
+            logger.addAppender(appender)
+            try {
+                block()
+                return appender.list.toList()
+            } finally {
+                logger.detachAppender(appender)
+            }
+        }
 
         fun recorder(record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult): RecorderProvider =
             object : RecorderProvider {
@@ -144,6 +167,7 @@ class RecordingServiceTest :
                             },
                         ),
                         config(recordings),
+                        diskSpace = enough,
                     )
                 },
             ) { repository ->
@@ -174,6 +198,7 @@ class RecordingServiceTest :
                             recorder { demo, _ -> done(demo).also { mp4s.add((it as RecorderResult.Done).mp4) } },
                         ),
                         ServerConfig(ConfigReader.EMPTY, directories, recordings = recordings, thumbnails = thumbnails),
+                        diskSpace = enough,
                     )
                 },
             ) {
@@ -182,6 +207,35 @@ class RecordingServiceTest :
 
             thumbnails.resolve("cap.jpg").readText() shouldBe "cap.jpg"
 
+            mp4s
+                .single()
+                .parent
+                .exists()
+                .shouldBeFalse()
+        }
+
+        test("deletes the workspace of a done recording whose store fails, and sets the recording to failed") {
+            val recordings = createTempDirectory(root, "recordings")
+            val thumbnails = root.resolve("thumbnails-file").also { it.writeText("not a directory") }
+            val mp4s = CopyOnWriteArrayList<Path>()
+            running(
+                listOf(demo("cap", 0)),
+                { repository, queue ->
+                    RecordingService(
+                        repository,
+                        queue,
+                        listOf(
+                            recorder { demo, _ -> done(demo).also { mp4s.add((it as RecorderResult.Done).mp4) } },
+                        ),
+                        ServerConfig(ConfigReader.EMPTY, directories, recordings = recordings, thumbnails = thumbnails),
+                        diskSpace = enough,
+                    )
+                },
+            ) { repository ->
+                eventually(5.seconds) { repository["cap"]?.status shouldBe Failed }
+            }
+
+            recordings.resolve("cap.mp4").exists().shouldBeFalse()
             mp4s
                 .single()
                 .parent
@@ -203,6 +257,7 @@ class RecordingServiceTest :
                             recorder { demo, _ -> done(demo).also { recorded += demo.capId } },
                         ),
                         config(recordings),
+                        diskSpace = enough,
                     )
                 },
             ) { repository ->
@@ -236,6 +291,7 @@ class RecordingServiceTest :
                             },
                         ),
                         config(recordings, cooldown = 200.milliseconds),
+                        diskSpace = enough,
                     )
                 },
             ) {
@@ -265,6 +321,7 @@ class RecordingServiceTest :
                         queue,
                         listOf(recorder(record), recorder(record)),
                         config(recordings),
+                        diskSpace = enough,
                     )
                 },
             ) {
@@ -291,6 +348,7 @@ class RecordingServiceTest :
                             },
                         ),
                         config(recordings),
+                        diskSpace = enough,
                     )
                 },
             ) { repository ->
@@ -320,6 +378,7 @@ class RecordingServiceTest :
                             },
                         ),
                         config(recordings),
+                        diskSpace = enough,
                     )
                 },
             ) { repository ->
@@ -347,6 +406,7 @@ class RecordingServiceTest :
                             },
                         ),
                         config(recordings),
+                        diskSpace = enough,
                     )
                 },
             ) { repository ->
@@ -373,6 +433,7 @@ class RecordingServiceTest :
                             },
                         ),
                         config(recordings),
+                        diskSpace = enough,
                     )
                 },
             ) { repository ->
@@ -403,6 +464,7 @@ class RecordingServiceTest :
                         ),
                         config(recordings),
                         jobs,
+                        diskSpace = enough,
                     )
                 },
             ) {
@@ -438,7 +500,8 @@ class RecordingServiceTest :
                 val recorder = recorder { demo, _ -> done(demo).also { recorded += demo.capId } }
                 coroutineScope {
                     claimElsewhere.set { launch(start = CoroutineStart.UNDISPATCHED) { repository.claim("cap") } }
-                    val services: List<Service> = listOf(queue, RecordingService(repository, queue, listOf(recorder), config(recordings)))
+                    val services: List<Service> =
+                        listOf(queue, RecordingService(repository, queue, listOf(recorder), config(recordings), diskSpace = enough))
                     val job = launch { services.forEach { launch { it.start() } } }
                     eventually(5.seconds) { claimElsewhere.get() shouldBe null }
                     delay(200.milliseconds)
@@ -448,6 +511,99 @@ class RecordingServiceTest :
             }
 
             recorded.shouldBeEmpty()
+        }
+
+        test("holds back the head of the queue while the workspace has less usable space than the floor, then records it with attempt 1") {
+            val recordings = createTempDirectory(root, "recordings")
+            val usable = AtomicLong(1L * 1_073_741_824)
+            val paths = CopyOnWriteArrayList<Path>()
+            val attempts = CopyOnWriteArrayList<Int>()
+            val jobs = RecordingJobs()
+            running(
+                listOf(demo("cap", 0)),
+                { repository, queue ->
+                    RecordingService(
+                        repository,
+                        queue,
+                        listOf(
+                            recorder { demo, _ ->
+                                attempts +=
+                                    jobs.jobs
+                                        .first()
+                                        .single()
+                                        .attempt
+                                done(demo)
+                            },
+                        ),
+                        config(recordings),
+                        jobs,
+                        DiskSpace { path -> usable.get().also { paths.add(path) } },
+                    )
+                },
+            ) { repository ->
+                eventually(5.seconds) { paths.size shouldBeGreaterThanOrEqualTo 3 }
+                repository["cap"]?.status shouldBe RecordingStatus.Pending
+                attempts.shouldBeEmpty()
+
+                usable.set(5L * 1_073_741_824)
+                eventually(5.seconds) { repository["cap"]?.status shouldBe Recorded }
+            }
+
+            attempts shouldContainExactly listOf(1)
+            paths.toSet() shouldBe setOf(directories.workspace)
+        }
+
+        test("records when the usable space cannot be read, and logs the failure") {
+            val recordings = createTempDirectory(root, "recordings")
+            val events =
+                logged {
+                    running(
+                        listOf(demo("cap", 0)),
+                        { repository, queue ->
+                            RecordingService(
+                                repository,
+                                queue,
+                                listOf(recorder { demo, _ -> done(demo) }),
+                                config(recordings),
+                                diskSpace = DiskSpace { throw IOException("unreadable") },
+                            )
+                        },
+                    ) { repository ->
+                        eventually(5.seconds) { repository["cap"]?.status shouldBe Recorded }
+                    }
+                }
+
+            events.filter { it.level == Level.WARN }.map { it.throwableProxy?.message } shouldContainExactly listOf("unreadable")
+        }
+
+        test("logs one warning when a wait for free space starts, and one info line when it ends") {
+            val recordings = createTempDirectory(root, "recordings")
+            val usable = AtomicLong(0)
+            val reads = AtomicInteger()
+            val events =
+                logged {
+                    running(
+                        listOf(demo("cap", 0)),
+                        { repository, queue ->
+                            RecordingService(
+                                repository,
+                                queue,
+                                listOf(recorder { demo, _ -> done(demo) }),
+                                config(recordings),
+                                diskSpace = DiskSpace { usable.get().also { reads.incrementAndGet() } },
+                            )
+                        },
+                    ) { repository ->
+                        eventually(5.seconds) { reads.get() shouldBeGreaterThanOrEqualTo 5 }
+                        usable.set(10L * 1_073_741_824)
+                        eventually(5.seconds) { repository["cap"]?.status shouldBe Recorded }
+                    }
+                }
+
+            events.filter { it.level == Level.WARN }.map { it.formattedMessage.substringBefore(':') } shouldContainExactly
+                listOf("Pausing recordings")
+            events.filter { it.formattedMessage.startsWith("Resuming recordings") }.map { it.level } shouldContainExactly
+                listOf(Level.INFO)
         }
 
         test("rejects an empty list of recorders") {

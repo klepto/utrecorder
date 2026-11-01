@@ -6,6 +6,8 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 class ServerConfigTest :
     FunSpec({
@@ -21,6 +23,38 @@ class ServerConfigTest :
             recorder.video.targetSize shouldBe 640L
             recorder.audio.bitrate shouldBe "96k"
             recorder.ut.patchVersion shouldBe "469d"
+        }
+
+        test("defaults the cache free space limits to 15 and 20 gigabytes") {
+            val config = ServerConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = root))
+
+            config.cacheMinFreeBytes shouldBe 16_106_127_360L
+            config.cacheTargetFreeBytes shouldBe 21_474_836_480L
+        }
+
+        test("reads the cache free space limits in gigabytes") {
+            val keys = mapOf("server.cache_min_free_gigabytes" to "2", "server.cache_target_free_gigabytes" to "3")
+
+            val config = ServerConfig(ConfigReader(keys::get), DirectoriesConfig(ConfigReader.EMPTY, home = root))
+
+            config.cacheMinFreeBytes shouldBe 2_147_483_648L
+            config.cacheTargetFreeBytes shouldBe 3_221_225_472L
+        }
+
+        test("defaults the recording free space floor to 5 gigabytes, read again every minute") {
+            val config = ServerConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = root))
+
+            config.recordingMinFreeBytes shouldBe 5_368_709_120L
+            config.recordingFreeSpaceInterval shouldBe 1.minutes
+        }
+
+        test("reads the recording free space floor in gigabytes and its interval") {
+            val keys = mapOf("server.recording.min_free_gigabytes" to "2", "server.recording.free_space_interval" to "30s")
+
+            val config = ServerConfig(ConfigReader(keys::get), DirectoriesConfig(ConfigReader.EMPTY, home = root))
+
+            config.recordingMinFreeBytes shouldBe 2_147_483_648L
+            config.recordingFreeSpaceInterval shouldBe 30.seconds
         }
 
         test("installs the game of the recorder under its own directories") {

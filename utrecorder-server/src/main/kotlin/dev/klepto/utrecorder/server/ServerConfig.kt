@@ -37,10 +37,11 @@ import kotlin.time.Duration.Companion.seconds
  * @property archiveDelay How long after it was recorded a recording waits before it is uploaded.
  * @property cacheTtl How long the mp4 of an archived recording stays in [recordings] after it was recorded or last
  * viewed, whichever is later, or of an outdated recording after it became outdated.
- * @property cacheMaxBytes The size in bytes the mp4 files in [recordings] may take before they are deleted down to
- * [cacheTargetBytes]. Configured in gigabytes.
- * @property cacheTargetBytes The size in bytes the mp4 files in [recordings] are deleted down to once they take
- * more than [cacheMaxBytes]. Configured in gigabytes.
+ * @property cacheMinFreeBytes The usable bytes of the filesystem holding [recordings] below which mp4 files in
+ * [recordings] are deleted until it has [cacheTargetFreeBytes]. Configured in gigabytes.
+ * @property cacheTargetFreeBytes The usable bytes of the filesystem holding [recordings] that mp4 files in [recordings]
+ * are deleted up to once it has less than [cacheMinFreeBytes]. Meant to be at least [cacheMinFreeBytes], which is not
+ * enforced. Configured in gigabytes.
  * @property viewFlushInterval How long the views of the recordings are counted in memory before they are written to the
  * store.
  * @property port The port the HTTP server listens on.
@@ -53,6 +54,10 @@ import kotlin.time.Duration.Companion.seconds
  * @property recordingRecentAge The age up to which a demo is recent. An older demo is a backlog demo.
  * @property recordingBacklogBuffer The most recordings that may be recording, or recorded at least [archiveDelay] ago
  * without being uploaded, when a backlog demo is taken.
+ * @property recordingMinFreeBytes The usable bytes of the filesystem holding [DirectoriesConfig.workspace] below which
+ * no recorder takes a demo. Meant to be less than [cacheMinFreeBytes], which is not enforced. Configured in gigabytes.
+ * @property recordingFreeSpaceInterval How long a recorder waits between two reads of the usable bytes while they are
+ * below [recordingMinFreeBytes].
  * @property utbtApiUrl The base URL of the UTBT API that serves the cap list.
  * @property utbtDemoUrl The base URL a demo downloads from, followed by its cap id.
  * @property utbtCooldown How long the sync waits between two ticks. Each tick reads up to two pages of the cap list.
@@ -76,8 +81,8 @@ class ServerConfig(
     val dailyUploads: Int = reader.get("server.daily_uploads", 200, String::toInt),
     val archiveDelay: Duration = reader.duration("server.archive_delay", 2.days),
     val cacheTtl: Duration = reader.duration("server.cache_ttl", 4.days),
-    val cacheMaxBytes: Long = reader.get("server.cache_max_gigabytes", 80L, String::toLong) * BYTES_PER_GIGABYTE,
-    val cacheTargetBytes: Long = reader.get("server.cache_target_gigabytes", 65L, String::toLong) * BYTES_PER_GIGABYTE,
+    val cacheMinFreeBytes: Long = reader.get("server.cache_min_free_gigabytes", 15L, String::toLong) * BYTES_PER_GIGABYTE,
+    val cacheTargetFreeBytes: Long = reader.get("server.cache_target_free_gigabytes", 20L, String::toLong) * BYTES_PER_GIGABYTE,
     val viewFlushInterval: Duration = reader.duration("server.view_flush_interval", 5.minutes),
     val port: Int = reader.get("server.port", 8080, String::toInt),
     val trustForwardedHeaders: Boolean = reader.get("server.trust_forwarded_headers", false, String::toBoolean),
@@ -86,6 +91,8 @@ class ServerConfig(
     val recordingRetryInterval: Duration = reader.duration("server.recording.retry_interval", 12.hours),
     val recordingRecentAge: Duration = reader.duration("server.recording.recent_age", 1.days),
     val recordingBacklogBuffer: Int = reader.get("server.recording.backlog_buffer", 20, String::toInt),
+    val recordingMinFreeBytes: Long = reader.get("server.recording.min_free_gigabytes", 5L, String::toLong) * BYTES_PER_GIGABYTE,
+    val recordingFreeSpaceInterval: Duration = reader.duration("server.recording.free_space_interval", 1.minutes),
     val utbtApiUrl: String = reader.get("server.utbt.api_url", "https://gateway.utbt.net"),
     val utbtDemoUrl: String = reader.get("server.utbt.demo_url", "http://api.utbt.net/demos"),
     val utbtCooldown: Duration = reader.duration("server.utbt.cooldown", 1.minutes),

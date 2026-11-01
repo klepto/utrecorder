@@ -5,6 +5,7 @@ import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.common.suspendCatching
+import dev.klepto.utrecorder.server.DiskSpace
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.demo.Demo
@@ -13,6 +14,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -35,11 +37,17 @@ import kotlin.time.measureTimedValue
  * Each recording is tracked in [jobs] from its first attempt until its last one ends, and its outcome is set on
  * [repository].
  *
+ * While [diskSpace] reports less than [ServerConfig.recordingMinFreeBytes] usable on the filesystem holding the
+ * workspace, a recorder claims nothing, and reads again every [ServerConfig.recordingFreeSpaceInterval]. The head of
+ * [queue] stays unclaimed, so its status does not change and no attempt is counted. A recording that has started is
+ * never interrupted. A read that fails is logged, and counts as enough usable space.
+ *
  * @property repository The recordings, which a recorder claims a recording on.
  * @property queue The order the recordings are taken in.
  * @property recorders The recorders that take the demos.
- * @property config The recordings directory, the attempts and the cooldown.
+ * @property config The recordings directory, the attempts, the cooldown and the free space floor.
  * @property jobs The list the running recordings are tracked in.
+ * @property diskSpace The source of the usable bytes of the filesystem holding the workspace.
  * @throws IllegalArgumentException If [recorders] is empty.
  */
 class RecordingService(
@@ -48,6 +56,7 @@ class RecordingService(
     private val recorders: List<RecorderProvider> = listOf(DefaultRecorderProvider()),
     private val config: ServerConfig = ServerConfig(),
     private val jobs: RecordingJobs = RecordingJobs(),
+    private val diskSpace: DiskSpace = DiskSpace.SYSTEM,
 ) : Service {
     init {
         require(recorders.isNotEmpty()) { "Recorders must not be empty" }
@@ -59,11 +68,14 @@ class RecordingService(
         }
 
     /**
-     * Records the head of [queue] on this recorder, one at a time, once it claims its recording on [repository].
+     * Records the head of [queue] on this recorder, one at a time, once it claims its recording on [repository]. Takes
+     * the head of [queue] again after waiting for free space.
      */
     private suspend fun RecorderProvider.recordQueued() {
         while (isRunning()) {
-            val recording = repository.claim(queue.first().demo.capId) ?: continue
+            val capId = queue.first().demo.capId
+            if (awaitFreeSpace()) continue
+            val recording = repository.claim(capId) ?: continue
             val demo = recording.demo
             if (config.mp4(demo.capId).fileExists()) {
                 repository.finish(demo.capId, Recorded)
@@ -74,6 +86,35 @@ class RecordingService(
             delay(config.recordingCooldown)
         }
     }
+
+    /**
+     * Returns whether this recorder waited for free space. Suspends while [usableBytes] is below
+     * [ServerConfig.recordingMinFreeBytes], reading it again every [ServerConfig.recordingFreeSpaceInterval]. Logs a
+     * warning when the wait starts, and an info line when it ends.
+     */
+    private suspend fun awaitFreeSpace(): Boolean {
+        val usable = usableBytes() ?: return false
+        if (usable >= config.recordingMinFreeBytes) return false
+        log.warn {
+            "Pausing recordings: $usable bytes usable in ${config.directories.workspace}, " +
+                "less than ${config.recordingMinFreeBytes}"
+        }
+        do {
+            delay(config.recordingFreeSpaceInterval)
+            val current = usableBytes()
+        } while (current != null && current < config.recordingMinFreeBytes)
+        log.info { "Resuming recordings: the free space floor of ${config.directories.workspace} holds" }
+        return true
+    }
+
+    /**
+     * Returns the usable bytes of the filesystem holding the workspace, or `null`, logged, if [diskSpace] fails to read
+     * them.
+     */
+    private suspend fun usableBytes(): Long? =
+        suspendCatching { diskSpace.usableBytes(config.directories.workspace) }
+            .onFailure { log.warn(it) { "Could not read the usable space of ${config.directories.workspace}" } }
+            .getOrNull()
 
     /**
      * Stores the mp4 and the thumbnail of [result] if it is done, and logs it otherwise. Sets the outcome for [demo] on [repository]. A
@@ -151,19 +192,26 @@ class RecordingService(
 
     /**
      * Returns the size in bytes of the mp4 of [result], after moving the mp4 and the thumbnail of [result] to the
-     * recorded files of [demo] and deleting the workspace that held them.
+     * recorded files of [demo]. Deletes the workspace that held them whether the move succeeds or fails, even when the
+     * calling coroutine is cancelled. A delete that fails is logged.
      */
     private suspend fun store(
         demo: Demo,
         result: RecorderResult.Done,
     ): Long {
-        val mp4 = config.mp4(demo.capId)
-        result.thumbnail.move(config.thumbnail(demo.capId))
-        result.mp4.move(mp4)
-        result.mp4.parent
-            .deleteCatching()
-            .onFailure { log.warn(it) { "Could not delete the workspace ${result.mp4.parent}" } }
-        return withContext(Dispatchers.IO) { mp4.fileSize() }
+        val workspace = result.mp4.parent
+        try {
+            val mp4 = config.mp4(demo.capId)
+            result.thumbnail.move(config.thumbnail(demo.capId))
+            result.mp4.move(mp4)
+            return withContext(Dispatchers.IO) { mp4.fileSize() }
+        } finally {
+            withContext(NonCancellable) {
+                workspace
+                    .deleteCatching()
+                    .onFailure { log.warn(it) { "Could not delete the workspace $workspace" } }
+            }
+        }
     }
 
     private companion object {

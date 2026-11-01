@@ -1,8 +1,13 @@
 package dev.klepto.utrecorder.server.cache
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.server.DiskSpace
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.database.DocumentCollection
 import dev.klepto.utrecorder.server.database.DocumentStore
@@ -32,9 +37,12 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.KSerializer
+import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createDirectories
@@ -145,11 +153,24 @@ class CacheServiceTest :
                 ): String = "http://${server.address.hostString}:${server.address.port}/$id/$name"
             }
 
+        suspend fun logged(block: suspend () -> Unit): List<ILoggingEvent> {
+            val logger = LoggerFactory.getLogger(CacheService::class.java.name) as Logger
+            val appender = ListAppender<ILoggingEvent>().also { it.start() }
+            logger.addAppender(appender)
+            try {
+                block()
+                return appender.list.toList()
+            } finally {
+                logger.detachAppender(appender)
+            }
+        }
+
         suspend fun cache(
             statuses: Map<String, RecordingStatus>,
             mp4s: List<String>,
-            maxBytes: Long = 107_374_182_400,
-            targetBytes: Long = 53_687_091_200,
+            diskSpace: DiskSpace = DiskSpace { 1_000 },
+            minFreeBytes: Long = 100,
+            targetFreeBytes: Long = 200,
             block: suspend (CacheService, RecordingRepository, Path) -> Unit,
         ) {
             val directory = createTempDirectory(root, "cache")
@@ -161,8 +182,8 @@ class CacheServiceTest :
                     directories = DirectoriesConfig(ConfigReader.EMPTY, home = directory.resolve("home")),
                     recordings = recordings,
                     cacheTtl = 14.days,
-                    cacheMaxBytes = maxBytes,
-                    cacheTargetBytes = targetBytes,
+                    cacheMinFreeBytes = minFreeBytes,
+                    cacheTargetFreeBytes = targetFreeBytes,
                 )
             SqliteDocumentStore.open(directory.resolve("server.db")) { store ->
                 val repository = RecordingRepository(counting(store), DemoRepository(store), clock)
@@ -173,7 +194,7 @@ class CacheServiceTest :
                         it.copy(status = status, md5 = "0d111f56964985f562aaaaf9d2980787", itemId = "1234-3e92a055-ctf-bt-maverick")
                     }
                 }
-                block(CacheService(repository, uploader, config, clock), repository, recordings)
+                block(CacheService(repository, uploader, config, clock, diskSpace), repository, recordings)
             }
         }
 
@@ -287,9 +308,15 @@ class CacheServiceTest :
             }
         }
 
-        test("deletes archived, then outdated mp4 files, oldest first within outdated, down to the target size") {
+        test("deletes archived, then outdated mp4 files, oldest first within outdated, until usable plus deleted bytes reach the target") {
             val statuses = mapOf("arch1" to Archived, "out1" to Outdated, "out2" to Outdated, "recd1" to Recorded)
-            cache(statuses, statuses.keys.toList(), maxBytes = 16, targetBytes = 9) { service, repository, recordings ->
+            val reads = CopyOnWriteArrayList<Path>()
+            val diskSpace =
+                DiskSpace { path ->
+                    reads.add(path)
+                    2
+                }
+            cache(statuses, statuses.keys.toList(), diskSpace, minFreeBytes = 10, targetFreeBytes = 10) { service, repository, recordings ->
                 now.set(now.get() + 1.days)
                 repository.update("out2") { it.copy(status = Recorded) }
                 repository.update("out2") { it.copy(status = Outdated) }
@@ -301,27 +328,57 @@ class CacheServiceTest :
                 recordings.resolve("recd1.mp4").shouldExist()
                 repository["out2"]?.status shouldBe Outdated
                 repository["recd1"]?.status shouldBe Recorded
+                reads shouldBe listOf(recordings)
+                service.usage?.usableBytes shouldBe 11
             }
         }
 
-        test("keeps every mp4 while the mp4 files take at most the maximum size") {
-            val statuses = mapOf("arch1" to Archived, "recd1" to Recorded)
-            cache(statuses, statuses.keys.toList(), maxBytes = 10, targetBytes = 0) { service, _, recordings ->
+        test("keeps every mp4 that has not expired while usable space is at the minimum, however large the cache is") {
+            val statuses = mapOf("expired" to Archived, "fresh" to Archived, "recd1" to Recorded)
+            cache(
+                statuses,
+                statuses.keys.toList(),
+                DiskSpace { 10 },
+                minFreeBytes = 10,
+                targetFreeBytes = 1_000,
+            ) { service, repository, recordings ->
+                now.set(now.get() + 15.days)
+                repository.update("fresh") { it.copy(recordedAt = Instant.parse("2026-10-11T08:00:00Z")) }
                 service.evict()
 
-                recordings.resolve("arch1.mp4").shouldExist()
+                recordings.resolve("expired.mp4").shouldNotExist()
+                recordings.resolve("fresh.mp4").shouldExist()
                 recordings.resolve("recd1.mp4").shouldExist()
+                service.usage?.usableBytes shouldBe 10
             }
         }
 
-        test("never trims a recorded, uploaded or recording mp4, even above the target size") {
+        test("never trims a recorded, uploaded or recording mp4, and warns once when the target stays out of reach") {
             val statuses = mapOf("recd1" to Recorded, "upld1" to Uploaded, "recg1" to Recording)
-            cache(statuses, statuses.keys.toList(), maxBytes = 1, targetBytes = 0) { service, _, recordings ->
-                service.evict()
+            cache(statuses, statuses.keys.toList(), DiskSpace { 0 }, minFreeBytes = 10, targetFreeBytes = 20) { service, _, recordings ->
+                val events = logged { service.evict() }
 
                 recordings.resolve("recd1.mp4").shouldExist()
                 recordings.resolve("upld1.mp4").shouldExist()
                 recordings.resolve("recg1.mp4").shouldExist()
+                events.count { it.level == Level.WARN } shouldBe 1
+                service.usage?.usableBytes shouldBe 0
+            }
+        }
+
+        test("deletes nothing for size, keeps the eviction loop running and reports no usable space when the read fails") {
+            val statuses = mapOf("arch1" to Archived)
+            val diskSpace = DiskSpace { throw IOException("unreadable") }
+            cache(statuses, statuses.keys.toList(), diskSpace, minFreeBytes = 10, targetFreeBytes = 20) { service, _, recordings ->
+                coroutineScope {
+                    val job = launch { service.start() }
+                    eventually(5.seconds) { service.usage shouldBe CacheUsage(5, 1, Instant.parse("2026-09-27T08:00:00Z"), null) }
+
+                    job.isActive shouldBe true
+                    job.cancelAndJoin()
+                }
+
+                recordings.resolve("arch1.mp4").shouldExist()
             }
         }
 
@@ -467,7 +524,7 @@ class CacheServiceTest :
                 now.set(now.get() + 15.days)
                 service.evict()
 
-                service.usage shouldBe CacheUsage(4, 1, Instant.parse("2026-10-12T08:00:00Z"))
+                service.usage shouldBe CacheUsage(4, 1, Instant.parse("2026-10-12T08:00:00Z"), 1_000)
             }
         }
     })

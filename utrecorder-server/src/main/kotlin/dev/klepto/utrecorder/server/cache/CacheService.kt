@@ -5,6 +5,7 @@ import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.logger
 import dev.klepto.utrecorder.common.suspendCatching
+import dev.klepto.utrecorder.server.DiskSpace
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.recording.Recording
@@ -35,9 +36,10 @@ import kotlin.time.Instant
  *
  * On start, and then once a minute, [evict] deletes the mp4 of every [Archived] recording neither recorded nor viewed
  * within [ServerConfig.cacheTtl], and of every [Outdated] recording whose [Recording.lastUpdate] is older than
- * [ServerConfig.cacheTtl], and every mp4 that has no recording in [repository]. If the mp4 files still take more than
- * [ServerConfig.cacheMaxBytes], it deletes more of them until they take at most [ServerConfig.cacheTargetBytes]: first
- * [Archived], then [Outdated]. The mp4 of a `Recorded`, `Uploaded` or `Recording` recording is never deleted.
+ * [ServerConfig.cacheTtl], and every mp4 that has no recording in [repository]. If the filesystem holding
+ * [ServerConfig.recordings] then has less than [ServerConfig.cacheMinFreeBytes] usable, it deletes more of them until
+ * it has [ServerConfig.cacheTargetFreeBytes]: first [Archived], then [Outdated]. The mp4 of a `Recorded`, `Uploaded` or
+ * `Recording` recording is never deleted.
  *
  * [view] counts one view of a recording. The views are counted in memory, and [flushViews] writes them to [repository]:
  * once every [ServerConfig.viewFlushInterval], and once more when the service stops. If the recording is [Archived]
@@ -51,14 +53,17 @@ import kotlin.time.Instant
  *
  * @property repository The recordings whose mp4 files are kept.
  * @property uploader The remote storage a missing mp4 is downloaded from again, or `null` if nothing is uploaded.
- * @property config The recordings directory, the cache TTL, the size limits and the directories a download runs in.
+ * @property config The recordings directory, the cache TTL, the free space limits and the directories a download runs
+ * in.
  * @property clock The source of the time of a view and of the age of a recording.
+ * @property diskSpace The source of the usable bytes of the filesystem holding [ServerConfig.recordings].
  */
 class CacheService(
     private val repository: RecordingRepository,
     private val uploader: MediaUploader?,
     private val config: ServerConfig = ServerConfig(),
     private val clock: Clock = Clock.System,
+    private val diskSpace: DiskSpace = DiskSpace.SYSTEM,
 ) : Service {
     private val downloads = Channel<Recording>(Channel.UNLIMITED)
     private val downloading: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -129,15 +134,18 @@ class CacheService(
      * [Recording.recordedAt] is measured from [Recording.lastUpdate] instead. Also deletes every mp4 that has no
      * recording in [repository]. The recordings stay in [repository].
      *
-     * If the mp4 files left take more than [ServerConfig.cacheMaxBytes], deletes more of them until they take at most
-     * [ServerConfig.cacheTargetBytes]: first those of [Archived] recordings, then, only once no [Archived] mp4 is left,
-     * those of [Outdated] recordings. Within [Archived], the one recorded or viewed longest ago goes first; within
+     * Then reads the usable bytes of the filesystem holding [ServerConfig.recordings] once. If they are less than
+     * [ServerConfig.cacheMinFreeBytes], deletes more mp4 files until the usable bytes read plus the bytes deleted reach
+     * [ServerConfig.cacheTargetFreeBytes]: first those of [Archived] recordings, then, only once no [Archived] mp4 is
+     * left, those of [Outdated] recordings. Within [Archived], the one recorded or viewed longest ago goes first; within
      * [Outdated], the oldest [Recording.lastUpdate] goes first. The mp4 of any other recording is never deleted. When
-     * only such mp4 files are left above [ServerConfig.cacheTargetBytes], logs a warning and stops.
+     * only such mp4 files are left below [ServerConfig.cacheTargetFreeBytes], logs a warning and stops. If the read
+     * fails, logs it and deletes nothing more.
      *
      * Before deleting anything, sets the [Recording.size] of every recording without one whose mp4 is in
      * [ServerConfig.recordings], as one transaction that changes no status. If no recording needs a size, writes nothing.
-     * Once done, sets [usage] to the mp4 files left, measured at the time [clock] reports.
+     * Once done, sets [usage] to the mp4 files left and the usable bytes the pass left, measured at the time [clock]
+     * reports.
      */
     suspend fun evict() {
         val recordings =
@@ -151,9 +159,18 @@ class CacheService(
             .filter { isExpired(recordings[it]) }
             .filter { delete(config.mp4(it)) }
             .forEach { sizes -= it }
-        trim(recordings.values, sizes)
-        usage = CacheUsage(sizes.values.sum(), sizes.size, clock.now())
+        val usable = usableBytes()?.let { it + trim(recordings.values, sizes, it) }
+        usage = CacheUsage(sizes.values.sum(), sizes.size, clock.now(), usable)
     }
+
+    /**
+     * Returns the usable bytes of the filesystem holding [ServerConfig.recordings]. If the read fails, logs it and
+     * returns `null` instead.
+     */
+    private suspend fun usableBytes(): Long? =
+        suspendCatching { diskSpace.usableBytes(config.recordings) }
+            .onFailure { log.warn(it) { "Could not read the usable space of ${config.recordings}" } }
+            .getOrNull()
 
     /**
      * Sets the [Recording.size] of every recording of [repository] without one to its size in [sizes], keyed by cap id,
@@ -198,32 +215,35 @@ class CacheService(
     private fun withViews(recording: Recording): Recording = views[recording.demo.capId]?.let { viewed(recording, it) } ?: recording
 
     /**
-     * Deletes the mp4 files of [recordings] in trim order, if the mp4 files of [sizes] take more than
-     * [ServerConfig.cacheMaxBytes], until they take at most [ServerConfig.cacheTargetBytes]. Removes each deleted mp4
-     * from [sizes]. Logs a warning if only mp4 files that are never trimmed are left above
-     * [ServerConfig.cacheTargetBytes].
+     * Deletes the mp4 files of [recordings] in trim order, if [usable] is less than [ServerConfig.cacheMinFreeBytes],
+     * until [usable] plus the bytes deleted reach [ServerConfig.cacheTargetFreeBytes]. Removes each deleted mp4 from
+     * [sizes], and returns the bytes deleted. Logs a warning if only mp4 files that are never trimmed are left before
+     * the target is reached.
      */
     private suspend fun trim(
         recordings: Collection<Recording>,
         sizes: MutableMap<String, Long>,
-    ) {
-        var total = sizes.values.sum()
-        if (total <= config.cacheMaxBytes) return
+        usable: Long,
+    ): Long {
+        if (usable >= config.cacheMinFreeBytes) return 0
+        var freed = 0L
         val candidates =
             recordings
                 .filter { it.status in TRIM_ORDER && it.demo.capId in sizes }
                 .sortedWith(TRIM_COMPARATOR)
         for (recording in candidates) {
-            if (total <= config.cacheTargetBytes) break
+            if (usable + freed >= config.cacheTargetFreeBytes) break
             val capId = recording.demo.capId
             if (!delete(config.mp4(capId))) continue
-            total -= sizes.remove(capId) ?: 0
+            freed += sizes.remove(capId) ?: 0
         }
-        if (total > config.cacheTargetBytes) {
-            log.warn { "Cannot trim ${config.recordings} below $total bytes: only undeletable mp4 files left" }
+        val left = usable + freed
+        if (left < config.cacheTargetFreeBytes) {
+            log.warn { "Cannot trim ${config.recordings} past $left usable bytes: only undeletable mp4 files left" }
         } else {
-            log.info { "Trimmed ${config.recordings} to $total bytes" }
+            log.info { "Trimmed ${config.recordings} to $left usable bytes" }
         }
+        return freed
     }
 
     /**

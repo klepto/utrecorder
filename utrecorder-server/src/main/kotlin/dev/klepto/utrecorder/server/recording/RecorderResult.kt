@@ -12,6 +12,9 @@ sealed interface RecorderResult {
     /**
      * The demo was captured.
      *
+     * The directory that holds [mp4] is the workspace of the capture, which holds every file of it. The receiver of
+     * this result owns that directory, and deletes it once it is done with [mp4].
+     *
      * @property mp4 The captured mp4, inside the workspace of the capture.
      * @property thumbnail The thumbnail of [mp4], beside it.
      * @property video The frame size and the frame rate of the video of [mp4].

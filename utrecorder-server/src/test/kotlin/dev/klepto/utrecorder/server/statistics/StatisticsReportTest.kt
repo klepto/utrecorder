@@ -2,6 +2,7 @@ package dev.klepto.utrecorder.server.statistics
 
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
+import dev.klepto.utrecorder.server.DiskSpace
 import dev.klepto.utrecorder.server.ServerConfig
 import dev.klepto.utrecorder.server.cache.CacheService
 import dev.klepto.utrecorder.server.cache.CacheUsage
@@ -25,6 +26,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.IOException
 import java.time.LocalDate
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
@@ -84,6 +86,7 @@ class StatisticsReportTest :
         suspend fun stored(
             demos: List<Demo> = emptyList(),
             recorded: List<Demo> = emptyList(),
+            diskSpace: DiskSpace = DiskSpace { 1_500 },
             block: suspend Stored.() -> Unit,
         ) {
             val root = createTempDirectory("utrecorder-statistics-report-test")
@@ -93,8 +96,8 @@ class StatisticsReportTest :
                         ConfigReader.EMPTY,
                         DirectoriesConfig(ConfigReader.EMPTY, home = root.resolve("home")),
                         dailyUploads = 7,
-                        cacheMaxBytes = 2_000,
-                        cacheTargetBytes = 1_000,
+                        cacheMinFreeBytes = 1_000,
+                        cacheTargetFreeBytes = 2_000,
                         recordingRecentAge = 1.days,
                         recordingRetryInterval = 12.hours,
                     )
@@ -104,7 +107,7 @@ class StatisticsReportTest :
                 recordings += recorded
                 val queue = RecordingQueue(repository, recordings, config, clock)
                 val jobs = RecordingJobs()
-                val cache = CacheService(recordings, null, config, clock)
+                val cache = CacheService(recordings, null, config, clock, diskSpace)
                 val report = StatisticsReport(repository, recordings, queue, jobs, cache, config, clock)
                 coroutineScope {
                     val running = launch { queue.start() }
@@ -126,7 +129,7 @@ class StatisticsReportTest :
                 statistics.recorder.days.size shouldBe 30
                 statistics.recorder.days.first() shouldBe RecorderDay(LocalDate.parse("2026-09-06"), 0, Duration.ZERO, Duration.ZERO)
                 statistics.recorder.days.last() shouldBe RecorderDay(LocalDate.parse("2026-10-05"), 0, Duration.ZERO, Duration.ZERO)
-                statistics.storage shouldBe StorageStatistics(null, 1_000, 2_000, 0, 0, 0, 0, 7)
+                statistics.storage shouldBe StorageStatistics(null, null, null, 0, 0, 0, 0, 7)
                 statistics.personalBests.days.size shouldBe 30
                 statistics.personalBests.days.first() shouldBe PersonalBestDay(LocalDate.parse("2026-09-06"), 0, 0)
                 statistics.personalBests.days.last() shouldBe PersonalBestDay(LocalDate.parse("2026-10-05"), 0, 0)
@@ -233,9 +236,33 @@ class StatisticsReportTest :
                         )
                     statistics.recorder.completed shouldBe 4
                     statistics.recorder.views shouldBe 8
-                    statistics.storage shouldBe StorageStatistics(CacheUsage(1_234, 1, now), 1_000, 2_000, 2, 200, 1, 2, 7)
+                    statistics.storage shouldBe StorageStatistics(CacheUsage(1_234, 1, now, 1_500), 734, 1_734, 2, 200, 1, 2, 7)
                     gate.complete(Unit)
                 }
+            }
+        }
+
+        test("clamps the cache limits at zero when the cache and the usable space are less than the free space limits") {
+            stored(diskSpace = DiskSpace { 500 }) {
+                cache.evict()
+
+                val storage = report.read().storage
+
+                storage.cache shouldBe CacheUsage(0, 0, now, 500)
+                storage.cacheMaxBytes shouldBe 0
+                storage.cacheTargetBytes shouldBe 0
+            }
+        }
+
+        test("reports no cache limits when the last pass could not read the usable space") {
+            stored(diskSpace = DiskSpace { throw IOException("unreadable") }) {
+                cache.evict()
+
+                val storage = report.read().storage
+
+                storage.cache shouldBe CacheUsage(0, 0, now, null)
+                storage.cacheMaxBytes shouldBe null
+                storage.cacheTargetBytes shouldBe null
             }
         }
     })

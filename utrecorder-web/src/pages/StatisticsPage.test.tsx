@@ -28,6 +28,10 @@ const line = (content: string) => (_: string, element: Element | null) => {
   return element?.tagName === "P" && element.textContent === content;
 };
 
+const storagePanel = () => {
+  return screen.getByRole("heading", { name: "Storage" }).closest(".mantine-Paper-root") as HTMLElement;
+};
+
 describe("StatisticsPage", () => {
   test("shows a loader while the first request runs", () => {
     renderPage();
@@ -149,7 +153,39 @@ describe("StatisticsPage", () => {
 
     expect(await screen.findByText("5.6 GB of 10.0 GB")).toBeInTheDocument();
     expect(screen.getByText("262 files")).toBeInTheDocument();
+    expect(screen.getByText("target 5.0 GB")).toBeInTheDocument();
+    expect(storagePanel().querySelectorAll("[aria-hidden='true'] > div")).toHaveLength(2);
     expect(screen.getByText(line("17 of 400 uploads in the last 24 hours"))).toBeInTheDocument();
+  });
+
+  test("shows the hot cache bytes alone when its limits are not known", async () => {
+    serve({ ...statistics, storage: { ...statistics.storage, cacheMaxBytes: null, cacheTargetBytes: null } });
+    renderPage();
+
+    expect(await screen.findByText("5.6 GB")).toBeInTheDocument();
+    expect(screen.getByText("262 files")).toBeInTheDocument();
+    expect(screen.queryByText(/ of 10.0 GB$/)).toBeNull();
+    expect(screen.queryByText(/^target /)).toBeNull();
+    expect(storagePanel().querySelector("[aria-hidden='true']")).toBeNull();
+  });
+
+  test("shows the hot cache bytes alone when only its maximum is known", async () => {
+    serve({ ...statistics, storage: { ...statistics.storage, cacheTargetBytes: null } });
+    renderPage();
+
+    expect(await screen.findByText("5.6 GB")).toBeInTheDocument();
+    expect(screen.queryByText("5.6 GB of 10.0 GB")).toBeNull();
+    expect(screen.queryByText(/^target /)).toBeNull();
+    expect(storagePanel().querySelector("[aria-hidden='true']")).toBeNull();
+  });
+
+  test("shows the hot cache bytes alone when only its target is known", async () => {
+    serve({ ...statistics, storage: { ...statistics.storage, cacheMaxBytes: null } });
+    renderPage();
+
+    expect(await screen.findByText("5.6 GB")).toBeInTheDocument();
+    expect(screen.queryByText(/^target /)).toBeNull();
+    expect(storagePanel().querySelector("[aria-hidden='true']")).toBeNull();
   });
 
   test("shows the hot cache as measuring before its first measurement", async () => {

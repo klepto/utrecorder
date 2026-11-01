@@ -107,8 +107,10 @@ data class RecorderDay(
  * Statistics of the stored mp4 files.
  *
  * @property cache The usage of the cache, or `null` before its first pass.
- * @property cacheTargetBytes The size in bytes the cache is trimmed down to.
- * @property cacheMaxBytes The size in bytes the cache may take before it is trimmed.
+ * @property cacheTargetBytes The size in bytes a trim cuts the cache down to, on the disk as the last pass left it, or
+ * `null` before the first pass or when that pass could not read the usable space.
+ * @property cacheMaxBytes The size in bytes at which a trim of the cache starts, on the disk as the last pass left it,
+ * or `null` before the first pass or when that pass could not read the usable space.
  * @property archived The number of archived recordings.
  * @property archivedBytes The sum of the known sizes of the archived recordings.
  * @property archivedUnsized The number of archived recordings without a known size.
@@ -118,8 +120,8 @@ data class RecorderDay(
 @Serializable
 data class StorageStatistics(
     val cache: CacheUsage?,
-    val cacheTargetBytes: Long,
-    val cacheMaxBytes: Long,
+    val cacheTargetBytes: Long?,
+    val cacheMaxBytes: Long?,
     val archived: Int,
     val archivedBytes: Long,
     val archivedUnsized: Int,
