@@ -33,6 +33,7 @@ import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.comparables.shouldBeGreaterThanOrEqualTo
 import io.kotest.matchers.comparables.shouldBeLessThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancelAndJoin
@@ -113,12 +114,17 @@ class RecordingServiceTest :
             }
         }
 
-        fun recorder(record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult): RecorderProvider =
+        fun recorder(
+            deleteOrphans: suspend () -> Unit = {},
+            record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult,
+        ): RecorderProvider =
             object : RecorderProvider {
                 override suspend fun record(
                     demo: Demo,
                     onProgress: ProgressListener<RecorderStage>,
                 ): RecorderResult = record(demo, onProgress)
+
+                override suspend fun deleteOrphanedWorkspaces() = deleteOrphans()
             }
 
         fun done(demo: Demo): RecorderResult {
@@ -319,7 +325,7 @@ class RecordingServiceTest :
                     RecordingService(
                         repository,
                         queue,
-                        listOf(recorder(record), recorder(record)),
+                        listOf(recorder(record = record), recorder(record = record)),
                         config(recordings),
                         diskSpace = enough,
                     )
@@ -328,6 +334,44 @@ class RecordingServiceTest :
                 eventually(5.seconds) { started shouldContainExactlyInAnyOrder listOf("first", "second") }
                 gate.complete(Unit)
                 eventually(5.seconds) { names(recordings) shouldContainExactlyInAnyOrder listOf("first.mp4", "second.mp4") }
+            }
+        }
+
+        test("claims no recording on any recorder until every recorder has deleted its orphaned workspaces") {
+            val recordings = createTempDirectory(root, "recordings")
+            val events = CopyOnWriteArrayList<String>()
+            val gate = CompletableDeferred<Unit>()
+            val record: suspend (Demo, ProgressListener<RecorderStage>) -> RecorderResult = { demo, _ ->
+                events += "record ${demo.capId}"
+                done(demo)
+            }
+            running(
+                listOf(demo("cap", 0)),
+                { repository, queue ->
+                    RecordingService(
+                        repository,
+                        queue,
+                        listOf(
+                            recorder({ events += "delete first" }, record),
+                            recorder({
+                                gate.await()
+                                events += "delete second"
+                            }, record),
+                        ),
+                        config(recordings),
+                        diskSpace = enough,
+                    )
+                },
+            ) { repository ->
+                eventually(5.seconds) { events shouldContainExactly listOf("delete first") }
+                delay(300.milliseconds)
+                events shouldContainExactly listOf("delete first")
+                repository["cap"]?.status shouldNotBe RecordingStatus.Recording
+
+                gate.complete(Unit)
+
+                eventually(5.seconds) { repository["cap"]?.status shouldBe Recorded }
+                events shouldContainExactly listOf("delete first", "delete second", "record cap")
             }
         }
 

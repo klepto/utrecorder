@@ -43,8 +43,11 @@ import kotlin.time.Instant
  * recorded and whose demo is no longer chosen is removed. A [RecordingStatus.Recording] one is left alone until its
  * capture ends.
  *
- * On [start], every [RecordingStatus.Recording], [Failed] or [Unresolvable] recording is set to [Pending] again, then the
- * queue is built. After that, the queue is built again whenever [DemoRepository.changes] or
+ * On [start], every [RecordingStatus.Recording] recording was interrupted by a server stop: its
+ * [Recording.interruptions] goes up by one, and it is set to [Pending] again below [ServerConfig.recordingMaxAttempts],
+ * or to [Failed] at it. Every [Failed] recording whose [Recording.interruptions] is below
+ * [ServerConfig.recordingMaxAttempts], and every [Unresolvable] one, is set to [Pending] again. All of it is one
+ * transaction, then the queue is built. After that, the queue is built again whenever [DemoRepository.changes] or
  * [RecordingRepository.statusChanges] signals a change, and every [Failed] or [Unresolvable] recording is set to
  * [Pending] again once every [ServerConfig.recordingRetryInterval]. A build that changes nothing changes no status.
  *
@@ -64,7 +67,8 @@ import kotlin.time.Instant
  *
  * @property demos The demos to choose from.
  * @property recordings The recordings of the chosen demos.
- * @property config The retry interval, the recent age, the backlog buffer, the archive delay and the daily uploads.
+ * @property config The retry interval, the interruption limit, the recent age, the backlog buffer, the archive delay
+ * and the daily uploads.
  * @property clock The source of now, which the age of a demo is measured against.
  */
 class RecordingQueue(
@@ -145,10 +149,12 @@ class RecordingQueue(
     fun isRecent(demo: Demo): Boolean = isRecent(demo, clock.now())
 
     /**
-     * Sets every [RecordingStatus.Recording], [Failed] or [Unresolvable] recording of [recordings] to [Pending].
+     * Counts an interruption of every [RecordingStatus.Recording] recording of [recordings], and sets it to [Pending]
+     * or, at [ServerConfig.recordingMaxAttempts], to [Failed]. Sets every [Failed] recording below that limit and every
+     * [Unresolvable] one to [Pending]. Runs as one transaction.
      */
     private suspend fun requeue() {
-        setStatus(Pending) { it.status in REQUEUED }
+        recordings.updateAll { requeued(it, config.recordingMaxAttempts) }
     }
 
     /**
@@ -306,8 +312,6 @@ class RecordingQueue(
     private companion object {
         val GIVEN_UP = setOf(Failed, Unresolvable)
 
-        val REQUEUED = GIVEN_UP + RecordingStatus.Recording
-
         val MEDALS = 0..6
 
         const val CASUAL = 0
@@ -360,6 +364,41 @@ class RecordingQueue(
                 .values
                 .map { it.minWith(fastestFirst) }
                 .sortedBy { it.timestamp }
+        }
+
+        /**
+         * Returns [recording] as the server start leaves it, with [maxAttempts] as the limit of
+         * [Recording.interruptions]. A [RecordingStatus.Recording] one was interrupted by a server stop: its
+         * [Recording.interruptions] goes up by one, and it becomes [Pending] below [maxAttempts], or [Failed] with the
+         * count in its [Recording.error] at it. A [Failed] one becomes [Pending] while its [Recording.interruptions] is
+         * below [maxAttempts], and an [Unresolvable] one always does. Any other recording is returned unchanged.
+         */
+        fun requeued(
+            recording: Recording,
+            maxAttempts: Int,
+        ): Recording =
+            when (recording.status) {
+                RecordingStatus.Recording -> interrupted(recording, maxAttempts)
+                Failed if recording.interruptions >= maxAttempts -> recording
+                Failed, Unresolvable -> recording.copy(status = Pending)
+                else -> recording
+            }
+
+        /**
+         * Returns [recording], interrupted by a server stop, with its [Recording.interruptions] one higher: [Pending]
+         * below [maxAttempts], or [Failed] with the count in its [Recording.error] at it.
+         */
+        fun interrupted(
+            recording: Recording,
+            maxAttempts: Int,
+        ): Recording {
+            val interruptions = recording.interruptions + 1
+            if (interruptions < maxAttempts) return recording.copy(status = Pending, interruptions = interruptions)
+            return recording.copy(
+                status = Failed,
+                interruptions = interruptions,
+                error = "Server stopped during the recording $interruptions times",
+            )
         }
 
         /**

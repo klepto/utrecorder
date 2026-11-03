@@ -18,7 +18,8 @@ enum class RecorderStage {
     PreparingInstallation,
 
     /**
-     * The packages the demo names are installed into the installation.
+     * The packages no recording used within the package TTL are deleted from the installation, and the packages the
+     * demo names are installed into it.
      */
     ResolvingPackages,
 

@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.OutputStream
+import java.io.Reader
 import java.nio.charset.Charset
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -20,6 +21,7 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.PathWalkOption
+import kotlin.io.path.bufferedReader
 import kotlin.io.path.copyTo
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createParentDirectories
@@ -99,6 +101,107 @@ suspend fun Path.readLinesOrEmpty(charset: Charset = Charsets.UTF_8): List<Strin
             else -> emptyList()
         }
     }
+
+/**
+ * Returns the lines of the file at this path that [filter] accepts, decoded with [charset], in file order.
+ *
+ * The file is read one line at a time, and only the accepted lines are kept, so the memory used grows with the
+ * accepted lines, not with the size of the file. A line ends at `\n`, `\r` or `\r\n`, as in [readLinesOrEmpty]. A line
+ * longer than [maxLineLength] characters is cut to its first [maxLineLength] characters before [filter] sees it. If
+ * [maxLineLength] is not provided, cuts lines at 65536 characters. If the file does not exist, returns an empty list
+ * instead.
+ *
+ * @throws IllegalArgumentException if [maxLineLength] is not positive.
+ */
+suspend fun Path.readFilteredLinesOrEmpty(
+    charset: Charset = Charsets.UTF_8,
+    maxLineLength: Int = 65_536,
+    filter: (String) -> Boolean,
+): List<String> {
+    require(maxLineLength > 0) { "Maximum line length must be positive, got $maxLineLength" }
+    return withContext(Dispatchers.IO) {
+        when {
+            exists() -> bufferedReader(charset).use { it.readFilteredLines(maxLineLength, filter) }
+            else -> emptyList()
+        }
+    }
+}
+
+/**
+ * Returns the lines of this reader that [filter] accepts, each cut to its first [maxLineLength] characters.
+ */
+private fun Reader.readFilteredLines(
+    maxLineLength: Int,
+    filter: (String) -> Boolean,
+): List<String> {
+    val lines = BoundedLineFilter(maxLineLength, filter)
+    val buffer = CharArray(DEFAULT_BUFFER_SIZE)
+    generateSequence { read(buffer).takeIf { it >= 0 } }.forEach { count -> lines.accept(buffer, count) }
+    return lines.finish()
+}
+
+/**
+ * Splitter of a character stream into lines that keeps only the lines [filter] accepts, each cut to its first
+ * [maxLineLength] characters.
+ */
+private class BoundedLineFilter(
+    private val maxLineLength: Int,
+    private val filter: (String) -> Boolean,
+) {
+    private val accepted = mutableListOf<String>()
+
+    private val line = StringBuilder()
+
+    /**
+     * `true` while a line has started and no terminator has ended it yet.
+     */
+    private var lineOpen = false
+
+    /**
+     * `true` right after a `\r`, so that a `\n` following it ends no second line.
+     */
+    private var afterCarriageReturn = false
+
+    /**
+     * Splits the first [count] characters of [buffer] into lines.
+     */
+    fun accept(
+        buffer: CharArray,
+        count: Int,
+    ) {
+        for (index in 0 until count) accept(buffer[index])
+    }
+
+    /**
+     * Returns the accepted lines, the last line included when no terminator ended it.
+     */
+    fun finish(): List<String> {
+        if (lineOpen) endLine()
+        return accepted
+    }
+
+    private fun accept(character: Char) {
+        val carriageReturn = afterCarriageReturn
+        afterCarriageReturn = character == '\r'
+        when (character) {
+            '\r' -> endLine()
+            '\n' -> if (!carriageReturn) endLine()
+            else -> append(character)
+        }
+    }
+
+    private fun append(character: Char) {
+        lineOpen = true
+        if (line.length < maxLineLength) line.append(character)
+    }
+
+    private fun endLine() {
+        val text = line.toString()
+        if (filter(text)) accepted += text
+        line.setLength(0)
+        lineOpen = false
+    }
+}
 
 /**
  * Returns the contents of the file at this path, decoded with [charset].

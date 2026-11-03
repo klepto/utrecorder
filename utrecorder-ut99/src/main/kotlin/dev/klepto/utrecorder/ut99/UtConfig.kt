@@ -7,6 +7,8 @@ import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.toAbsolutePath
 import java.nio.file.Path
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
 /**
@@ -16,7 +18,7 @@ import kotlin.time.Duration.Companion.minutes
  * default. Without arguments, it reads the configuration of the current process.
  *
  * @param reader The source of the `game_directory`, `iso_url`, `iso_md5`, `patch_url`, `patch_version`, comma-separated
- * `redirect_urls` and `decompress_timeout` keys.
+ * `redirect_urls`, `decompress_timeout` and `package_ttl` keys.
  * @property directoriesConfig The directories the installation, the packages and the downloads live under. If not
  * provided, uses the directories that [reader] names.
  * @property gameDirectory The directory the game is installed in. If not provided and [reader] configures no
@@ -28,8 +30,11 @@ import kotlin.time.Duration.Companion.minutes
  * @property redirectUrls The base URLs a package missing from the installation and the packages directory is fetched
  * from.
  * @property decompressTimeout The time one run of the compiler decompressing a `.uz` archive is given to finish.
+ * @property packageTtl The time a package fetched into the installation stays there after the last recording that
+ * needed it. At least 1 hour.
  * @property patchFileName The file name of the patch release. If not provided, uses the name of the [patchVersion]
  * release for the current platform.
+ * @throws IllegalArgumentException if [packageTtl] is less than 1 hour.
  */
 class UtConfig(
     reader: ConfigReader = SystemConfigReader(),
@@ -41,5 +46,10 @@ class UtConfig(
     val patchVersion: String = reader.get("patch_version", "469e"),
     val redirectUrls: List<String> = reader.list("redirect_urls", listOf("http://api.utbt.net/redirect", "http://uz.ut-files.com")),
     val decompressTimeout: Duration = reader.duration("decompress_timeout", 5.minutes),
+    val packageTtl: Duration = reader.duration("package_ttl", 3.days),
     val patchFileName: String = UtPlatform.current().patchFileName(patchVersion),
-)
+) {
+    init {
+        require(packageTtl >= 1.hours) { "Package TTL must be at least 1 hour, got $packageTtl" }
+    }
+}

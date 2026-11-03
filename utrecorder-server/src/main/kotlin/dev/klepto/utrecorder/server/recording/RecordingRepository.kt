@@ -231,6 +231,7 @@ class RecordingRepository(
         val height: Int? = null,
         val fps: Int? = null,
         val runMedal: Int? = null,
+        val interruptions: Int = 0,
     )
 
     /**
@@ -286,6 +287,7 @@ class RecordingRepository(
                 height = recording.height,
                 fps = recording.fps,
                 runMedal = recording.runMedal,
+                interruptions = recording.interruptions,
             )
 
         /**
@@ -309,6 +311,7 @@ class RecordingRepository(
                 height = recording.height,
                 fps = recording.fps,
                 runMedal = recording.runMedal,
+                interruptions = recording.interruptions,
             )
     }
 

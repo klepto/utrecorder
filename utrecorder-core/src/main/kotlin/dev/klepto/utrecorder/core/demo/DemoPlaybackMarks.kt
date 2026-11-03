@@ -50,13 +50,22 @@ data class DemoPlaybackMarks(
     val spawn: DemoPlaybackMark? = null,
 ) {
     companion object {
+        private const val MARK_PREFIX = "UTRecorder: mark "
+
         private val MARK_PATTERN =
             Regex(
-                """UTRecorder: mark (?<label>\S+) (?<year>\d+) (?<month>\d+) (?<day>\d+) (?<hour>\d+)""" +
+                """$MARK_PREFIX(?<label>\S+) (?<year>\d+) (?<month>\d+) (?<day>\d+) (?<hour>\d+)""" +
                     """ (?<minute>\d+) (?<second>\d+) (?<millisecond>\d+) (?<frame>\S+) (?<demoTime>\S+)""",
             )
 
         private fun MatchResult.field(name: String): String = groups[name]?.value.orEmpty()
+
+        /**
+         * Returns `true` if [line] holds the text `UTRecorder: mark ` anywhere.
+         *
+         * Every line that [parse] reads as a mark passes, so a log filtered by it parses as the whole log does.
+         */
+        fun isMark(line: String): Boolean = MARK_PREFIX in line
 
         /**
          * Returns the range bounded by the first start mark and the last end mark the game logged in [lines], with the

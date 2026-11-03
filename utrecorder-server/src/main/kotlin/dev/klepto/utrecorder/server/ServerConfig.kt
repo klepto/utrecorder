@@ -47,7 +47,8 @@ import kotlin.time.Duration.Companion.seconds
  * @property port The port the HTTP server listens on.
  * @property trustForwardedHeaders Whether the HTTP server takes the origin of a request from its `X-Forwarded-*`
  * headers. Enable it only when a proxy in front of the server sets those headers.
- * @property recordingMaxAttempts How many times a demo is recorded before the server gives up on it.
+ * @property recordingMaxAttempts How many times a demo is recorded before the server gives up on it, and how many server
+ * stops during its recording the server takes before it gives up on it.
  * @property recordingCooldown How long a recorder waits after each recording.
  * @property recordingRetryInterval How long the server waits between two passes that record again every recording it gave
  * up on.

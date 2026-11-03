@@ -37,6 +37,9 @@ import kotlin.time.measureTimedValue
  * Each recording is tracked in [jobs] from its first attempt until its last one ends, and its outcome is set on
  * [repository].
  *
+ * Before any recorder claims a recording, each of [recorders] deletes the workspaces that an earlier process left
+ * behind.
+ *
  * While [diskSpace] reports less than [ServerConfig.recordingMinFreeBytes] usable on the filesystem holding the
  * workspace, a recorder claims nothing, and reads again every [ServerConfig.recordingFreeSpaceInterval]. The head of
  * [queue] stays unclaimed, so its status does not change and no attempt is counted. A recording that has started is
@@ -64,6 +67,7 @@ class RecordingService(
 
     override suspend fun start(): Unit =
         coroutineScope {
+            recorders.forEach { it.deleteOrphanedWorkspaces() }
             recorders.forEach { launch { it.recordQueued() } }
         }
 

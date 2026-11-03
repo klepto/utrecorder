@@ -84,8 +84,9 @@ class DemoPlayback(
      *
      * The run starts from the playback inis of [DemoPlaybackResources] on the `Entry` map, with the values of
      * [description] in its game ini, and its exec script plays the demo frame-based, one demo frame per tick. On Linux,
-     * the run starts through `nice -n 10`, at a lower CPU priority. [configure] sets the rest of the run after that.
-     * Lines it adds to `exec` run after the line that plays the demo.
+     * the run starts through `nice -n 10`, at a lower CPU priority. The log of the run keeps only the lines that
+     * [DemoPlaybackMarks.isMark] accepts. [configure] sets the rest of the run after that. Lines it adds to `exec` run
+     * after the line that plays the demo.
      */
     fun process(
         name: String,
@@ -100,6 +101,7 @@ class DemoPlayback(
             baseGameIni = DemoPlaybackResources.gameIni
             baseUserIni = DemoPlaybackResources.userIni
             gameIni { setGameValues(description, viewport) }
+            logFilter = DemoPlaybackMarks::isMark
             lowerPriority()
             configure()
         }

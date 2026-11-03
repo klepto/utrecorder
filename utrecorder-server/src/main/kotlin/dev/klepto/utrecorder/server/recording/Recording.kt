@@ -32,6 +32,8 @@ import kotlin.time.Instant
  * @property runMedal The medal of the run [demo] belongs to: the highest [Demo.medal] among the stored demos of its
  * [Demo.teamRunId], or the medal of [demo] itself for a solo demo. `null` if none of those demos has a medal, or if it
  * was not set yet.
+ * @property interruptions The number of times the server stopped while the recording was
+ * [RecordingStatus.Recording]. Never goes back to `0`.
  */
 @Serializable
 data class Recording(
@@ -51,6 +53,7 @@ data class Recording(
     val height: Int? = null,
     val fps: Int? = null,
     val runMedal: Int? = null,
+    val interruptions: Int = 0,
 ) {
     /**
      * Returns this recording with the frame size and the frame rate of [video]. If [video] is `null`, returns it with
@@ -84,7 +87,10 @@ enum class RecordingStatus(
     /** Waiting for a recorder. */
     Pending(isCompleted = false),
 
-    /** Taken by a recorder. Set to [Pending] again when the server starts. */
+    /**
+     * Taken by a recorder. Set to [Pending] again when the server starts, or to [Failed] once the server has stopped
+     * during it `server.recording.max_attempts` times.
+     */
     Recording(isCompleted = false),
 
     /** Stored as an mp4. */
@@ -104,7 +110,9 @@ enum class RecordingStatus(
     Outdated(isCompleted = false),
 
     /**
-     * Given up on after its last capture failed. Set to [Pending] again when the server starts, and once every
+     * Given up on after its last capture failed, or after the server stopped during it
+     * `server.recording.max_attempts` times. Set to [Pending] again when the server starts, unless its
+     * [Recording.interruptions] reached `server.recording.max_attempts`, and once every
      * `server.recording.retry_interval` while the server runs.
      */
     Failed(isCompleted = false),

@@ -119,6 +119,62 @@ suspend fun Path.extract(
     }
 
 /**
+ * Returns the names of the file entries of this archive, without extracting any of them. The file extension selects
+ * the format: `.iso`, `.zip` or `.tar.bz2`.
+ *
+ * Only the entries that [filter] accepts are returned, the same entries that [extract] with [filter] writes as files.
+ * Directory entries are left out. Entry names are passed through [filter] and returned without leading or trailing
+ * path separators, using `/` between segments.
+ *
+ * @throws IllegalStateException if the archive extension matches none of the supported formats.
+ */
+suspend fun Path.listFiles(filter: (String) -> Boolean = { true }): Set<String> =
+    withContext(Dispatchers.IO) {
+        val name = fileName.toString().lowercase()
+        val entries =
+            when {
+                name.endsWith(".iso") -> listIsoFiles()
+                name.endsWith(".zip") -> listZipFiles()
+                name.endsWith(".tar.bz2") -> listTarBzip2Files()
+                else -> error("Unsupported archive format: $fileName")
+            }
+        entries
+            .map { it.trim('/') }
+            .filter { it.isNotEmpty() && filter(it) }
+            .toSet()
+    }
+
+/**
+ * Returns the names of the file entries of this ISO 9660 image.
+ */
+private fun Path.listIsoFiles(): List<String> =
+    Iso9660FileSystem(toFile(), true).use { fileSystem ->
+        fileSystem.filterNot { it.isDirectory }.map { it.path }
+    }
+
+/**
+ * Returns the names of the file entries of this zip archive.
+ */
+private fun Path.listZipFiles(): List<String> =
+    ZipFile.builder().setPath(this).get().use { zip ->
+        zip.entries
+            .asSequence()
+            .filterNot { it.isDirectory }
+            .map { it.name }
+            .toList()
+    }
+
+/**
+ * Returns the names of the file entries of this bzip2-compressed tar archive, links included.
+ */
+private fun Path.listTarBzip2Files(): List<String> {
+    val stream = BZip2CompressorInputStream(inputStream().buffered(), true)
+    return TarArchiveInputStream(stream).use { tar ->
+        generateSequence { tar.nextEntry }.filterNot { it.isDirectory }.map { it.name }.toList()
+    }
+}
+
+/**
  * Extracts this ISO 9660 image into [target] and returns the extracted paths.
  */
 private fun Path.extractIso(

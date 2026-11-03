@@ -27,6 +27,7 @@ import java.nio.file.Paths
 import java.nio.file.attribute.FileTime
 import java.security.NoSuchAlgorithmException
 import kotlin.concurrent.thread
+import kotlin.io.path.bufferedWriter
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteExisting
@@ -275,6 +276,83 @@ class PathsTest :
                 val path = (root / "read-lines-charset").apply { writeText("café", Charsets.ISO_8859_1) }
 
                 path.readLinesOrEmpty(Charsets.ISO_8859_1) shouldBe listOf("café")
+            }
+        }
+
+        context("readFilteredLinesOrEmpty") {
+            test("returns only the lines the filter accepts, in file order") {
+                val path = file("filtered-lines", "keep first\ndrop\nkeep second\ndrop again\nkeep third")
+
+                path.readFilteredLinesOrEmpty { it.startsWith("keep") } shouldBe listOf("keep first", "keep second", "keep third")
+            }
+
+            test("returns an empty list for a missing file") {
+                (root / "filtered-lines-absent").readFilteredLinesOrEmpty { true } shouldBe emptyList()
+            }
+
+            test("ends a line at a line feed, a carriage return or both, as readLinesOrEmpty does") {
+                val path = file("filtered-lines-terminators", "a\r\nb\rc\n\r\rd\r\n")
+
+                path.readFilteredLinesOrEmpty { true } shouldBe listOf("a", "b", "c", "", "", "d")
+            }
+
+            test("returns the last line when no terminator ends it, and no empty line after a final terminator") {
+                file("filtered-lines-open", "first\nlast").readFilteredLinesOrEmpty { true } shouldBe listOf("first", "last")
+                file("filtered-lines-closed", "first\nlast\n").readFilteredLinesOrEmpty { true } shouldBe listOf("first", "last")
+                file("filtered-lines-empty", "").readFilteredLinesOrEmpty { true } shouldBe emptyList()
+            }
+
+            test("cuts a line longer than the maximum line length before the filter sees it") {
+                val path = file("filtered-lines-long", "a".repeat(100) + "\nshort")
+                val seen = mutableListOf<String>()
+
+                val lines =
+                    path.readFilteredLinesOrEmpty(maxLineLength = 10) { line ->
+                        seen += line
+                        true
+                    }
+
+                lines shouldBe listOf("aaaaaaaaaa", "short")
+                seen shouldBe listOf("aaaaaaaaaa", "short")
+            }
+
+            test("cuts a line at 65536 characters when no maximum line length is given") {
+                val path = file("filtered-lines-default-cut", "b".repeat(100_000))
+
+                path.readFilteredLinesOrEmpty { true }.map(String::length) shouldBe listOf(65536)
+            }
+
+            test("decodes with the given charset") {
+                val path = (root / "filtered-lines-charset").apply { writeText("café\ncaf", Charsets.ISO_8859_1) }
+
+                path.readFilteredLinesOrEmpty(Charsets.ISO_8859_1) { it.endsWith("é") } shouldBe listOf("café")
+            }
+
+            test("keeps only the accepted lines of a log of hundreds of megabytes") {
+                val path = root / "filtered-lines-large.log"
+                path.bufferedWriter(Charsets.ISO_8859_1).use { writer ->
+                    repeat(2_000_000) { index ->
+                        writer.write("ScriptLog: junk line $index of a runaway playback, padded to fill the log quickly\n")
+                        if (index % 500_000 == 0) writer.write("ScriptLog: UTRecorder: mark $index\n")
+                    }
+                }
+
+                val lines = path.readFilteredLinesOrEmpty(Charsets.ISO_8859_1) { "UTRecorder: mark " in it }
+
+                path.deleteExisting()
+                lines shouldBe
+                    listOf(
+                        "ScriptLog: UTRecorder: mark 0",
+                        "ScriptLog: UTRecorder: mark 500000",
+                        "ScriptLog: UTRecorder: mark 1000000",
+                        "ScriptLog: UTRecorder: mark 1500000",
+                    )
+            }
+
+            test("throws when the maximum line length is not positive") {
+                shouldThrow<IllegalArgumentException> {
+                    file("filtered-lines-zero", "line").readFilteredLinesOrEmpty(maxLineLength = 0) { true }
+                }
             }
         }
 

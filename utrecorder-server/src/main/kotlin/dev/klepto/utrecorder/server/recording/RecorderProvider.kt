@@ -3,8 +3,10 @@ package dev.klepto.utrecorder.server.recording
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.io.deleteCatching
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.logger
+import dev.klepto.utrecorder.common.suspendCatchingIo
 import dev.klepto.utrecorder.core.Recorder
 import dev.klepto.utrecorder.core.RecorderConfig
 import dev.klepto.utrecorder.core.RecorderStage
@@ -12,8 +14,12 @@ import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.ut99.UtPackageException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import java.nio.file.Path
+import kotlin.io.path.isDirectory
+import kotlin.io.path.listDirectoryEntries
 
 /**
  * Recorder of one demo at a time.
@@ -34,13 +40,23 @@ interface RecorderProvider {
         demo: Demo,
         onProgress: ProgressListener<RecorderStage> = {},
     ): RecorderResult
+
+    /**
+     * Deletes the workspace directories that recordings of an earlier process left behind. Call it once, before the
+     * first [record].
+     *
+     * A delete that fails is logged, and does not throw. By default, deletes nothing.
+     */
+    suspend fun deleteOrphanedWorkspaces() {}
 }
 
 /**
  * [RecorderProvider] backed by the core [Recorder].
  *
  * Each recording runs in a workspace of its own, which the workspaces of the [Recorder] nest in. The workspace is
- * deleted on any result other than [RecorderResult.Done], and on cancellation.
+ * deleted on any result other than [RecorderResult.Done], and on cancellation. Its directory is the entry
+ * `recording-<id>` of [DirectoriesConfig.workspace], and [deleteOrphanedWorkspaces] deletes every entry named
+ * `recording-*` there.
  *
  * @property config The configuration demos are recorded with.
  * @property directories The directories the workspace of each recording is kept under. If not provided, uses the
@@ -65,6 +81,36 @@ class DefaultRecorderProvider(
             if (result !is RecorderResult.Done) deleteOrLog(demo)
             result
         }
+
+    override suspend fun deleteOrphanedWorkspaces() {
+        orphanedWorkspacesCatching()
+            .onFailure { log.warn(it) { "Could not list the orphaned workspaces in ${directories.workspace}" } }
+            .getOrDefault(emptyList())
+            .forEach { it.deleteOrphanOrLog() }
+    }
+
+    /**
+     * Returns the outcome of listing every entry of [DirectoriesConfig.workspace] that is named like the workspace of a
+     * recording. If the directory does not exist, returns an empty list.
+     */
+    private suspend fun orphanedWorkspacesCatching(): Result<List<Path>> =
+        withContext(Dispatchers.IO) {
+            suspendCatchingIo {
+                when {
+                    directories.workspace.isDirectory() -> directories.workspace.listDirectoryEntries("$WORKSPACE_NAME-*")
+                    else -> emptyList()
+                }
+            }
+        }
+
+    /**
+     * Deletes this orphaned workspace and everything under it. A delete that fails is logged.
+     */
+    private suspend fun Path.deleteOrphanOrLog() {
+        deleteCatching()
+            .onSuccess { log.info { "Deleted the orphaned workspace $this" } }
+            .onFailure { log.warn(it) { "Could not delete the orphaned workspace $this" } }
+    }
 
     /**
      * Returns the result of recording [demo] with the core [Recorder], with every exception other than a

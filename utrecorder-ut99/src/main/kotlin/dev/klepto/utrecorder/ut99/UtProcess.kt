@@ -7,6 +7,7 @@ import dev.klepto.utrecorder.common.io.copy
 import dev.klepto.utrecorder.common.io.execute
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.link
+import dev.klepto.utrecorder.common.io.readFilteredLinesOrEmpty
 import dev.klepto.utrecorder.common.io.readLinesOrEmpty
 import dev.klepto.utrecorder.common.io.readTextOrEmpty
 import dev.klepto.utrecorder.common.io.workspace
@@ -85,6 +86,11 @@ class UtProcessBuilder(
      */
     var baseUserIni: String? = null
 
+    /**
+     * The filter that picks the lines of the run's log kept in [UtProcessResult.log]. If not set, keeps no line.
+     */
+    var logFilter: (String) -> Boolean = { false }
+
     private val gameIniEdits = mutableListOf<UtIni.() -> Unit>()
 
     private val userIniEdits = mutableListOf<UtIni.() -> Unit>()
@@ -124,6 +130,7 @@ class UtProcessBuilder(
             baseUserIni = baseUserIni,
             gameIniEdits = gameIniEdits,
             userIniEdits = userIniEdits,
+            logFilter = logFilter,
         )
 }
 
@@ -145,6 +152,7 @@ class UtProcessBuilder(
  * own.
  * @property baseUserIni The text the run's user configuration starts from, or `null` to start from the installation's
  * own.
+ * @property logFilter The filter that picks the lines of the run's log kept in [UtProcessResult.log].
  * @throws IllegalArgumentException if [name] does not match `[A-Za-z0-9._-]+`, or [programArguments] are set without a
  * [program].
  */
@@ -162,6 +170,7 @@ class UtProcess(
     val baseUserIni: String?,
     gameIniEdits: List<UtIni.() -> Unit>,
     userIniEdits: List<UtIni.() -> Unit>,
+    val logFilter: (String) -> Boolean,
 ) {
     /**
      * The arguments [program] takes ahead of the path of the game executable copy.
@@ -416,6 +425,8 @@ class UtProcess(
 
     /**
      * Returns the result of the run that exited with [exitCode], holding the contents of [files] as the run left them.
+     *
+     * Of the log, only the lines that [logFilter] accepts are read into the result.
      */
     private suspend fun result(
         files: UtProcessFiles,
@@ -423,7 +434,7 @@ class UtProcess(
     ): UtProcessResult =
         UtProcessResult(
             exitCode = exitCode,
-            log = files.log.readLinesOrEmpty(UtPlatform.CHARSET),
+            log = files.log.readFilteredLinesOrEmpty(UtPlatform.CHARSET, filter = logFilter),
             gameIni = files.gameIni.readTextOrEmpty(UtPlatform.CHARSET),
             userIni = files.userIni.readTextOrEmpty(UtPlatform.CHARSET),
             exec = files.exec.readLinesOrEmpty(UtPlatform.CHARSET),
@@ -497,7 +508,8 @@ class UtProcessFiles(
  * Returned by [UtProcess.launch].
  *
  * @property exitCode The code the process exited with, or `-1` for a killed run that reported none.
- * @property log The lines of the run's log.
+ * @property log The lines of the run's log that the run's log filter accepts, in log order. A line longer than 65536
+ * characters is cut to its first 65536 characters. If the run wrote no log, it is empty.
  * @property gameIni The game configuration as the run left it.
  * @property userIni The user configuration as the run left it.
  * @property exec The lines of the exec script the run played.

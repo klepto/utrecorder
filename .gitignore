@@ -56,3 +56,11 @@ utrecorder-web/node_modules/
 docker/development/.env
 # The host keeps its .env in /opt/utrecorder; one copied here for testing is never committed.
 docker/production/.env
+
+### Agents ###
+# Local state of the atomic-workflow server: its port, process id and access token.
+.agents/atomic-workflow/server.json
+# Chat sessions and message state the atomic-workflow server keeps for a task.
+.agents/atomic-workflow/implement-64-bit/
+# Worktrees Claude Code creates for its agents.
+.claude/worktrees/

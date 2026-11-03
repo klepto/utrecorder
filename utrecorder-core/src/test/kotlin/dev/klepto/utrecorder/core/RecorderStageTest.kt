@@ -7,6 +7,11 @@ import io.kotest.matchers.shouldBe
 
 class RecorderStageTest :
     FunSpec({
+        test("entries are the stages a recording runs, in the order it runs them, which the web client mirrors") {
+            RecorderStage.entries.map { it.name } shouldBe
+                listOf("FetchingDemo", "PreparingInstallation", "ResolvingPackages", "Capturing", "Muxing")
+        }
+
         test("start reports the stage at zero, then each progress value clamped to the range from zero to one") {
             val reports = mutableListOf<Progress<RecorderStage>>()
 

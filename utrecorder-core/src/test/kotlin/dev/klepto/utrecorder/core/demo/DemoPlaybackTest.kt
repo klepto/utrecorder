@@ -72,6 +72,16 @@ class DemoPlaybackTest :
             process.baseUserIni shouldBe DemoPlaybackResources.userIni
         }
 
+        test("process keeps only the mark lines of the log of the run") {
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
+            val viewport = DemoPlaybackViewport(width = 64, height = 48, frameRateLimit = 60.0)
+
+            val process = playback.process("capture", description, viewport) {}
+
+            process.logFilter("ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5") shouldBe true
+            process.logFilter("ScriptLog: UTRecorder: f 4600 tick 0.016 level 5.0 stream 13.0 dil 1.0") shouldBe false
+        }
+
         test("process configures the recorder console in the game ini of the run, not in a file shared by every run") {
             val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
             val viewport = DemoPlaybackViewport(width = 64, height = 48, frameRateLimit = 60.0)

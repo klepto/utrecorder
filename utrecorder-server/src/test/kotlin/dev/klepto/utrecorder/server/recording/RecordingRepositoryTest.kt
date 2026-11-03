@@ -15,6 +15,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.nio.file.Path
+import java.sql.DriverManager
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.io.path.createTempDirectory
@@ -271,5 +272,23 @@ class RecordingRepositoryTest :
                     Instant.parse("2026-09-27T09:00:00Z"),
                     Instant.parse("2026-09-27T09:00:00Z"),
                 )
+        }
+
+        test("reads a stored recording without interruptions as none, and keeps the interruptions written, once reopened") {
+            val file = file()
+            repository(file) {
+                it += listOf(demo("legacy", 0), demo("interrupted", 1))
+                it.update("interrupted") { recording -> recording.copy(interruptions = 2) }
+            }
+            DriverManager.getConnection("jdbc:sqlite:$file").use { connection ->
+                connection.prepareStatement("UPDATE recordings SET document = ? WHERE key = ?").use {
+                    it.setString(1, """{"capId":"legacy","status":"Failed","error":"Capture failed"}""")
+                    it.setString(2, "legacy")
+                    it.executeUpdate()
+                }
+            }
+
+            val interruptions = repository(file) { repository -> repository.all().map { it.demo.capId to it.interruptions } }
+            interruptions shouldBe listOf("legacy" to 0, "interrupted" to 2)
         }
     })

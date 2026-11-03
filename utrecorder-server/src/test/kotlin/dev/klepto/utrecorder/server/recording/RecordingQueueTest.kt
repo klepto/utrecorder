@@ -71,6 +71,7 @@ class RecordingQueueTest :
 
         suspend fun <R> stored(
             retryInterval: Duration = 12.hours,
+            maxAttempts: Int = 3,
             dailyUploads: Int = 200,
             backlogBuffer: Int = 1,
             source: Clock = clock,
@@ -85,6 +86,7 @@ class RecordingQueueTest :
                         DirectoriesConfig(ConfigReader.EMPTY, home = home),
                         dailyUploads = dailyUploads,
                         recordingRetryInterval = retryInterval,
+                        recordingMaxAttempts = maxAttempts,
                         recordingRecentAge = 1.days,
                         recordingBacklogBuffer = backlogBuffer,
                         archiveDelay = 1.days,
@@ -738,6 +740,82 @@ class RecordingQueueTest :
                     running(queue) { capIds(queue) to repository["recorded"]?.status }
                 }
             got shouldBe (listOf("unresolvable", "failed", "recording") to Recorded)
+        }
+
+        test("counts an interruption of each recording found recording on start, and queues it again below the limit") {
+            val got =
+                stored(maxAttempts = 3) { _, repository, queue ->
+                    repository += listOf(demo("first", 2.hours), demo("second", 1.hours))
+                    repository.claim("first")
+                    repository.claim("second")
+                    repository.update("second") { it.copy(interruptions = 1) }
+                    running(queue) {
+                        capIds(queue)
+                        repository.all().map { Triple(it.demo.capId, it.status, it.interruptions) }
+                    }
+                }
+            got shouldBe listOf(Triple("first", Pending, 1), Triple("second", Pending, 2))
+        }
+
+        test("fails a recording found recording on start once its interruptions reach the limit") {
+            val got =
+                stored(maxAttempts = 3) { _, repository, queue ->
+                    repository += listOf(demo("crashing", 1.hours))
+                    repository.claim("crashing")
+                    repository.update("crashing") { it.copy(interruptions = 2) }
+                    running(queue) { capIds(queue) to repository["crashing"] }
+                }
+            got.first shouldBe emptyList()
+            got.second?.status shouldBe Failed
+            got.second?.interruptions shouldBe 3
+            got.second?.error shouldBe "Server stopped during the recording 3 times"
+        }
+
+        test("keeps a failed recording at or over the interruption limit failed on start, and queues the other given up ones") {
+            val got =
+                stored(maxAttempts = 3) { _, repository, queue ->
+                    repository +=
+                        listOf(
+                            demo("at-limit", 4.hours),
+                            demo("over-limit", 3.hours),
+                            demo("below-limit", 2.hours),
+                            demo("unresolvable", 1.hours),
+                        )
+                    repository.finish("at-limit", Failed, "Server stopped during the recording 3 times")
+                    repository.finish("over-limit", Failed, "Capture failed")
+                    repository.finish("below-limit", Failed, "Capture failed")
+                    repository.finish("unresolvable", Unresolvable, "Missing BTPog")
+                    repository.update("at-limit") { it.copy(interruptions = 3) }
+                    repository.update("over-limit") { it.copy(interruptions = 4) }
+                    repository.update("below-limit") { it.copy(interruptions = 2) }
+                    repository.update("unresolvable") { it.copy(interruptions = 5) }
+                    running(queue) {
+                        capIds(queue)
+                        repository.all().map { Triple(it.demo.capId, it.status, it.interruptions) }
+                    }
+                }
+            got shouldBe
+                listOf(
+                    Triple("at-limit", Failed, 3),
+                    Triple("over-limit", Failed, 4),
+                    Triple("below-limit", Pending, 2),
+                    Triple("unresolvable", Pending, 5),
+                )
+        }
+
+        test("queues a recording failed by the interruption limit again once the retry interval passes, and keeps its count") {
+            stored(retryInterval = 300.milliseconds, maxAttempts = 3) { _, repository, queue ->
+                repository += listOf(demo("crashing", 1.hours))
+                repository.claim("crashing")
+                repository.update("crashing") { it.copy(interruptions = 2) }
+                running(queue) {
+                    capIds(queue) shouldBe emptyList()
+                    repository["crashing"]?.status shouldBe Failed
+                    eventually(5.seconds) { capIds(queue) shouldBe listOf("crashing") }
+                    repository["crashing"]?.interruptions shouldBe 3
+                    repository["crashing"]?.error shouldBe "Server stopped during the recording 3 times"
+                }
+            }
         }
 
         test("queues failed and unresolvable recordings again once the retry interval passes, and leaves outdated and the rest") {

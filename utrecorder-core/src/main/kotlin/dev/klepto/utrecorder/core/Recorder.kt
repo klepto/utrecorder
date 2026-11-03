@@ -18,8 +18,8 @@ import dev.klepto.utrecorder.core.demo.DemoPlaybackUscript
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtInstaller
 import dev.klepto.utrecorder.ut99.UtMapInstaller
+import dev.klepto.utrecorder.ut99.UtPackageCache
 import dev.klepto.utrecorder.ut99.UtPackageException
-import dev.klepto.utrecorder.ut99.UtPackageInstaller
 import dev.klepto.utrecorder.ut99.demo.UtDemo
 import java.net.URI
 import java.net.URLDecoder
@@ -65,6 +65,7 @@ class Recorder(
             val process =
                 installation.process("play-demo") {
                     exec = listOf(description.execLine)
+                    logFilter = DemoPlaybackMarks::isMark
                     sound = false
                     windowed = true
                     gameIni {
@@ -127,9 +128,10 @@ class Recorder(
      * it, and the frame size and the frame rate of its video.
      *
      * The installation is provisioned and its maps are decompressed when either is missing. Every package the demo
-     * names is installed at the GUID the demo recorded. The recorder's console package and HUD layout are installed
-     * too. The mp4, its thumbnail and the files of both captures are kept in a workspace of their own, whether the recording succeeds
-     * or fails. Several recordings may share one installation.
+     * names is installed at the GUID the demo recorded, and stays in the installation until `packageTtl` of
+     * [dev.klepto.utrecorder.ut99.UtConfig] passes with no recording that needs it. The recorder's console package and
+     * HUD layout are installed too. The mp4, its thumbnail and the files of both captures are kept in a workspace of
+     * their own, whether the recording succeeds or fails. Several recordings may share one installation.
      *
      * [onProgress] receives each [RecorderStage] after [FetchingDemo] as it starts, and an estimate of how much of the
      * stage is done while it runs. It is called from any thread, and often, so it must return quickly.
@@ -159,11 +161,11 @@ class Recorder(
         val preparing = PreparingInstallation.start(onProgress)
         UtInstaller(config.ut).install(preparing.part(0.0, 0.8))
         val installation = UtInstallation(config.ut.gameDirectory, config.ut)
-        DemoPlaybackUscript(installation).install()
+        val keep = DemoPlaybackUscript(installation).install()
         DemoPlaybackResources.installHudLayout(installation)
         UtMapInstaller(installation).install(preparing.part(0.8, 1.0))
         val parsed = UtDemo.read(demo)
-        UtPackageInstaller(parsed.packages, installation, config.ut).install(ResolvingPackages.start(onProgress))
+        UtPackageCache(installation, config.ut).resolve(parsed.packages, keep, ResolvingPackages.start(onProgress))
         val pipeline = RecorderPipeline(config.video, config.audio, installation, directories)
         return pipeline.record(demo, name, parsed.cap?.runTime, onProgress)
     }

@@ -112,6 +112,17 @@ class RecordingEndpointTest :
             }
         }
 
+        test("answers the interruptions of a recording") {
+            http(mapOf("interrupted" to Failed, "pending" to Pending)) { repository ->
+                repository.update("interrupted") { it.copy(interruptions = 3) }
+                val interrupted = Json.parseToJsonElement(client.get("/api/recording/interrupted").bodyAsText()).jsonObject
+                val pending = Json.parseToJsonElement(client.get("/api/recording/pending").bodyAsText()).jsonObject
+
+                interrupted["interruptions"]!!.jsonPrimitive.content shouldBe "3"
+                pending["interruptions"]!!.jsonPrimitive.content shouldBe "0"
+            }
+        }
+
         test("lists an outdated recording while its mp4 exists, in the same order as the others") {
             http(
                 mapOf("outdated" to Outdated, "recorded" to Recorded),

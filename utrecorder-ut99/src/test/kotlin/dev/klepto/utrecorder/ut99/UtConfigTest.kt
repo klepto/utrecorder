@@ -5,11 +5,14 @@ import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.SystemConfigReader
 import dev.klepto.utrecorder.ut99.UtPlatform.LINUX
 import dev.klepto.utrecorder.ut99.UtPlatform.WINDOWS
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import java.nio.file.Path
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -89,5 +92,25 @@ class UtConfigTest :
 
         test("gives a decompression five minutes when decompress_timeout is not set") {
             UtConfig(ConfigReader.EMPTY, directories).decompressTimeout shouldBe 5.minutes
+        }
+
+        test("keeps a package for 3 days when package_ttl is not set") {
+            UtConfig(ConfigReader.EMPTY, directories).packageTtl shouldBe 3.days
+        }
+
+        test("reads package_ttl as a duration") {
+            val reader = readerOf("utrecorder.package_ttl" to "72h")
+
+            UtConfig(reader, directories).packageTtl shouldBe 72.hours
+        }
+
+        test("accepts a package_ttl of 1 hour") {
+            UtConfig(ConfigReader.EMPTY, directories, packageTtl = 1.hours).packageTtl shouldBe 1.hours
+        }
+
+        test("throws when package_ttl is less than 1 hour") {
+            val reader = readerOf("utrecorder.package_ttl" to "59m")
+
+            shouldThrow<IllegalArgumentException> { UtConfig(reader, directories) }
         }
     })

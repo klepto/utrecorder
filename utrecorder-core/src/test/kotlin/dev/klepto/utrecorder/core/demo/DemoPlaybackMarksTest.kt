@@ -39,6 +39,41 @@ class DemoPlaybackMarksTest :
                 )
         }
 
+        test("isMark accepts every line parse reads as a mark, and rejects a line without the mark text") {
+            val marks =
+                listOf(
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "ScriptLog: UTRecorder: mark spawn 2026 9 13 10 30 6 500 4650 13.75",
+                    "UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
+                )
+            val others =
+                listOf(
+                    "Log: Log file open, 09/13/26 10:30:00",
+                    "ScriptLog: UTRecorder: f 4600 tick 0.016 level 5.0 stream 13.0 dil 1.0",
+                    "ScriptLog: UTRecorder: mark",
+                    "ScriptLog: UTRecorder:  mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "",
+                )
+
+            marks.filter(DemoPlaybackMarks::isMark) shouldBe marks
+            others.filter(DemoPlaybackMarks::isMark) shouldBe emptyList()
+        }
+
+        test("parse returns the same marks for a log filtered by isMark as for the whole log") {
+            val lines =
+                listOf(
+                    "Log: Log file open, 09/13/26 10:30:00",
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "ScriptLog: UTRecorder: f 4600 tick 0.016 level 5.0 stream 13.0 dil 1.0",
+                    "ScriptLog: UTRecorder: mark spawn 2026 9 13 10 30 6 500 4650 13.75",
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 not-a-frame 12.5",
+                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
+                    "Exit: Preparing to exit.",
+                )
+
+            DemoPlaybackMarks.parse(lines.filter(DemoPlaybackMarks::isMark)) shouldBe DemoPlaybackMarks.parse(lines)
+        }
+
         test("parse throws naming the start mark when the log holds no start mark") {
             val lines =
                 listOf(
