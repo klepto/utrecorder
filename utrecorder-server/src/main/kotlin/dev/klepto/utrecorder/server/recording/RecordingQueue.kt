@@ -37,19 +37,22 @@ import kotlin.time.Instant
  * once, for each of its [Demo.teammates], a stored demo with that [Demo.userId] and the same [Demo.teamRunId] exists; a
  * team demo without a [Demo.teamRunId] is never complete. An incomplete team demo is neither queued nor compared: it
  * beats nothing and outdates nothing until the build after the missing demos are stored. Of two demos with the same team
- * time, the one added first is queued. A demo without a [Demo.userId] is never queued. A [Recorded], [Uploaded] or
- * [Archived] recording stays chosen until a faster recording of the same player with the same teammates on the same map
- * is [Recorded], [Uploaded] or [Archived] as well; it is set to [Outdated] then. Every recording that has not been
- * recorded and whose demo is no longer chosen is removed. A [RecordingStatus.Recording] one is left alone until its
- * capture ends.
+ * time, the one added first is queued. A demo without a [Demo.userId] is never queued, and neither is a
+ * [withdrawn][DemoRepository.withdrawn] demo. A withdrawn demo still counts toward the team time and the completeness of
+ * its run. A [Recorded], [Uploaded] or [Archived] recording stays chosen until a faster recording of the same player with
+ * the same teammates on the same map is [Recorded], [Uploaded] or [Archived] as well; it is set to [Outdated] then. A
+ * completed recording of a demo that is not withdrawn beats every completed recording of a withdrawn demo, however fast.
+ * Every recording that has not been recorded and whose demo is no longer chosen is removed. A
+ * [RecordingStatus.Recording] one is left alone until its capture ends.
  *
  * On [start], every [RecordingStatus.Recording] recording was interrupted by a server stop: its
  * [Recording.interruptions] goes up by one, and it is set to [Pending] again below [ServerConfig.recordingMaxAttempts],
  * or to [Failed] at it. Every [Failed] recording whose [Recording.interruptions] is below
  * [ServerConfig.recordingMaxAttempts], and every [Unresolvable] one, is set to [Pending] again. All of it is one
  * transaction, then the queue is built. After that, the queue is built again whenever [DemoRepository.changes] or
- * [RecordingRepository.statusChanges] signals a change, and every [Failed] or [Unresolvable] recording is set to
- * [Pending] again once every [ServerConfig.recordingRetryInterval]. A build that changes nothing changes no status.
+ * [RecordingRepository.statusChanges] signals a change, a change of the withdrawn demos included, and every [Failed]
+ * or [Unresolvable] recording is set to [Pending] again once every [ServerConfig.recordingRetryInterval]. A build that
+ * changes nothing changes no status.
  *
  * Every build sets the [Recording.runMedal] of each recording: the [Demo.medal] of the fastest stored demo of its
  * [Demo.teamRunId] that has a medal, or its own [Demo.medal] for a solo demo.
@@ -175,21 +178,24 @@ class RecordingQueue(
     }
 
     /**
-     * Stores a recording of the fastest demo of each player with the same teammates on each map in [recordings]. Chooses
-     * those demos, and the fastest [completed][RecordingStatus.isCompleted] recording of each player with the same
-     * teammates on each map, comparing the team time over every stored demo and skipping every incomplete team demo.
-     * Removes every recording that has not been recorded and whose demo is not chosen, and sets every
-     * [completed][RecordingStatus.isCompleted] recording whose demo is complete but not chosen to [Outdated]. Sets the
-     * [Recording.runMedal] of every recording.
+     * Stores a recording of the fastest demo that is not withdrawn of each player with the same teammates on each map in
+     * [recordings]. Chooses those demos, and the fastest [completed][RecordingStatus.isCompleted] recording of each
+     * player with the same teammates on each map, preferring one whose demo is not withdrawn. Compares the team time over
+     * every stored demo, withdrawn ones included, and skips every incomplete team demo. Removes every recording that has
+     * not been recorded and whose demo is not chosen, and sets every [completed][RecordingStatus.isCompleted] recording
+     * whose demo is complete but not chosen to [Outdated]. Sets the [Recording.runMedal] of every recording.
      */
     private suspend fun build(): Unit =
         building.withLock {
             val all = demos.all()
+            val withdrawn = demos.withdrawn()
             val runs = runs(all)
-            val fastest = fastest(all, runs)
+            val listed = all.filter { it.capId !in withdrawn }
+            val fastest = fastest(listed, runs)
             recordings += fastest
             val completed = recordings.all().filter { it.status.isCompleted }
-            val chosen = (fastest + fastest(completed.map { it.demo }, runs)).mapTo(HashSet()) { it.capId }
+            val fastestCompleted = fastest(completed.map { it.demo }, runs, withdrawn)
+            val chosen = (fastest + fastestCompleted).mapTo(HashSet()) { it.capId }
             val beaten =
                 completed
                     .map { it.demo }
@@ -348,15 +354,19 @@ class RecordingQueue(
 
         /**
          * Returns the fastest of [demos] for each player with the same teammates on each map, oldest first. The demos
-         * are compared by their team time over [runs], then by [Demo.timestamp]. A demo without a [Demo.userId] and an
-         * incomplete team demo are never returned.
+         * are compared by their team time over [runs], then by [Demo.timestamp]. A demo whose cap id is in [withdrawn]
+         * is returned only when every demo of its player, teammates and map is withdrawn. A demo without a
+         * [Demo.userId] and an incomplete team demo are never returned. If [withdrawn] is not provided, every demo
+         * competes on its team time alone.
          */
         fun fastest(
             demos: List<Demo>,
             runs: Map<String, List<Demo>>,
+            withdrawn: Set<String> = emptySet(),
         ): List<Demo> {
             val fastestFirst =
-                compareBy<Demo> { teamTime(it, runs) }
+                compareBy<Demo> { it.capId in withdrawn }
+                    .thenBy { teamTime(it, runs) }
                     .thenBy { it.timestamp }
             return demos
                 .filter { it.userId != null && teamTime(it, runs) != null }

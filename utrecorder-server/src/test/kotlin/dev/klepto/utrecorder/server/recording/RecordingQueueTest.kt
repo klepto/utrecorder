@@ -705,6 +705,117 @@ class RecordingQueueTest :
             }
         }
 
+        test("queues the slower demo of a player on a map once the faster one is withdrawn, and removes the withdrawn one's recording") {
+            stored { demos, repository, queue ->
+                demos +=
+                    listOf(
+                        demo("withdrawn", 2.hours, userId = "1"),
+                        demo("verified", 1.hours, userId = "1", capTime = 11.seconds),
+                    )
+                running(queue) {
+                    capIds(queue) shouldBe listOf("withdrawn")
+                    demos.withdrawAllExcept(setOf("verified"))
+                    eventually(5.seconds) { capIds(queue) shouldBe listOf("verified") }
+                    repository.all().map { it.demo.capId to it.status } shouldBe listOf("verified" to Pending)
+                }
+            }
+        }
+
+        test("keeps a completed recording of a withdrawn demo while the verified one is pending, and outdates it once that one completes") {
+            stored { demos, repository, queue ->
+                repository +=
+                    listOf(
+                        demo("withdrawn-1", 6.hours, userId = "1"),
+                        demo("withdrawn-2", 5.hours, userId = "2"),
+                        demo("withdrawn-3", 4.hours, userId = "3"),
+                    )
+                listOf("withdrawn-1", "withdrawn-2", "withdrawn-3").forEach { capId ->
+                    repository.update(capId) { it.copy(status = Archived, md5 = "$capId-md5") }
+                }
+                demos.withdrawAllExcept(emptySet())
+                demos +=
+                    listOf(
+                        demo("recorded", 3.hours, userId = "1", capTime = 11.seconds),
+                        demo("uploaded", 2.hours, userId = "2", capTime = 11.seconds),
+                        demo("archived", 1.hours, userId = "3", capTime = 11.seconds),
+                    )
+                running(queue) {
+                    capIds(queue) shouldBe listOf("archived", "uploaded", "recorded")
+                    repository["withdrawn-1"]?.status shouldBe Archived
+                    repository["withdrawn-2"]?.status shouldBe Archived
+                    repository["withdrawn-3"]?.status shouldBe Archived
+                    repository.finish("recorded", Recorded)
+                    repository.update("uploaded") { it.copy(status = Uploaded, md5 = "uploaded-md5") }
+                    repository.update("archived") { it.copy(status = Archived, md5 = "archived-md5") }
+                    eventually(5.seconds) {
+                        repository["withdrawn-1"]?.status shouldBe Outdated
+                        repository["withdrawn-2"]?.status shouldBe Outdated
+                        repository["withdrawn-3"]?.status shouldBe Outdated
+                    }
+                    repository["recorded"]?.status shouldBe Recorded
+                    repository["uploaded"]?.status shouldBe Uploaded
+                    repository["archived"]?.status shouldBe Archived
+                }
+            }
+        }
+
+        test("keeps the fastest completed recording of a key whose demos are all withdrawn, and outdates the rest") {
+            stored { demos, repository, queue ->
+                repository +=
+                    listOf(
+                        demo("slower", 3.hours, userId = "1", capTime = 12.seconds),
+                        demo("faster", 2.hours, userId = "1"),
+                        demo("alone", 1.hours, userId = "2"),
+                    )
+                repository.finish("slower", Recorded)
+                repository.finish("faster", Recorded)
+                repository.update("alone") { it.copy(status = Archived, md5 = "alone-md5") }
+                demos.withdrawAllExcept(emptySet())
+                running(queue) {
+                    eventually(5.seconds) { repository["slower"]?.status shouldBe Outdated }
+                    delay(100.milliseconds)
+                    repository["faster"]?.status shouldBe Recorded
+                    repository["alone"]?.status shouldBe Archived
+                    capIds(queue) shouldBe emptyList()
+                }
+            }
+        }
+
+        test("lets a withdrawn demo that is restored compete again") {
+            stored { demos, repository, queue ->
+                demos +=
+                    listOf(
+                        demo("restored", 2.hours, userId = "1"),
+                        demo("verified", 1.hours, userId = "1", capTime = 11.seconds),
+                    )
+                demos.withdrawAllExcept(setOf("verified"))
+                running(queue) {
+                    capIds(queue) shouldBe listOf("verified")
+                    demos.restore(listOf("restored"))
+                    eventually(5.seconds) { repository.all().map { it.demo.capId } shouldBe listOf("restored") }
+                    capIds(queue) shouldBe listOf("restored")
+                }
+            }
+        }
+
+        test("keeps the team time and completeness of a team demo whose teammate's demo is withdrawn") {
+            stored { demos, _, queue ->
+                demos +=
+                    listOf(
+                        demo("a-1", 6.hours, userId = "1", map = "CTF-BT-Other", teammates = listOf("2"), teamRunId = "A"),
+                        demo("a-2", 6.hours, userId = "2", map = "CTF-BT-Other", teammates = listOf("1"), teamRunId = "A"),
+                        demo("b-1", 5.hours, userId = "1", teammates = listOf("2"), teamRunId = "B"),
+                        demo("b-2", 5.hours, userId = "2", capTime = 14.seconds, teammates = listOf("1"), teamRunId = "B"),
+                        demo("c-1", 4.hours, userId = "1", capTime = 12.seconds, teammates = listOf("2"), teamRunId = "C"),
+                        demo("c-2", 4.hours, userId = "2", capTime = 12.seconds, teammates = listOf("1"), teamRunId = "C"),
+                    )
+                demos.withdrawAllExcept(setOf("a-1", "b-1", "c-1", "c-2"))
+                running(queue) {
+                    capIds(queue).toSet() shouldBe setOf("a-1", "c-1", "c-2")
+                }
+            }
+        }
+
         test("raises no status change from a build that changes nothing") {
             val changes =
                 stored { demos, repository, queue ->

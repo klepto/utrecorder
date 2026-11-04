@@ -1,5 +1,9 @@
 package dev.klepto.utrecorder.server.demo
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.server.ServerConfig
@@ -7,16 +11,22 @@ import dev.klepto.utrecorder.server.database.SqliteDocumentStore
 import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
+import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.ints.shouldBeGreaterThan
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.path.createTempDirectory
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
@@ -78,16 +88,51 @@ class DemoServiceTest :
                 }
             }
 
+        /**
+         * A fetcher whose page at an offset is [page] of the offset and of the count of reads of that offset so far,
+         * that records the offset of each request.
+         */
+        fun pagedFetcher(
+            requests: MutableList<Int>,
+            page: (offset: Int, read: Int) -> List<Int>,
+        ): DemoFetcher {
+            val reads = ConcurrentHashMap<Int, AtomicInteger>()
+            return object : DemoFetcher {
+                override suspend fun fetch(
+                    offset: Int,
+                    limit: Int,
+                ): List<Demo> {
+                    requests += offset
+                    val read = reads.getOrPut(offset) { AtomicInteger() }.incrementAndGet()
+                    return page(offset, read).map { demo(it) }
+                }
+            }
+        }
+
+        suspend fun logged(block: suspend () -> Unit): List<ILoggingEvent> {
+            val logger = LoggerFactory.getLogger(DemoService::class.java.name) as Logger
+            val appender = ListAppender<ILoggingEvent>().also { it.start() }
+            logger.addAppender(appender)
+            try {
+                block()
+                return appender.list.toList()
+            } finally {
+                logger.detachAppender(appender)
+            }
+        }
+
         suspend fun syncing(
             fetcher: DemoFetcher,
             serverConfig: ServerConfig,
             timeSource: TimeSource = TimeSource.Monotonic,
             stored: List<Int> = emptyList(),
+            withdrawn: List<Int> = emptyList(),
             block: suspend (DemoRepository) -> Unit,
         ) {
             SqliteDocumentStore.open(createTempDirectory("utrecorder-demo-service-test").resolve("server.db")) { store ->
                 val repository = DemoRepository(store)
                 repository += stored.map { demo(it) }
+                repository.withdrawAllExcept((stored - withdrawn.toSet()).map { "cap-$it" }.toSet())
                 coroutineScope {
                     val job = launch { DemoService(fetcher, repository, serverConfig, timeSource).start() }
                     block(repository)
@@ -195,5 +240,134 @@ class DemoServiceTest :
             }
 
             requests.filter { it != 0 } shouldContainExactly listOf(2, 4, 2, 4)
+        }
+
+        test("withdraws exactly the stored demos that a scan ending on an end page did not see") {
+            val requests = CopyOnWriteArrayList<Int>()
+
+            val events =
+                logged {
+                    syncing(
+                        fetcher(listOf(0, 1, 2, 3, 4), requests),
+                        config(pageLimit = 2, tailStride = 1),
+                        stored = listOf(2, 7, 8),
+                    ) { repository ->
+                        eventually(5.seconds) { repository.withdrawn() shouldBe setOf("cap-7", "cap-8") }
+                    }
+                }
+
+            requests.filter { it != 0 } shouldContainExactly listOf(1, 2, 3, 4)
+            events.filter { it.level == Level.INFO }.map { it.formattedMessage } shouldContainExactly
+                listOf("Tail scan withdrew 2 demos and restored 0")
+        }
+
+        test("does not withdraw a cap that only head pages read during the scan listed, the first one included") {
+            val requests = CopyOnWriteArrayList<Int>()
+            val fetcher =
+                pagedFetcher(requests) { offset, read ->
+                    when {
+                        offset == 0 && read == 1 -> listOf(9, 4)
+                        offset == 0 && read == 2 -> listOf(7, 4)
+                        else -> listOf(4, 3, 2, 1, 0).drop(offset).take(2)
+                    }
+                }
+
+            syncing(fetcher, config(pageLimit = 2, tailStride = 1), stored = listOf(7, 8, 9)) { repository ->
+                eventually(5.seconds) { repository.withdrawn() shouldBe setOf("cap-8") }
+            }
+        }
+
+        test("reconciles a scan whose failed tail page succeeds when read again, and withdraws nothing before it ends") {
+            val failing = CopyOnWriteArraySet(setOf(3))
+            val requests = CopyOnWriteArrayList<Int>()
+
+            syncing(
+                fetcher(listOf(0, 1, 2, 3, 4), requests, failing),
+                config(pageLimit = 2, tailStride = 1),
+                stored = listOf(8),
+            ) { repository ->
+                eventually(5.seconds) { requests.count { it == 3 } shouldBeGreaterThan 2 }
+                repository.withdrawn().shouldBeEmpty()
+                failing.clear()
+                eventually(5.seconds) { repository.withdrawn() shouldBe setOf("cap-8") }
+            }
+        }
+
+        test("withdraws nothing and warns when a scan ends on an empty page that is not its first") {
+            val requests = CopyOnWriteArrayList<Int>()
+            val fetcher =
+                pagedFetcher(requests) { offset, _ ->
+                    if (offset == 6) emptyList() else listOf(7, 6, 5, 4, 3, 2, 1, 0).drop(offset).take(4)
+                }
+
+            val events =
+                logged {
+                    syncing(fetcher, config(pageLimit = 4, tailStride = 2), stored = listOf(8)) { repository ->
+                        eventually(5.seconds) { requests shouldContain 6 }
+                        delay(300.milliseconds)
+                        repository.withdrawn().shouldBeEmpty()
+                    }
+                }
+
+            events.filter { it.level == Level.WARN }.map { it.formattedMessage }.single() shouldContain "0 demos at offset 6"
+        }
+
+        test("withdraws nothing and warns when a scan ends on a page shorter than the overlap that is not its first") {
+            val requests = CopyOnWriteArrayList<Int>()
+            val fetcher =
+                pagedFetcher(requests) { offset, _ ->
+                    listOf(7, 6, 5, 4, 3, 2, 1, 0).drop(offset).take(if (offset == 6) 1 else 4)
+                }
+
+            val events =
+                logged {
+                    syncing(fetcher, config(pageLimit = 4, tailStride = 2), stored = listOf(8)) { repository ->
+                        eventually(5.seconds) { requests shouldContain 6 }
+                        delay(300.milliseconds)
+                        repository.withdrawn().shouldBeEmpty()
+                    }
+                }
+
+            events.filter { it.level == Level.WARN }.map { it.formattedMessage }.single() shouldContain "1 demos at offset 6"
+        }
+
+        test("reconciles a scan whose first page is short but not empty") {
+            val requests = CopyOnWriteArrayList<Int>()
+
+            syncing(
+                fetcher(listOf(0, 1, 2), requests),
+                config(pageLimit = 4, tailStride = 2),
+                stored = listOf(0, 8),
+            ) { repository ->
+                eventually(5.seconds) { repository.withdrawn() shouldBe setOf("cap-8") }
+            }
+
+            requests.filter { it != 0 }.distinct() shouldContainExactly listOf(2)
+        }
+
+        test("restores the withdrawn demos that head and tail pages list while a scan runs") {
+            val requests = CopyOnWriteArrayList<Int>()
+
+            syncing(
+                fetcher(listOf(0, 1, 2, 3, 4, 5), requests, CopyOnWriteArraySet(setOf(6))),
+                config(pageLimit = 2, tailStride = 2),
+                stored = listOf(1, 5, 8),
+                withdrawn = listOf(1, 5, 8),
+            ) { repository ->
+                eventually(5.seconds) { repository.withdrawn() shouldBe setOf("cap-8") }
+            }
+        }
+
+        test("restores a withdrawn demo that the head lists while no scan runs") {
+            val minutes = CopyOnWriteArrayList(listOf(0, 1, 2))
+            val requests = CopyOnWriteArrayList<Int>()
+
+            syncing(fetcher(minutes, requests), config(pageLimit = 4, tailStride = 2), stored = listOf(8)) { repository ->
+                eventually(5.seconds) { repository.withdrawn() shouldBe setOf("cap-8") }
+                minutes += 8
+                eventually(5.seconds) { repository.withdrawn().shouldBeEmpty() }
+            }
+
+            requests.filter { it != 0 }.distinct() shouldContainExactly listOf(2)
         }
     })
