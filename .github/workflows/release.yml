@@ -2,7 +2,8 @@
 # version is version= in gradle.properties at the tag. A development build version is <base>-dev.<commit>, where <base>
 # is that version without its pre-release suffix and <commit> is the short hash of the tagged commit; it is passed to
 # the build instead of committed. A version names one image forever: the job fails when the image already exists, and
-# no latest tag is ever pushed.
+# no latest tag is ever pushed. When release.sh pushed the tag but could not start the workflow, start it by hand with
+# gh workflow run release.yml --ref v<version> --field version=<version>.
 name: Release
 run-name: Release ${{ inputs.version }}
 
