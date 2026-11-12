@@ -4,9 +4,8 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
-  # Add once the repository is public, when minutes no longer limit how often a cold build may run:
-  # push:
-  #   branches: [development]
+  push:
+    branches: [development]
 
 permissions:
   contents: read
