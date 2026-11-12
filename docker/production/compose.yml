@@ -22,10 +22,13 @@ services:
     # At most four cores of CPU time. The JVM reads the limit, so the llvmpipe thread count follows it.
     cpus: 4
 
-  # Terminates TLS for recorder.example.com with a Let's Encrypt certificate and proxies to the server.
+  # Terminates TLS for the domain that UTRECORDER_DOMAIN names, with a Let's Encrypt certificate, and proxies to the
+  # server. The Caddyfile reads the domain from this environment.
   caddy:
     image: caddy:2
     restart: unless-stopped
+    environment:
+      UTRECORDER_DOMAIN: ${UTRECORDER_DOMAIN:?set UTRECORDER_DOMAIN in .env to the domain the host serves}
     ports:
       - "80:80"
       - "443:443"

@@ -17,10 +17,17 @@ const removeMockServiceWorker = (): Plugin => {
   };
 };
 
+/** Returns the production server that the `UTRECORDER_DOMAIN` environment variable names. */
+const liveServer = () => {
+  const domain = process.env.UTRECORDER_DOMAIN;
+  if (!domain) throw new Error("Set UTRECORDER_DOMAIN to the domain of the production server to run dev:live");
+  return `https://${domain}`;
+};
+
 /** The server each proxying Vite mode forwards `/api`, `/mp4`, `/thumbnail` and `/view` to. */
-const servers: Partial<Record<string, string>> = {
-  server: "http://localhost:8080",
-  live: "https://recorder.example.com",
+const servers: Partial<Record<string, () => string>> = {
+  server: () => "http://localhost:8080",
+  live: liveServer,
 };
 
 /** Returns the proxy of `/api`, `/mp4`, `/thumbnail` and `/view` to `target`, or `undefined` without a target. */
@@ -38,7 +45,7 @@ export default defineConfig(({ mode }) => ({
   server: {
     host: true,
     port: 5173,
-    proxy: proxy(servers[mode]),
+    proxy: proxy(servers[mode]?.()),
   },
   build: {
     outDir,

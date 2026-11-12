@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Sets up a Debian host to run the utrecorder server. Run once as root over SSH, from a copy of docker/production:
 #
-#   scp -r docker/production root@recorder.example.com:/tmp/utrecorder
-#   ssh root@recorder.example.com /tmp/utrecorder/bootstrap.sh
+#   scp -r docker/production root@<host>:/tmp/utrecorder
+#   ssh root@<host> /tmp/utrecorder/bootstrap.sh
 #
 # Installs Docker Engine from Docker's apt repository, unattended-upgrades, ufw and sqlite3, opens ports 22, 80 and
 # 443 only, sets Docker's log rotation, adds a 2 GB swap file, fills /opt/utrecorder and enables the nightly backup.
@@ -90,6 +90,8 @@ if [[ ! -e $DIRECTORY/.env ]]; then
     (
         umask 077
         cat >"$DIRECTORY/.env" <<'CONFIG'
+# The domain Caddy serves and gets a certificate for, such as recorder.example.com. Required.
+UTRECORDER_DOMAIN=
 # Only Caddy reaches the server, and Caddy sets X-Forwarded-Host and X-Forwarded-Proto.
 UTRECORDER_SERVER_TRUST_FORWARDED_HEADERS=true
 CONFIG
@@ -102,4 +104,4 @@ install -m 644 "$SOURCE/utrecorder-backup.service" "$SOURCE/utrecorder-backup.ti
 systemctl daemon-reload
 systemctl enable --now utrecorder-backup.timer
 
-echo "Host ready. Add any UTRECORDER_* keys to $DIRECTORY/.env, then run: utrecorder-deploy <version>"
+echo "Host ready. Set UTRECORDER_DOMAIN and any other UTRECORDER_* keys in $DIRECTORY/.env, then run: utrecorder-deploy <version>"

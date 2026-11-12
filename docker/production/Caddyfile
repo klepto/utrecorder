@@ -1,8 +1,9 @@
-# Serves recorder.example.com with a certificate from Let's Encrypt, obtained over the HTTP-01 challenge on port 80, and
-# proxies every request to the server. Caddy overwrites X-Forwarded-Host and X-Forwarded-Proto with its own values,
-# which is why the host's .env sets UTRECORDER_SERVER_TRUST_FORWARDED_HEADERS=true. The client IP address is not
-# taken from CF-Connecting-IP, because the server uses none.
-recorder.example.com {
+# Serves the domain that UTRECORDER_DOMAIN in the host's .env names, with a certificate from Let's Encrypt, obtained
+# over the HTTP-01 challenge on port 80, and proxies every request to the server. Caddy overwrites X-Forwarded-Host and
+# X-Forwarded-Proto with its own values, which is why the host's .env sets
+# UTRECORDER_SERVER_TRUST_FORWARDED_HEADERS=true. The client IP address is not taken from CF-Connecting-IP, because the
+# server uses none.
+{$UTRECORDER_DOMAIN} {
 	tls {
 		issuer acme {
 			dir https://acme-v02.api.letsencrypt.org/directory
