@@ -54,9 +54,10 @@ export const AboutPage = () => {
           lists the missing packages.
         </Text>
         <Text>
-          Each new video is kept on the server first. A couple of days after recording, it is uploaded to the Internet
-          Archive, into one item per player and map. While people still watch a video, it stays on the server. Once it
-          goes unwatched, the server removes its copy, and the video plays from the Archive. The{" "}
+          Each new video is kept on the server first. A video of a cap from the last day is uploaded to the Internet
+          Archive a couple of days after recording, and a video of an older cap right after recording. Each video goes
+          into one item per player and map. While people still watch a video, it stays on the server. Once it goes
+          unwatched, the server removes its copy, and the video plays from the Archive. The{" "}
           <Anchor component={Link} to="/statistics">
             Statistics page
           </Anchor>{" "}

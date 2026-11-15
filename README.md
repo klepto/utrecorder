@@ -142,7 +142,8 @@ The recording service behind the live website.
 - **Queue:** keeps the fastest run of each player on each map, and puts recent caps, higher medals and shorter runs
   first.
 - **Recording:** records each queued cap with the core, retries failures, and holds back demos that miss a package.
-- **Uploads:** uploads each video to the Internet Archive a couple of days after recording.
+- **Uploads:** uploads each video of an older cap to the Internet Archive right after recording, and each video of a
+  recent cap a couple of days after.
 - **Cache:** keeps watched videos on the server and removes unwatched ones, within the free disk space.
 - **HTTP API:** serves the recordings, the queue, the jobs, the statistics and the videos, with link previews for
   Discord.

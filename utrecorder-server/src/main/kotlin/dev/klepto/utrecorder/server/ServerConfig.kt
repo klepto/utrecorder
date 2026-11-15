@@ -34,7 +34,8 @@ import kotlin.time.Duration.Companion.seconds
  * two looks for a recording to upload when there is none.
  * @property dailyUploads The most uploads the upload loop starts in one day, spread evenly across the day. Also the pace
  * backlog demos are recorded at, together with the recordings of recent demos.
- * @property archiveDelay How long after it was recorded a recording waits before it is uploaded.
+ * @property archiveDelay How long after it was recorded a recording of a recent demo waits before it is uploaded. A
+ * recording whose demo was older than [recordingRecentAge] when it was recorded is uploaded with no wait.
  * @property cacheTtl How long the mp4 of an archived recording stays in [recordings] after it was recorded or last
  * viewed, whichever is later, or of an outdated recording after it became outdated.
  * @property cacheMinFreeBytes The usable bytes of the filesystem holding [recordings] below which mp4 files in
@@ -53,8 +54,8 @@ import kotlin.time.Duration.Companion.seconds
  * @property recordingRetryInterval How long the server waits between two passes that record again every recording it gave
  * up on.
  * @property recordingRecentAge The age up to which a demo is recent. An older demo is a backlog demo.
- * @property recordingBacklogBuffer The most recordings that may be recording, or recorded at least [archiveDelay] ago
- * without being uploaded, when a backlog demo is taken.
+ * @property recordingBacklogBuffer The most recordings that may be recording, or recorded with their upload due
+ * without being uploaded, when a backlog demo is taken. The upload of a recording is due as [archiveDelay] says.
  * @property recordingMinFreeBytes The usable bytes of the filesystem holding [DirectoriesConfig.workspace] below which
  * no recorder takes a demo. Meant to be less than [cacheMinFreeBytes], which is not enforced. Configured in gigabytes.
  * @property recordingFreeSpaceInterval How long a recorder waits between two reads of the usable bytes while they are

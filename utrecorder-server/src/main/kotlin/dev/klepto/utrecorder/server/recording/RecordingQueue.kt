@@ -97,8 +97,9 @@ class RecordingQueue(
      * or while the head is a backlog recording and either the backlog buffer is full or the pace has no free slot.
      *
      * The backlog buffer is full while at least [ServerConfig.recordingBacklogBuffer] recordings are
-     * [RecordingStatus.Recording], or [Recorded] at least [ServerConfig.archiveDelay] ago. A [Recorded] recording
-     * without [Recording.recordedAt] counts as recorded long enough ago.
+     * [RecordingStatus.Recording], or [Recorded] with their upload due as [isUploadDue] says. A [Recorded] backlog
+     * recording counts as soon as it is recorded, any other [Recorded] recording once [ServerConfig.archiveDelay] has
+     * passed since its [Recording.recordedAt], and one without [Recording.recordedAt] at once.
      *
      * The pace has a free slot once the recordings started in the last day, laid out one day divided by
      * [ServerConfig.dailyUploads] apart and each no earlier than it started, end before now. A recording started at its
@@ -269,8 +270,8 @@ class RecordingQueue(
     }
 
     /**
-     * Returns `true` if [recording] fills the backlog buffer at [now]: it is [RecordingStatus.Recording], or [Recorded]
-     * at least [ServerConfig.archiveDelay] ago. A [Recorded] recording without [Recording.recordedAt] fills it as well.
+     * Returns `true` if [recording] fills the backlog buffer at [now]: it is [RecordingStatus.Recording], or it is
+     * [Recorded] and its upload is due at [now] as [isUploadDue] says.
      */
     private fun isBuffered(
         recording: Recording,
@@ -278,7 +279,7 @@ class RecordingQueue(
     ): Boolean =
         when (recording.status) {
             RecordingStatus.Recording -> true
-            Recorded -> recording.recordedAt?.let { now - it >= config.archiveDelay } ?: true
+            Recorded -> recording.isUploadDue(config, now)
             else -> false
         }
 

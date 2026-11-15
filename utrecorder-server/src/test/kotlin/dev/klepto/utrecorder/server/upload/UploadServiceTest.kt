@@ -38,6 +38,7 @@ import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.days
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
@@ -406,6 +407,75 @@ class UploadServiceTest :
             }
 
             uploads shouldContainExactly listOf("unstamped.mp4", "delayed.mp4")
+        }
+
+        test("uploads a backlog recording at once, while a recent one recorded at the same time waits for the archive delay") {
+            now.set(Instant.parse("2026-09-27T08:00:00Z"))
+            val uploads = CopyOnWriteArrayList<String>()
+            running(
+                mapOf("recent" to Recorded, "backlog" to Recorded),
+                listOf("recent", "backlog"),
+                uploader { _, file, _ -> uploads += file.name },
+                archiveDelay = 1.hours,
+                demos = listOf(demo("recent", 0), demo("backlog", -3 * 24 * 60)),
+                seed = { it.copy(recordedAt = Instant.parse("2026-09-27T07:59:00Z")) },
+            ) { repository ->
+                eventually(5.seconds) { repository["backlog"]?.status shouldBe Uploaded }
+                delay(100.milliseconds)
+                repository["recent"]?.status shouldBe Recorded
+
+                now.set(Instant.parse("2026-09-27T08:59:00Z"))
+                eventually(5.seconds) { repository["recent"]?.status shouldBe Uploaded }
+            }
+
+            uploads shouldContainExactly listOf("backlog.mp4", "recent.mp4")
+        }
+
+        test("keeps the archive delay for a recording whose demo was recent when it was recorded, however old the demo is now") {
+            now.set(Instant.parse("2026-09-28T08:00:00Z"))
+            val uploads = CopyOnWriteArrayList<String>()
+            running(
+                mapOf("aged" to Recorded),
+                listOf("aged"),
+                uploader { _, file, _ -> uploads += file.name },
+                archiveDelay = 2.days,
+                seed = { it.copy(recordedAt = Instant.parse("2026-09-26T13:00:00Z")) },
+            ) { repository ->
+                delay(100.milliseconds)
+                repository["aged"]?.status shouldBe Recorded
+
+                now.set(Instant.parse("2026-09-28T13:00:00Z"))
+                eventually(5.seconds) { repository["aged"]?.status shouldBe Uploaded }
+            }
+
+            uploads shouldContainExactly listOf("aged.mp4")
+        }
+
+        test("on its first pass, uploads the oldest of the backlog recordings found on disk at boot") {
+            now.set(Instant.parse("2026-09-27T08:00:00Z"))
+            val uploads = CopyOnWriteArrayList<String>()
+            val recordedAt =
+                mapOf(
+                    "second" to Instant.parse("2026-09-27T07:52:00Z"),
+                    "oldest" to Instant.parse("2026-09-27T07:50:00Z"),
+                    "third" to Instant.parse("2026-09-27T07:55:00Z"),
+                )
+            running(
+                mapOf("second" to Recorded, "oldest" to Recorded, "third" to Recorded),
+                listOf("second", "oldest", "third"),
+                uploader { _, file, _ -> uploads += file.name },
+                dailyUploads = 1,
+                archiveDelay = 2.days,
+                demos = recordedAt.keys.mapIndexed { index, capId -> demo(capId, -5 * 24 * 60 + index) },
+                seed = { it.copy(recordedAt = recordedAt[it.demo.capId]) },
+            ) { repository ->
+                eventually(5.seconds) { repository["oldest"]?.status shouldBe Uploaded }
+                delay(100.milliseconds)
+                repository["second"]?.status shouldBe Recorded
+                repository["third"]?.status shouldBe Recorded
+            }
+
+            uploads shouldContainExactly listOf("oldest.mp4")
         }
 
         test("names the item by the user id, a hash of the exact map name and the map slug") {

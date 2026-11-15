@@ -224,10 +224,10 @@ class RecordingQueueTest :
             head shouldBe "cap"
         }
 
-        test("holds back a backlog head while a recording is recording, and releases it once the recording is recorded") {
+        test("holds back a backlog head while a recording is recording, and releases it once a recent recording is recorded") {
             val head =
                 queue { repository, queue ->
-                    repository += listOf(demo("buffered", 3.days), demo("backlog", 2.days))
+                    repository += listOf(demo("buffered", 1.hours), demo("backlog", 2.days))
                     repository.claim("buffered")
                     coroutineScope {
                         val first = async { queue.first() }
@@ -256,15 +256,37 @@ class RecordingQueueTest :
             head shouldBe "backlog"
         }
 
-        test("returns a backlog head while every recorded recording is within the archive delay") {
+        test("returns a backlog head while every recorded recent recording is within the archive delay, however old its demo is now") {
             val head =
                 queue { repository, queue ->
-                    repository += listOf(demo("first", 4.days), demo("second", 3.days), demo("backlog", 2.days))
+                    repository += listOf(demo("first", 1.days + 12.hours), demo("second", 1.hours), demo("backlog", 2.days))
                     repository.update("first") { it.copy(status = Recorded, recordedAt = now - 1.days + 1.seconds) }
                     repository.recorded("second", 1.hours, 1_024)
                     queue.first().demo.capId
                 }
             head shouldBe "backlog"
+        }
+
+        test("holds back a backlog head while a recorded recent recording is not uploaded the archive delay after it was recorded") {
+            val head =
+                queue { repository, queue ->
+                    repository += listOf(demo("recent", 1.days + 1.hours), demo("backlog", 2.days))
+                    repository.update("recent") { it.copy(status = Recorded, recordedAt = now - 1.days) }
+                    next(queue)
+                }
+            head shouldBe ("backlog" to null)
+        }
+
+        test("holds back a backlog head while the backlog buffer is full of backlog recordings recorded just now") {
+            val head =
+                queue(backlogBuffer = 2) { repository, queue ->
+                    repository += listOf(demo("first", 4.days), demo("second", 3.days), demo("backlog", 2.days))
+                    repository.recorded("first", 1.minutes, 1_024)
+                    repository.recorded("second", 1.minutes, 1_024)
+                    held(queue)
+                    next(queue)
+                }
+            head shouldBe ("backlog" to null)
         }
 
         test("holds back a backlog head while a recorded recording has no recording time") {
@@ -340,7 +362,7 @@ class RecordingQueueTest :
                 }
             val head =
                 queue(dailyUploads = 172_800, source = moving) { repository, queue ->
-                    repository += listOf(demo("paced", 3.days), demo("backlog", 2.days))
+                    repository += listOf(demo("paced", 1.hours), demo("backlog", 2.days))
                     repository.recorded("paced", Duration.ZERO, 1_024)
                     coroutineScope {
                         val first = async { queue.first() }

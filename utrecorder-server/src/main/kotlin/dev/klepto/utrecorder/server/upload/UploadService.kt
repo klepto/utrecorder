@@ -13,6 +13,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
+import dev.klepto.utrecorder.server.recording.isUploadDue
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,22 +42,24 @@ import kotlin.time.TimeSource
  *   [Archived] recording that has a [Recording.itemId] and no [Recording.size] is given the size [uploader] reports
  *   for its file, one at a time.
  * - The [Recorded] recording with the oldest [Recording.recordedAt] whose `<capId>.mp4` is in [ServerConfig.recordings],
- *   and that was recorded at least [ServerConfig.archiveDelay] ago, is uploaded into its item, the item is described,
- *   and the recording is set to [Uploaded] with the MD5 checksum of the mp4 and the item id. If [uploader] already holds
- *   a file with that checksum, the mp4 is not uploaded, the recording is set to [Archived] instead, and the next
- *   recording is taken at once. A recording that became [Outdated] during its upload keeps its status and gets only the
- *   checksum and the item id. Two uploads start one day divided by [ServerConfig.dailyUploads] apart. When there is
- *   nothing to upload, the loop looks again after [ServerConfig.uploadInterval]. A recording whose demo has no
- *   [Demo.userId] is never taken, and a recording whose upload failed is taken only after every recording whose upload
- *   did not fail.
+ *   and whose upload is due as [isUploadDue] says, is uploaded into its item, the item is described, and the recording
+ *   is set to [Uploaded] with the MD5 checksum of the mp4 and the item id. The upload of a backlog recording is due as
+ *   soon as it is [Recorded], and that of any other recording [ServerConfig.archiveDelay] after its
+ *   [Recording.recordedAt]. If [uploader] already holds a file with that checksum, the mp4 is not uploaded, the
+ *   recording is set to [Archived] instead, and the next recording is taken at once. A recording that became
+ *   [Outdated] during its upload keeps its status and gets only the checksum and the item id. Two uploads start one
+ *   day divided by [ServerConfig.dailyUploads] apart. When there is nothing to upload, the loop looks again after
+ *   [ServerConfig.uploadInterval]. A recording whose demo has no [Demo.userId] is never taken, and a recording whose
+ *   upload failed is taken only after every recording whose upload did not fail.
  *
  * A check, an upload, a description or a delete that fails is logged, and is tried again later. A failed upload still
  * takes its place in the daily uploads.
  *
  * @property repository The recordings to upload.
  * @property uploader The remote storage the mp4 files are uploaded to.
- * @property config The recordings directory, the upload interval, the daily uploads and the archive delay.
- * @property clock The source of the time an unconfirmed upload and the archive delay are measured against.
+ * @property config The recordings directory, the upload interval, the daily uploads, the archive delay and the recent
+ * age.
+ * @property clock The source of the time an unconfirmed upload and the due time of an upload are measured against.
  * @property timeSource The source of the time measured from the start of an upload to the start of the next.
  */
 class UploadService(
@@ -220,14 +223,16 @@ class UploadService(
 
     /**
      * Returns the [Recorded] recording of [repository] that comes first in [uploadOrder] whose mp4 exists, whose demo has
-     * a [Demo.userId] and whose archive delay has passed. If there is none, returns `null` instead.
+     * a [Demo.userId] and whose upload is due as [isUploadDue] says. If there is none, returns `null` instead.
      */
-    private suspend fun nextRecorded(): Recording? =
-        repository
+    private suspend fun nextRecorded(): Recording? {
+        val now = clock.now()
+        return repository
             .all()
-            .filter { it.status == Recorded && it.demo.userId != null && isDue(it) }
+            .filter { it.status == Recorded && it.demo.userId != null && it.isUploadDue(config, now) }
             .sortedWith(uploadOrder())
             .firstOrNull { config.mp4(it.demo.capId).fileExists() }
+    }
 
     /**
      * Returns the order recordings are uploaded in: the recordings whose last upload did not fail first, oldest
@@ -239,15 +244,6 @@ class UploadService(
         compareBy<Recording> { failed.indexOf(it.demo.capId) }
             .thenBy { it.recordedAt }
             .thenBy { it.demo.timestamp }
-
-    /**
-     * Returns `true` if [recording] was recorded at least [ServerConfig.archiveDelay] ago, or has no
-     * [Recording.recordedAt].
-     */
-    private fun isDue(recording: Recording): Boolean {
-        val recordedAt = recording.recordedAt ?: return true
-        return recordedAt + config.archiveDelay <= clock.now()
-    }
 
     /**
      * Uploads the mp4 of [recording] into its item, describes the item, and sets [recording] to [Uploaded] with the
