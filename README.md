@@ -144,7 +144,8 @@ The recording service behind the live website.
 - **Recording:** records each queued cap with the core, retries failures, and holds back demos that miss a package.
 - **Uploads:** uploads each video of an older cap to the Internet Archive right after recording, and each video of a
   recent cap a couple of days after.
-- **Cache:** keeps watched videos on the server and removes unwatched ones, within the free disk space.
+- **Cache:** keeps watched videos on the server and removes unwatched ones, within the free disk space. Removes an
+  archived video of an older cap that nobody watched right away.
 - **HTTP API:** serves the recordings, the queue, the jobs, the statistics and the videos, with link previews for
   Discord.
 

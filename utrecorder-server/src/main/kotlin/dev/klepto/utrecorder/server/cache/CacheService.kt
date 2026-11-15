@@ -12,6 +12,7 @@ import dev.klepto.utrecorder.server.recording.Recording
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
+import dev.klepto.utrecorder.server.recording.isBacklog
 import dev.klepto.utrecorder.server.upload.MediaUploader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -28,6 +29,7 @@ import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
 import kotlin.io.path.nameWithoutExtension
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
@@ -36,7 +38,9 @@ import kotlin.time.Instant
  *
  * On start, and then once a minute, [evict] deletes the mp4 of every [Archived] recording neither recorded nor viewed
  * within [ServerConfig.cacheTtl], and of every [Outdated] recording whose [Recording.lastUpdate] is older than
- * [ServerConfig.cacheTtl], and every mp4 that has no recording in [repository]. If the filesystem holding
+ * [ServerConfig.cacheTtl], and every mp4 that has no recording in [repository]. An [Archived] backlog recording with no
+ * views, as [isBacklog] with [ServerConfig.recordingRecentAge] says, takes [ServerConfig.cacheBacklogTtl] in place of
+ * [ServerConfig.cacheTtl]. The views counted in memory count as views. If the filesystem holding
  * [ServerConfig.recordings] then has less than [ServerConfig.cacheMinFreeBytes] usable, it deletes more of them until
  * it has [ServerConfig.cacheTargetFreeBytes]: first [Archived], then [Outdated]. The mp4 of a `Recorded`, `Uploaded` or
  * `Recording` recording is never deleted.
@@ -53,8 +57,8 @@ import kotlin.time.Instant
  *
  * @property repository The recordings whose mp4 files are kept.
  * @property uploader The remote storage a missing mp4 is downloaded from again, or `null` if nothing is uploaded.
- * @property config The recordings directory, the cache TTL, the free space limits and the directories a download runs
- * in.
+ * @property config The recordings directory, the cache TTLs, the age up to which a demo is recent, the free space
+ * limits and the directories a download runs in.
  * @property clock The source of the time of a view and of the age of a recording.
  * @property diskSpace The source of the usable bytes of the filesystem holding [ServerConfig.recordings].
  */
@@ -131,8 +135,10 @@ class CacheService(
      * Deletes from [ServerConfig.recordings] the mp4 of every [Archived] recording recorded more than
      * [ServerConfig.cacheTtl] ago and not viewed since then, and of every [Outdated] recording whose
      * [Recording.lastUpdate] is older than [ServerConfig.cacheTtl]. An [Archived] recording without
-     * [Recording.recordedAt] is measured from [Recording.lastUpdate] instead. Also deletes every mp4 that has no
-     * recording in [repository]. The recordings stay in [repository].
+     * [Recording.recordedAt] is measured from [Recording.lastUpdate] instead. An [Archived] backlog recording with no
+     * views, the views counted in memory included, takes [ServerConfig.cacheBacklogTtl] in place of
+     * [ServerConfig.cacheTtl]. Also deletes every mp4 that has no recording in [repository]. The recordings stay in
+     * [repository].
      *
      * Then reads the usable bytes of the filesystem holding [ServerConfig.recordings] once. If they are less than
      * [ServerConfig.cacheMinFreeBytes], deletes more mp4 files until the usable bytes read plus the bytes deleted reach
@@ -284,14 +290,31 @@ class CacheService(
 
     /**
      * Returns `true` if the mp4 of [recording] may be deleted: [recording] is `null`, or it is [Archived] or [Outdated]
-     * and its [ageStart] is more than [ServerConfig.cacheTtl] ago.
+     * and its [ageStart] is more than its [ttl] ago.
      */
     private fun isExpired(recording: Recording?): Boolean =
         when {
             recording == null -> true
-            recording.status in TRIM_ORDER -> clock.now() - ageStart(recording) > config.cacheTtl
+            recording.status in TRIM_ORDER -> clock.now() - ageStart(recording) > ttl(recording)
             else -> false
         }
+
+    /**
+     * Returns how long the mp4 of [recording] stays after its [ageStart]: [ServerConfig.cacheBacklogTtl] if
+     * [isUnviewedBacklog] holds for [recording], or [ServerConfig.cacheTtl] otherwise.
+     */
+    private fun ttl(recording: Recording): Duration =
+        when {
+            isUnviewedBacklog(recording) -> config.cacheBacklogTtl
+            else -> config.cacheTtl
+        }
+
+    /**
+     * Returns `true` if [recording] is [Archived], has no views, and is a backlog recording as [isBacklog] with
+     * [ServerConfig.recordingRecentAge] says.
+     */
+    private fun isUnviewedBacklog(recording: Recording): Boolean =
+        recording.status == Archived && recording.views == 0 && recording.isBacklog(config.recordingRecentAge)
 
     /**
      * Deletes [file], and returns `true` if it is gone. If the delete fails, logs it and returns `false` instead.

@@ -28,6 +28,7 @@ import io.kotest.assertions.nondeterministic.eventually
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
 import io.kotest.matchers.nulls.shouldBeNull
+import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.paths.shouldExist
 import io.kotest.matchers.paths.shouldNotExist
 import io.kotest.matchers.shouldBe
@@ -50,8 +51,11 @@ import kotlin.io.path.createTempDirectory
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.time.Clock
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
@@ -171,6 +175,7 @@ class CacheServiceTest :
             diskSpace: DiskSpace = DiskSpace { 1_000 },
             minFreeBytes: Long = 100,
             targetFreeBytes: Long = 200,
+            backlogTtl: Duration = Duration.ZERO,
             block: suspend (CacheService, RecordingRepository, Path) -> Unit,
         ) {
             val directory = createTempDirectory(root, "cache")
@@ -182,6 +187,7 @@ class CacheServiceTest :
                     directories = DirectoriesConfig(ConfigReader.EMPTY, home = directory.resolve("home")),
                     recordings = recordings,
                     cacheTtl = 14.days,
+                    cacheBacklogTtl = backlogTtl,
                     cacheMinFreeBytes = minFreeBytes,
                     cacheTargetFreeBytes = targetFreeBytes,
                 )
@@ -308,6 +314,158 @@ class CacheServiceTest :
             }
         }
 
+        // Every demo of these tests is capped at 2026-09-26T12:00:00Z, so a recording made after 2026-09-27T12:00:00Z
+        // is a backlog recording.
+        test("deletes the mp4 of an unviewed archived backlog recording on the next pass, though it was recorded minutes ago") {
+            cache(mapOf("backlog" to Archived), listOf("backlog")) { service, repository, recordings ->
+                now.set(Instant.parse("2026-10-01T08:00:00Z"))
+                repository.update("backlog") { it.copy(recordedAt = now.get() - 5.minutes) }
+                service.evict()
+
+                recordings.resolve("backlog.mp4").shouldNotExist()
+                repository["backlog"]?.status shouldBe Archived
+            }
+        }
+
+        test("keeps the mp4 of an unviewed archived backlog recording until the backlog cache TTL passes from its recording") {
+            cache(mapOf("backlog" to Archived), listOf("backlog"), backlogTtl = 12.hours) { service, repository, recordings ->
+                now.set(Instant.parse("2026-10-01T08:00:00Z"))
+                repository.update("backlog") { it.copy(recordedAt = now.get()) }
+                service.evict()
+                recordings.resolve("backlog.mp4").shouldExist()
+
+                now.set(now.get() + 12.hours)
+                service.evict()
+                recordings.resolve("backlog.mp4").shouldExist()
+
+                now.set(now.get() + 1.seconds)
+                service.evict()
+                recordings.resolve("backlog.mp4").shouldNotExist()
+            }
+        }
+
+        test("keeps the mp4 of a viewed archived backlog recording for the cache TTL from its last view") {
+            cache(mapOf("viewed" to Archived), listOf("viewed")) { service, repository, recordings ->
+                val lastView = Instant.parse("2026-10-01T08:00:00Z")
+                now.set(lastView)
+                repository.update("viewed") { it.copy(recordedAt = lastView - 5.minutes, views = 1, lastView = lastView) }
+                service.evict()
+                recordings.resolve("viewed.mp4").shouldExist()
+
+                now.set(lastView + 14.days)
+                service.evict()
+                recordings.resolve("viewed.mp4").shouldExist()
+
+                now.set(now.get() + 1.seconds)
+                service.evict()
+                recordings.resolve("viewed.mp4").shouldNotExist()
+            }
+        }
+
+        test("keeps the mp4 of an archived backlog recording for the cache TTL once a view is counted, before it is flushed") {
+            cache(mapOf("viewed" to Archived), listOf("viewed")) { service, repository, recordings ->
+                now.set(Instant.parse("2026-10-01T08:00:00Z"))
+                repository.update("viewed") { it.copy(recordedAt = now.get() - 5.minutes) }
+                service.view("viewed")
+                service.evict()
+                recordings.resolve("viewed.mp4").shouldExist()
+                repository["viewed"]?.views shouldBe 0
+
+                now.set(now.get() + 13.days)
+                service.evict()
+                recordings.resolve("viewed.mp4").shouldExist()
+
+                now.set(now.get() + 2.days)
+                service.evict()
+                recordings.resolve("viewed.mp4").shouldNotExist()
+            }
+        }
+
+        test("keeps the mp4 of an unviewed archived recent recording for the cache TTL, though its demo is no longer recent") {
+            cache(mapOf("recent" to Archived, "edge" to Archived), listOf("recent", "edge")) { service, repository, recordings ->
+                repository.update("recent") { it.copy(recordedAt = Instant.parse("2026-09-27T07:00:00Z")) }
+                repository.update("edge") { it.copy(recordedAt = Instant.parse("2026-09-27T12:00:00Z")) }
+                now.set(Instant.parse("2026-10-01T08:00:00Z"))
+                service.evict()
+
+                recordings.resolve("recent.mp4").shouldExist()
+                recordings.resolve("edge.mp4").shouldExist()
+
+                now.set(Instant.parse("2026-10-11T12:00:01Z"))
+                service.evict()
+
+                recordings.resolve("recent.mp4").shouldNotExist()
+                recordings.resolve("edge.mp4").shouldNotExist()
+            }
+        }
+
+        test("keeps the mp4 of an unviewed recorded, uploaded or recording backlog recording, and of an outdated one within its TTL") {
+            val statuses = mapOf("recorded" to Recorded, "uploaded" to Uploaded, "recording" to Recording, "outdated" to Outdated)
+            cache(statuses, statuses.keys.toList()) { service, repository, recordings ->
+                now.set(Instant.parse("2026-10-01T08:00:00Z"))
+                statuses.keys.forEach { capId -> repository.update(capId) { it.copy(recordedAt = now.get() - 5.minutes) } }
+                service.evict()
+
+                statuses.keys.forEach { recordings.resolve("$it.mp4").shouldExist() }
+            }
+        }
+
+        test("downloads the mp4 of an evicted backlog recording again once it is viewed, and keeps it for the cache TTL") {
+            cache(mapOf("backlog" to Archived), listOf("backlog")) { service, repository, recordings ->
+                now.set(Instant.parse("2026-10-01T08:00:00Z"))
+                repository.update("backlog") { it.copy(recordedAt = now.get() - 5.minutes) }
+                coroutineScope {
+                    val job = launch { service.start() }
+                    eventually(5.seconds) { recordings.resolve("backlog.mp4").shouldNotExist() }
+                    service.view("backlog")
+                    eventually(5.seconds) { recordings.resolve("backlog.mp4").readText() shouldBe "archived" }
+                    service.evict()
+                    job.cancelAndJoin()
+                }
+
+                recordings.resolve("backlog.mp4").shouldExist()
+                requests.get() shouldBe 1
+            }
+        }
+
+        test("deletes on the first pass after start only the mp4 files of unviewed archived backlog recordings found at boot") {
+            val statuses =
+                mapOf(
+                    "backlog1" to Archived,
+                    "backlog2" to Archived,
+                    "viewed" to Archived,
+                    "recent" to Archived,
+                    "recorded" to Recorded,
+                )
+            cache(statuses, statuses.keys.toList()) { service, repository, recordings ->
+                val boot = Instant.parse("2026-09-30T08:00:00Z")
+                repository.update("backlog1") { it.copy(recordedAt = Instant.parse("2026-09-30T07:00:00Z")) }
+                repository.update("backlog2") { it.copy(recordedAt = Instant.parse("2026-09-30T07:55:00Z")) }
+                repository.update("viewed") {
+                    it.copy(
+                        recordedAt = Instant.parse("2026-09-30T07:00:00Z"),
+                        views = 2,
+                        lastView = Instant.parse("2026-09-30T07:30:00Z"),
+                    )
+                }
+                repository.update("recent") { it.copy(recordedAt = Instant.parse("2026-09-27T07:00:00Z")) }
+                repository.update("recorded") { it.copy(recordedAt = Instant.parse("2026-09-30T07:00:00Z")) }
+                now.set(boot)
+                coroutineScope {
+                    val job = launch { service.start() }
+                    eventually(5.seconds) { service.usage.shouldNotBeNull() }
+                    job.cancelAndJoin()
+                }
+
+                recordings.resolve("backlog1.mp4").shouldNotExist()
+                recordings.resolve("backlog2.mp4").shouldNotExist()
+                recordings.resolve("viewed.mp4").shouldExist()
+                recordings.resolve("recent.mp4").shouldExist()
+                recordings.resolve("recorded.mp4").shouldExist()
+                service.usage shouldBe CacheUsage(20, 3, boot, 1_000)
+            }
+        }
+
         test("deletes archived, then outdated mp4 files, oldest first within outdated, until usable plus deleted bytes reach the target") {
             val statuses = mapOf("arch1" to Archived, "out1" to Outdated, "out2" to Outdated, "recd1" to Recorded)
             val reads = CopyOnWriteArrayList<Path>()
@@ -343,7 +501,7 @@ class CacheServiceTest :
                 targetFreeBytes = 1_000,
             ) { service, repository, recordings ->
                 now.set(now.get() + 15.days)
-                repository.update("fresh") { it.copy(recordedAt = Instant.parse("2026-10-11T08:00:00Z")) }
+                repository.update("fresh") { it.copy(recordedAt = Instant.parse("2026-10-11T08:00:00Z"), views = 1) }
                 service.evict()
 
                 recordings.resolve("expired.mp4").shouldNotExist()

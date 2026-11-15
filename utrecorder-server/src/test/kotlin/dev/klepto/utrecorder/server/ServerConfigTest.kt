@@ -6,6 +6,8 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -39,6 +41,22 @@ class ServerConfigTest :
 
             config.cacheMinFreeBytes shouldBe 2_147_483_648L
             config.cacheTargetFreeBytes shouldBe 3_221_225_472L
+        }
+
+        test("defaults the backlog cache TTL to zero") {
+            val config = ServerConfig(ConfigReader.EMPTY, DirectoriesConfig(ConfigReader.EMPTY, home = root))
+
+            config.cacheBacklogTtl shouldBe Duration.ZERO
+        }
+
+        test("reads the backlog cache TTL in the format of a duration") {
+            listOf("12h", "PT12H").forEach { value ->
+                val keys = mapOf("server.cache_backlog_ttl" to value)
+
+                val config = ServerConfig(ConfigReader(keys::get), DirectoriesConfig(ConfigReader.EMPTY, home = root))
+
+                config.cacheBacklogTtl shouldBe 12.hours
+            }
         }
 
         test("defaults the recording free space floor to 5 gigabytes, read again every minute") {

@@ -37,7 +37,11 @@ import kotlin.time.Duration.Companion.seconds
  * @property archiveDelay How long after it was recorded a recording of a recent demo waits before it is uploaded. A
  * recording whose demo was older than [recordingRecentAge] when it was recorded is uploaded with no wait.
  * @property cacheTtl How long the mp4 of an archived recording stays in [recordings] after it was recorded or last
- * viewed, whichever is later, or of an outdated recording after it became outdated.
+ * viewed, whichever is later, or of an outdated recording after it became outdated. An archived recording whose demo
+ * was older than [recordingRecentAge] when it was recorded, and that has no views, takes [cacheBacklogTtl] instead.
+ * @property cacheBacklogTtl How long the mp4 of an archived recording with no views, whose demo was older than
+ * [recordingRecentAge] when it was recorded, stays in [recordings] after it was recorded. At zero, the mp4 is deleted
+ * as soon as the recording is archived.
  * @property cacheMinFreeBytes The usable bytes of the filesystem holding [recordings] below which mp4 files in
  * [recordings] are deleted until it has [cacheTargetFreeBytes]. Configured in gigabytes.
  * @property cacheTargetFreeBytes The usable bytes of the filesystem holding [recordings] that mp4 files in [recordings]
@@ -83,6 +87,7 @@ class ServerConfig(
     val dailyUploads: Int = reader.get("server.daily_uploads", 200, String::toInt),
     val archiveDelay: Duration = reader.duration("server.archive_delay", 2.days),
     val cacheTtl: Duration = reader.duration("server.cache_ttl", 4.days),
+    val cacheBacklogTtl: Duration = reader.duration("server.cache_backlog_ttl", Duration.ZERO),
     val cacheMinFreeBytes: Long = reader.get("server.cache_min_free_gigabytes", 15L, String::toLong) * BYTES_PER_GIGABYTE,
     val cacheTargetFreeBytes: Long = reader.get("server.cache_target_free_gigabytes", 20L, String::toLong) * BYTES_PER_GIGABYTE,
     val viewFlushInterval: Duration = reader.duration("server.view_flush_interval", 5.minutes),
