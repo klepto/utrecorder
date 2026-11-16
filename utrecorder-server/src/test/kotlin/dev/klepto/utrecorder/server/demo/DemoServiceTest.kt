@@ -109,13 +109,18 @@ class DemoServiceTest :
             }
         }
 
-        suspend fun logged(block: suspend () -> Unit): List<ILoggingEvent> {
+        /**
+         * Returns the events [DemoService] logged while [block] ran. [block] receives the events logged so far, so it can
+         * wait for one.
+         */
+        suspend fun logged(block: suspend (events: () -> List<ILoggingEvent>) -> Unit): List<ILoggingEvent> {
             val logger = LoggerFactory.getLogger(DemoService::class.java.name) as Logger
             val appender = ListAppender<ILoggingEvent>().also { it.start() }
+            val events = { synchronized(appender) { appender.list.toList() } }
             logger.addAppender(appender)
             try {
-                block()
-                return appender.list.toList()
+                block(events)
+                return events()
             } finally {
                 logger.detachAppender(appender)
             }
@@ -246,13 +251,16 @@ class DemoServiceTest :
             val requests = CopyOnWriteArrayList<Int>()
 
             val events =
-                logged {
+                logged { loggedSoFar ->
                     syncing(
                         fetcher(listOf(0, 1, 2, 3, 4), requests),
                         config(pageLimit = 2, tailStride = 1),
                         stored = listOf(2, 7, 8),
                     ) { repository ->
-                        eventually(5.seconds) { repository.withdrawn() shouldBe setOf("cap-7", "cap-8") }
+                        eventually(5.seconds) {
+                            repository.withdrawn() shouldBe setOf("cap-7", "cap-8")
+                            loggedSoFar().map { it.formattedMessage } shouldContain "Tail scan withdrew 2 demos and restored 0"
+                        }
                     }
                 }
 
