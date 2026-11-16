@@ -5,10 +5,12 @@ import dev.klepto.utrecorder.common.OperatingSystem.WINDOWS
 import dev.klepto.utrecorder.common.Progress
 import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.common.io.Workspace
+import dev.klepto.utrecorder.common.io.fileExists
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.move
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.common.logger
+import dev.klepto.utrecorder.common.suspendCatching
 import dev.klepto.utrecorder.core.capture.withProgressTimeout
 import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
@@ -34,7 +36,6 @@ import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.io.path.absolutePathString
-import kotlin.io.path.exists
 import kotlin.io.path.name
 import kotlin.io.path.writeText
 import kotlin.time.Duration
@@ -51,7 +52,8 @@ import kotlin.time.DurationUnit
  * moved into a workspace of the capture's own. The progress of a capture is the seconds of audio in the wav out of
  * [DemoPlaybackConfig.runDuration], read once a second while the run plays. Every line the hook library prints is logged
  * at DEBUG. A run that produces no wav, no marks, or marks outside its wav fails with an
- * [IllegalStateException]. A run whose game reports that it cannot play the demo fails with a [DemoUnplayableException]
+ * [IllegalStateException] that names the exit code of the run, and the last lines of the run's log are logged at WARN
+ * first. A run whose game reports that it cannot play the demo fails with a [DemoUnplayableException]
  * naming the report, whatever the run ended with.
  *
  * @property config The audio capture configuration, carrying the sound viewport, its frame rate limit and the idle
@@ -84,7 +86,7 @@ class OpenalAudioCapture(
                     try {
                         val result = capture(run, wav, description, unplayable, onProgress)
                         unplayable.value?.let { throw DemoUnplayableException(it) }
-                        track(wav, result.log, ffmpeg.duration(wav))
+                        track(wav, result)
                     } catch (failure: Exception) {
                         throw DemoUnplayableException.wrap(failure, unplayable.value)
                     }
@@ -213,6 +215,33 @@ class OpenalAudioCapture(
         }
 
     /**
+     * Returns the audio track in [wavFile], placed by the marks in the log of [result], the run that wrote [wavFile].
+     *
+     * Reads the length of [wavFile] with [ffmpeg], then places the track by the marks of the run's log. If anything
+     * fails, logs the exit code of the run and the last lines of its log at WARN before the failure propagates.
+     *
+     * @throws IllegalStateException when [wavFile] does not exist, the log holds no start, spawn or end mark, or the
+     * marks fall outside the wav. The message also names the exit code of [result].
+     */
+    suspend fun track(
+        wavFile: Path,
+        result: UtProcessResult,
+    ): AudioTrack =
+        suspendCatching { result.namingExitCode { track(wavFile, result.log, wavDuration(wavFile)) } }
+            .onFailure { log.warn { logTailMessage(result) } }
+            .getOrThrow()
+
+    /**
+     * Returns the length of [wavFile] in seconds.
+     *
+     * @throws IllegalStateException when [wavFile] does not exist.
+     */
+    private suspend fun wavDuration(wavFile: Path): Double {
+        check(wavFile.fileExists()) { "The audio capture produced no $WAVE_NAME" }
+        return ffmpeg.duration(wavFile)
+    }
+
+    /**
      * Returns the audio track in [wavFile], placed by the marks the run logged in [log].
      *
      * The hook library reports the position of the wav output as the date of the game, counted from [WAVE_EPOCH], so
@@ -220,16 +249,13 @@ class OpenalAudioCapture(
      * on. The track starts at the spawn mark and runs to the end mark. [wavDuration] is the length of the wav in
      * seconds.
      *
-     * @throws IllegalStateException when [wavFile] does not exist, [log] holds no start, spawn or end mark, or the
-     * marks fall outside the wav.
+     * @throws IllegalStateException when [log] holds no start, spawn or end mark, or the marks fall outside the wav.
      */
-    suspend fun track(
+    fun track(
         wavFile: Path,
         log: List<String>,
         wavDuration: Double,
     ): AudioTrack {
-        check(withContext(Dispatchers.IO) { wavFile.exists() }) { "The audio capture produced no $WAVE_NAME" }
-
         val marks = DemoPlaybackMarks.parse(log)
         val spawn = checkNotNull(marks.spawn) { "Run log holds no spawn mark" }
         val start = wavePosition(spawn)
@@ -309,6 +335,18 @@ class OpenalAudioCapture(
         private fun wavePosition(mark: DemoPlaybackMark): Double {
             val epoch = WAVE_EPOCH.atZone(ZoneId.systemDefault()).toInstant()
             return ChronoUnit.MILLIS.between(epoch, mark.wallTime) / 1000.0
+        }
+
+        /**
+         * Returns the message that reports the exit code of the run of [result] and the last lines of its log, one per
+         * message line.
+         */
+        private fun logTailMessage(result: UtProcessResult): String {
+            val heading = "The audio capture run exited with code ${result.exitCode}"
+            return when {
+                result.logTail.isEmpty() -> "$heading and left no lines in its log"
+                else -> "$heading, last ${result.logTail.size} lines of its log:\n${result.logTail.joinToString("\n")}"
+            }
         }
 
         /**

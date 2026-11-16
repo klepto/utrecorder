@@ -6,6 +6,7 @@ import dev.klepto.utrecorder.ut99.UtDirectory.System
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -24,7 +25,8 @@ import kotlin.time.Duration.Companion.seconds
  *
  * A run that writes a log starts a fake game in front of the executable copy: a PowerShell script on Windows and a
  * shell script on Linux. The script copies the file that `UTRECORDER_TEST_LOG` names to the log the run passes in
- * `-log=`, and writes no log when the variable is not set.
+ * `-log=`, and writes no log when the variable is not set. On Linux, where the game echoes its log, the script also
+ * prints the file to its output, and skips the copy when `UTRECORDER_TEST_NO_LOG_FILE` is set.
  */
 class UtProcessTest :
     FunSpec({
@@ -69,9 +71,10 @@ class UtProcessTest :
                                 [ -n "${'$'}UTRECORDER_TEST_LOG" ] || exit 0
                                 for ARGUMENT in "${'$'}@"; do
                                     case "${'$'}ARGUMENT" in
-                                        -log=*) cp "${'$'}UTRECORDER_TEST_LOG" "${'$'}{ARGUMENT#-log=}" ;;
+                                        -log=*) [ -n "${'$'}UTRECORDER_TEST_NO_LOG_FILE" ] || cp "${'$'}UTRECORDER_TEST_LOG" "${'$'}{ARGUMENT#-log=}" ;;
                                     esac
                                 done
+                                cat "${'$'}UTRECORDER_TEST_LOG"
                                 """.trimIndent(),
                             )
                         }
@@ -131,7 +134,37 @@ class UtProcessTest :
 
             result.exitCode shouldBe 0
             result.log shouldBe emptyList()
+            result.logTail shouldBe emptyList()
         }
+
+        test("a run keeps the last 100 lines of its log, whatever its log filter accepts") {
+            val lines = List(150) { "ScriptLog: line $it" } + "ScriptLog: UTRecorder: mark end"
+            val process =
+                installationWithoutIni("log-tail").process("log-tail") {
+                    writeLog(lines)
+                    logFilter = { "UTRecorder: mark " in it }
+                }
+
+            val result = process.launch(60.seconds)
+
+            result.log shouldBe listOf("ScriptLog: UTRecorder: mark end")
+            result.logTail shouldBe lines.takeLast(100)
+        }
+
+        test("a run on a platform whose game echoes its log reads its log from the output of the game")
+            .config(enabled = UtPlatform.current().echoesLog) {
+                val process =
+                    installationWithoutIni("echoed-log").process("echoed-log") {
+                        writeLog(log)
+                        environment["UTRECORDER_TEST_NO_LOG_FILE"] = "1"
+                        logFilter = { "UTRecorder: mark " in it }
+                    }
+
+                val result = process.launch(60.seconds)
+
+                result.log shouldBe listOf("ScriptLog: UTRecorder: mark start", "ScriptLog: UTRecorder: mark end")
+                result.logTail shouldBe log
+            }
 
         test("a process exposes the log filter it is built with") {
             val filter = { line: String -> line.isEmpty() }
@@ -159,5 +192,30 @@ class UtProcessTest :
                 }
 
             messages.count { it == "Process concurrent has already been launched" } shouldBe 1
+        }
+
+        context("UtProcessResult.namingExitCode") {
+            val result = UtProcessResult(139, emptyList(), emptyList(), gameIni = "", userIni = "", exec = emptyList())
+
+            test("returns the result of the block") {
+                result.namingExitCode { "placed" } shouldBe "placed"
+            }
+
+            test("rethrows an IllegalStateException with the exit code added to its message and the original as its cause") {
+                val original = IllegalStateException("Run log holds no end mark")
+
+                val failure = shouldThrow<IllegalStateException> { result.namingExitCode { throw original } }
+
+                failure.message shouldBe "Run log holds no end mark (exit code 139)"
+                failure.cause shouldBe original
+            }
+
+            test("lets a cancellation and any other exception through unchanged") {
+                val cancelled = CancellationException("cancelled")
+                val other = IllegalArgumentException("other")
+
+                shouldThrow<CancellationException> { result.namingExitCode { throw cancelled } } shouldBe cancelled
+                shouldThrow<IllegalArgumentException> { result.namingExitCode { throw other } } shouldBe other
+            }
         }
     })

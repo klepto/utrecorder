@@ -356,6 +356,52 @@ class PathsTest :
             }
         }
 
+        context("readLastLinesOrEmpty") {
+            test("returns the last lines of the file, in file order") {
+                file("last-lines", "first\nsecond\nthird\nfourth").readLastLinesOrEmpty(2) shouldBe listOf("third", "fourth")
+            }
+
+            test("returns every line of a file that holds fewer lines than asked for") {
+                file("last-lines-short", "first\nsecond\n").readLastLinesOrEmpty(5) shouldBe listOf("first", "second")
+            }
+
+            test("returns an empty list for a missing file") {
+                (root / "last-lines-absent").readLastLinesOrEmpty(5) shouldBe emptyList()
+            }
+
+            test("ends a line at a line feed, a carriage return or both, as readLinesOrEmpty does") {
+                val path = file("last-lines-terminators", "a\r\nb\rc\n\r\rd\r\n")
+
+                path.readLastLinesOrEmpty(10) shouldBe listOf("a", "b", "c", "", "", "d")
+            }
+
+            test("reads only the last bytes, and leaves out the line the cut falls inside but keeps one that starts at the cut") {
+                val path = file("last-lines-cut", "first\nsecond\nthird\n")
+
+                path.readLastLinesOrEmpty(10, maxBytes = 19) shouldBe listOf("first", "second", "third")
+                path.readLastLinesOrEmpty(10, maxBytes = 18) shouldBe listOf("second", "third")
+                path.readLastLinesOrEmpty(10, maxBytes = 13) shouldBe listOf("second", "third")
+                path.readLastLinesOrEmpty(10, maxBytes = 12) shouldBe listOf("third")
+            }
+
+            test("returns no line when the last line alone is longer than the bytes it reads") {
+                file("last-lines-long", "short\n" + "a".repeat(100)).readLastLinesOrEmpty(10, maxBytes = 50) shouldBe emptyList()
+            }
+
+            test("decodes with the given charset") {
+                val path = (root / "last-lines-charset").apply { writeText("caf\ncafé", Charsets.ISO_8859_1) }
+
+                path.readLastLinesOrEmpty(1, Charsets.ISO_8859_1) shouldBe listOf("café")
+            }
+
+            test("throws when the line count or the maximum byte count is not positive") {
+                val path = file("last-lines-zero", "line")
+
+                shouldThrow<IllegalArgumentException> { path.readLastLinesOrEmpty(0) }
+                shouldThrow<IllegalArgumentException> { path.readLastLinesOrEmpty(1, maxBytes = 0) }
+            }
+        }
+
         context("readTextOrEmpty") {
             test("returns the contents of an existing file") {
                 file("read-text", sample).readTextOrEmpty() shouldBe sample

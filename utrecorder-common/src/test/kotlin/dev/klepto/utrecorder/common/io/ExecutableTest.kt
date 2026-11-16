@@ -151,6 +151,31 @@ class ExecutableTest :
                 result.output shouldBe listOf("line4", "line5")
             }
 
+            test("keeps every output line its output filter accepts, beyond maxOutputLines") {
+                val executable =
+                    linesExecutable(count = 6) {
+                        maxOutputLines = 1
+                        outputFilter = { it != "line3" }
+                    }
+
+                executable.execute {
+                    await()
+
+                    filteredOutput shouldBe listOf("line1", "line2", "line4", "line5", "line6")
+                    output shouldBe listOf("line6")
+                }
+            }
+
+            test("keeps no output line in full when no output filter is set") {
+                val executable = linesExecutable(count = 3)
+
+                executable.execute {
+                    await()
+
+                    filteredOutput shouldBe emptyList()
+                }
+            }
+
             test("gives a collector that suspends between lines the whole output") {
                 val executable = linesExecutable(count = 3)
 
