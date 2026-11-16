@@ -20,6 +20,7 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import kotlin.time.Duration
@@ -59,6 +60,12 @@ class ExecutableBuilder(
     var maxOutputLines: Int = 5000
 
     /**
+     * The filter that picks the output lines a started process keeps in full, however many lines it emits. If not
+     * set, keeps no line.
+     */
+    var outputFilter: (String) -> Boolean = { false }
+
+    /**
      * Puts [value] in front of the variable [name], separated by the platform path separator. What follows it is the
      * value this builder already holds, or else the value the current process inherited.
      */
@@ -90,7 +97,15 @@ class ExecutableBuilder(
      * Returns the immutable executable this builder describes.
      */
     fun build(): Executable =
-        Executable(executablePath, arguments.toList(), workingDirectory, environment.toMap(), closeTimeout, maxOutputLines)
+        Executable(
+            executablePath,
+            arguments.toList(),
+            workingDirectory,
+            environment.toMap(),
+            closeTimeout,
+            maxOutputLines,
+            outputFilter,
+        )
 }
 
 /**
@@ -105,6 +120,8 @@ class ExecutableBuilder(
  * @property closeTimeout The time a started process is given to exit on its own before [ExecutableProcess.close]
  * terminates it forcibly.
  * @property maxOutputLines The maximum number of output lines a started process keeps, oldest dropped first.
+ * @property outputFilter The filter that picks the output lines a started process keeps in full, in
+ * [ExecutableProcess.filteredOutput].
  */
 data class Executable(
     val executablePath: Path,
@@ -113,6 +130,7 @@ data class Executable(
     val environment: Map<String, String>,
     val closeTimeout: Duration,
     val maxOutputLines: Int,
+    val outputFilter: (String) -> Boolean,
 ) {
     /**
      * Returns a process started from this executable, with its error stream merged into its output stream. The
@@ -184,6 +202,24 @@ class ExecutableProcess(
         )
 
     /**
+     * The output lines [Executable.outputFilter] accepts, in output order.
+     */
+    private val acceptedLines = ConcurrentLinkedQueue<String>()
+
+    /**
+     * The output lines [Executable.outputFilter] accepts so far, in output order. None of them is dropped, however
+     * many lines the process emits.
+     */
+    val filteredOutput: List<String>
+        get() = acceptedLines.toList()
+
+    /**
+     * The last output lines the process emitted so far, at most [Executable.maxOutputLines] of them.
+     */
+    val output: List<String>
+        get() = outputFlow.replayCache.filterIsInstance<String>()
+
+    /**
      * Completed by [pump] once the output stream closes. [await] waits on it before it waits for the process to exit.
      */
     private val streamClosed = CompletableDeferred<Unit>()
@@ -194,14 +230,15 @@ class ExecutableProcess(
     @Volatile private var closing = false
 
     /**
-     * Reads the process output until the stream closes, emitting every line to [outputFlow], then [EndOfStream].
+     * Reads the process output until the stream closes, emitting every line to [outputFlow], then [EndOfStream]. Keeps
+     * the lines [Executable.outputFilter] accepts in [acceptedLines] as well.
      * Nothing but the output pump of [Executable.execute] should call it. A read that fails after [close] has been
      * called is the closed stream itself and is discarded.
      */
     suspend fun pump() {
         try {
             withContext(Dispatchers.IO) {
-                process.inputStream.bufferedReader().forEachLine { line -> outputFlow.tryEmit(line) }
+                process.inputStream.bufferedReader().forEachLine(::emit)
             }
         } catch (cause: IOException) {
             if (!closing) throw cause
@@ -209,6 +246,14 @@ class ExecutableProcess(
             outputFlow.tryEmit(EndOfStream)
             streamClosed.complete(Unit)
         }
+    }
+
+    /**
+     * Keeps [line] in [acceptedLines] if [Executable.outputFilter] accepts it, and emits it to [outputFlow].
+     */
+    private fun emit(line: String) {
+        if (executable.outputFilter(line)) acceptedLines += line
+        outputFlow.tryEmit(line)
     }
 
     /**
@@ -232,7 +277,7 @@ class ExecutableProcess(
             withTimeout(timeout) {
                 streamClosed.await()
                 runInterruptible(Dispatchers.IO) { process.waitFor() }
-                ExecutableResult(executable, outputFlow.replayCache.filterIsInstance<String>(), process.exitValue())
+                ExecutableResult(executable, output, process.exitValue())
             }
         } catch (timedOut: TimeoutCancellationException) {
             throw TimeoutException("Timed out waiting for process: $executable").apply { initCause(timedOut) }

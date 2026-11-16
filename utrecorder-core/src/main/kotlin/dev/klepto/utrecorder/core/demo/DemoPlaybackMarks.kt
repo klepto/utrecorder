@@ -91,12 +91,7 @@ data class DemoPlaybackMarks(
          * @throws IllegalStateException when the log holds no start mark or no end mark. The message also names the
          * exit code of [result].
          */
-        fun parse(result: UtProcessResult): DemoPlaybackMarks =
-            try {
-                parse(result.log)
-            } catch (failure: IllegalStateException) {
-                throw IllegalStateException("${failure.message} (exit code ${result.exitCode})", failure)
-            }
+        fun parse(result: UtProcessResult): DemoPlaybackMarks = result.namingExitCode { parse(result.log) }
 
         private fun parseMark(line: String): DemoPlaybackMark? {
             val match = MARK_PATTERN.find(line) ?: return null

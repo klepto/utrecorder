@@ -1,19 +1,30 @@
 package dev.klepto.utrecorder.core.capture.audio
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
+import dev.klepto.utrecorder.core.media.FfmpegMediaTool
+import dev.klepto.utrecorder.core.media.MediaProgress
+import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPlatform
+import dev.klepto.utrecorder.ut99.UtProcessResult
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldStartWith
+import io.kotest.matchers.types.shouldBeInstanceOf
+import org.slf4j.LoggerFactory
+import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Path
@@ -50,7 +61,41 @@ class OpenalAudioCaptureTest :
             home.toFile().deleteRecursively()
         }
 
-        fun capture(settings: AudioCaptureConfig = config) = OpenalAudioCapture(settings, installation, directories)
+        fun capture(
+            settings: AudioCaptureConfig = config,
+            ffmpeg: MediaTool = FfmpegMediaTool(),
+        ) = OpenalAudioCapture(settings, installation, directories, ffmpeg)
+
+        fun wavLength(seconds: Double): MediaTool =
+            object : MediaTool {
+                override suspend fun run(
+                    vararg arguments: String,
+                    input: (suspend (OutputStream) -> Unit)?,
+                    onProgress: ((MediaProgress) -> Unit)?,
+                ) = Unit
+
+                override suspend fun duration(file: Path): Double = seconds
+
+                override suspend fun frames(file: Path): Int = 0
+            }
+
+        fun result(
+            log: List<String>,
+            exitCode: Int = 139,
+            logTail: List<String> = listOf("Log: Log file open", "Signal: SIGSEGV [segmentation fault]", "Aborting."),
+        ) = UtProcessResult(exitCode, log, logTail, gameIni = "", userIni = "", exec = emptyList())
+
+        suspend fun <T> warnings(block: suspend () -> T): Pair<Result<T>, List<String>> {
+            val logger = LoggerFactory.getLogger(OpenalAudioCapture::class.java.name) as Logger
+            val appender = ListAppender<ILoggingEvent>().also { it.start() }
+            logger.addAppender(appender)
+            try {
+                val outcome = runCatching { block() }
+                return outcome to appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
+            } finally {
+                logger.detachAppender(appender)
+            }
+        }
 
         fun writeWav(path: Path): Path {
             val sampleRate = 8000
@@ -220,12 +265,6 @@ class OpenalAudioCaptureTest :
                 )
         }
 
-        test("track fails naming the wav when the wav does not exist") {
-            val failure = shouldThrow<IllegalStateException> { capture().track(home / "missing.wav", log, 400.0) }
-
-            failure.message shouldContain "audio.wav"
-        }
-
         test("track fails naming the missing mark when the log holds no end mark") {
             val wav = writeWav(home / "audio.wav")
 
@@ -276,5 +315,66 @@ class OpenalAudioCaptureTest :
             val failure = shouldThrow<IllegalStateException> { capture().track(wav, wallClockLog, 400.0) }
 
             failure.message shouldContain "outside"
+        }
+
+        test("track of a run reads the length of the wav and places the track as track of its log does, warning of nothing") {
+            val wav = writeWav(home / "audio.wav")
+
+            val (track, warned) = warnings { capture(ffmpeg = wavLength(400.0)).track(wav, result(log, exitCode = 0)) }
+
+            track.getOrThrow() shouldBe capture().track(wav, log, 400.0)
+            warned shouldBe emptyList()
+        }
+
+        test("track of a run fails naming the wav and the exit code when the wav does not exist") {
+            val failure =
+                shouldThrow<IllegalStateException> { capture(ffmpeg = wavLength(400.0)).track(home / "missing.wav", result(log)) }
+
+            failure.message shouldBe "The audio capture produced no audio.wav (exit code 139)"
+        }
+
+        test("track of a run fails naming the missing end mark and the exit code") {
+            val wav = writeWav(home / "audio.wav")
+
+            val failure = shouldThrow<IllegalStateException> { capture(ffmpeg = wavLength(400.0)).track(wav, result(log.dropLast(1))) }
+
+            failure.message shouldBe "Run log holds no end mark (exit code 139)"
+        }
+
+        test("track of a run fails naming the missing spawn mark and the exit code") {
+            val wav = writeWav(home / "audio.wav")
+            val noSpawn = result(log.filterNot { "spawn" in it })
+
+            val failure = shouldThrow<IllegalStateException> { capture(ffmpeg = wavLength(400.0)).track(wav, noSpawn) }
+
+            failure.message shouldBe "Run log holds no spawn mark (exit code 139)"
+        }
+
+        test("track of a run fails naming the exit code when the marks fall outside the wav") {
+            val wav = writeWav(home / "audio.wav")
+
+            val failure = shouldThrow<IllegalStateException> { capture(ffmpeg = wavLength(300.0)).track(wav, result(log, exitCode = 0)) }
+
+            failure.message shouldBe "The audio capture's marks fall outside audio.wav (exit code 0)"
+        }
+
+        test("track of a run that fails logs the exit code and the last lines of the run's log at WARN") {
+            val wav = writeWav(home / "audio.wav")
+
+            val (track, warned) = warnings { capture(ffmpeg = wavLength(400.0)).track(wav, result(log.dropLast(1))) }
+
+            track.exceptionOrNull().shouldBeInstanceOf<IllegalStateException>()
+            warned shouldBe
+                listOf(
+                    "The audio capture run exited with code 139, last 3 lines of its log:\n" +
+                        "Log: Log file open\nSignal: SIGSEGV [segmentation fault]\nAborting.",
+                )
+        }
+
+        test("track of a run that fails and left no log logs at WARN that its log holds no lines") {
+            val (_, warned) =
+                warnings { capture(ffmpeg = wavLength(400.0)).track(home / "missing.wav", result(emptyList(), logTail = emptyList())) }
+
+            warned shouldBe listOf("The audio capture run exited with code 139 and left no lines in its log")
         }
     })

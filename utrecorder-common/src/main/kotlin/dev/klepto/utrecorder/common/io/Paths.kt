@@ -10,6 +10,8 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.OutputStream
 import java.io.Reader
+import java.nio.channels.Channels
+import java.nio.channels.FileChannel
 import java.nio.charset.Charset
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -202,6 +204,60 @@ private class BoundedLineFilter(
         lineOpen = false
     }
 }
+
+/**
+ * Returns the last [count] lines of the file at this path, decoded with [charset], in file order.
+ *
+ * Only the last [maxBytes] bytes of the file are read, so the time and memory used do not grow with the size of the
+ * file. When the file is longer than [maxBytes], the line that the cut falls inside is left out, since its start is not
+ * read. So the result can hold fewer than [count] lines, or none when the last line alone is longer than [maxBytes]. A
+ * line ends at `\n`, `\r` or `\r\n`, as in [readLinesOrEmpty]. If [maxBytes] is not provided, reads the last 1 MiB. If
+ * the file does not exist, returns an empty list instead.
+ *
+ * @throws IllegalArgumentException if [count] or [maxBytes] is not positive.
+ */
+suspend fun Path.readLastLinesOrEmpty(
+    count: Int,
+    charset: Charset = Charsets.UTF_8,
+    maxBytes: Int = 1_048_576,
+): List<String> {
+    require(count > 0) { "Line count must be positive, got $count" }
+    require(maxBytes > 0) { "Maximum byte count must be positive, got $maxBytes" }
+    return withContext(Dispatchers.IO) {
+        when {
+            exists() -> readLastLines(count, charset, maxBytes)
+            else -> emptyList()
+        }
+    }
+}
+
+/**
+ * Returns the last [count] lines that lie whole within the last [maxBytes] bytes of the file at this path.
+ *
+ * When the file is longer than [maxBytes], reading starts at the byte before the cut, and the first line read is
+ * dropped. So a line that starts right at the cut is kept, and a line the cut falls inside is not.
+ */
+private fun Path.readLastLines(
+    count: Int,
+    charset: Charset,
+    maxBytes: Int,
+): List<String> =
+    FileChannel.open(this).use { channel ->
+        val cut = channel.size() > maxBytes
+        val start =
+            when {
+                cut -> channel.size() - maxBytes - 1
+                else -> 0L
+            }
+        val stream = Channels.newInputStream(channel.position(start))
+        val lines = stream.reader(charset).readLines()
+        val wholeLines =
+            when {
+                cut -> lines.drop(1)
+                else -> lines
+            }
+        wholeLines.takeLast(count)
+    }
 
 /**
  * Returns the contents of the file at this path, decoded with [charset].

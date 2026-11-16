@@ -14,6 +14,7 @@ import java.nio.charset.Charset
  * @property gameExecutable The file name of the game executable.
  * @property homeArguments The arguments that keep the game and the compiler out of the home directory of the user.
  * @property client The client class the game draws through, which also names its section in the game configuration.
+ * @property echoesLog `true` when the game also writes every line of its log to its standard output.
  */
 enum class UtPlatform(
     val operatingSystem: OperatingSystem,
@@ -22,6 +23,7 @@ enum class UtPlatform(
     val gameExecutable: String,
     val homeArguments: List<String>,
     val client: String,
+    val echoesLog: Boolean,
 ) {
     WINDOWS(
         OperatingSystem.WINDOWS,
@@ -30,8 +32,17 @@ enum class UtPlatform(
         "UnrealTournament.exe",
         emptyList(),
         "WinDrv.WindowsClient",
+        false,
     ),
-    LINUX(OperatingSystem.LINUX, "Linux-x86.tar.bz2", "ucc-bin", "ut-bin", listOf("-nohomedir"), "SDLDrv.SDLClient"),
+    LINUX(
+        OperatingSystem.LINUX,
+        "Linux-x86.tar.bz2",
+        "ucc-bin",
+        "ut-bin",
+        listOf("-nohomedir"),
+        "SDLDrv.SDLClient",
+        true,
+    ),
     ;
 
     /**

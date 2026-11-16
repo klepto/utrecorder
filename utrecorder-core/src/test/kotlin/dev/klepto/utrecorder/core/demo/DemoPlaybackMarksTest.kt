@@ -1,5 +1,6 @@
 package dev.klepto.utrecorder.core.demo
 
+import dev.klepto.utrecorder.ut99.UtProcessResult
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -188,5 +189,25 @@ class DemoPlaybackMarksTest :
             val marks = DemoPlaybackMarks.parse(lines)
 
             marks.start.frame shouldBe 4567
+        }
+
+        test("parse of a run result returns the marks of its log") {
+            val lines =
+                listOf(
+                    "ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5",
+                    "ScriptLog: UTRecorder: mark end 2026 9 13 10 35 42 250 98765 300.75",
+                )
+            val result = UtProcessResult(0, lines, emptyList(), gameIni = "", userIni = "", exec = emptyList())
+
+            DemoPlaybackMarks.parse(result) shouldBe DemoPlaybackMarks.parse(lines)
+        }
+
+        test("parse of a run result throws naming the missing mark and the exit code of the run") {
+            val lines = listOf("ScriptLog: UTRecorder: mark start 2026 9 13 10 30 5 123 4567 12.5")
+            val result = UtProcessResult(139, lines, lines, gameIni = "", userIni = "", exec = emptyList())
+
+            val failure = shouldThrow<IllegalStateException> { DemoPlaybackMarks.parse(result) }
+
+            failure.message shouldBe "Run log holds no end mark (exit code 139)"
         }
     })

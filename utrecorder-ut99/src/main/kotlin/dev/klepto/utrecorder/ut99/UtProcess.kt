@@ -8,6 +8,7 @@ import dev.klepto.utrecorder.common.io.execute
 import dev.klepto.utrecorder.common.io.get
 import dev.klepto.utrecorder.common.io.link
 import dev.klepto.utrecorder.common.io.readFilteredLinesOrEmpty
+import dev.klepto.utrecorder.common.io.readLastLinesOrEmpty
 import dev.klepto.utrecorder.common.io.readLinesOrEmpty
 import dev.klepto.utrecorder.common.io.readTextOrEmpty
 import dev.klepto.utrecorder.common.io.workspace
@@ -22,6 +23,7 @@ import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.deleteIfExists
 import kotlin.io.path.name
@@ -256,7 +258,10 @@ class UtProcess(
         workspace(name, systemDirectory, installation.config.directoriesConfig) { workspace ->
             val files = files(workspace)
             stage(files)
-            result(files, exitCode(files, timeout))
+            executable(files).execute {
+                startedProcess.complete(this)
+                result(files, this, exitCode(timeout))
+            }
         }
 
     /**
@@ -340,22 +345,16 @@ class UtProcess(
     }
 
     /**
-     * Returns the exit code of the process reading [files], started and awaited within [timeout].
+     * Returns the exit code of this process once it exits within [timeout].
      *
-     * If the process outlives [timeout], it is killed and [KILLED_EXIT_CODE] is returned instead. Completes
-     * [startedProcess] once the process runs, so collectors of [drain] are served from then on.
+     * If the process outlives [timeout], it is killed and [KILLED_EXIT_CODE] is returned instead.
      */
-    private suspend fun exitCode(
-        files: UtProcessFiles,
-        timeout: Duration,
-    ): Int =
+    private suspend fun ExecutableProcess.exitCode(timeout: Duration): Int =
         try {
-            executable(files).execute {
-                startedProcess.complete(this)
-                await(timeout).exitCode
-            }
+            await(timeout).exitCode
         } catch (timedOut: TimeoutException) {
             log.warn(timedOut) { "Process $name outlived its timeout and was killed" }
+            close()
             KILLED_EXIT_CODE
         }
 
@@ -377,6 +376,7 @@ class UtProcess(
             arguments += "-forcelogflush"
             arguments += installation.platform.homeArguments
             environment += this@UtProcess.environment
+            outputFilter = logFilter
             prependLibraryPath(systemDirectory)
         }
 
@@ -424,21 +424,52 @@ class UtProcess(
         }
 
     /**
-     * Returns the result of the run that exited with [exitCode], holding the contents of [files] as the run left them.
-     *
-     * Of the log, only the lines that [logFilter] accepts are read into the result.
+     * Returns the result of the run of [process] that exited with [exitCode], holding the contents of [files] as the
+     * run left them.
      */
     private suspend fun result(
         files: UtProcessFiles,
+        process: ExecutableProcess,
         exitCode: Int,
     ): UtProcessResult =
         UtProcessResult(
             exitCode = exitCode,
-            log = files.log.readFilteredLinesOrEmpty(UtPlatform.CHARSET, filter = logFilter),
+            log = log(files, process),
+            logTail = logTail(files, process),
             gameIni = files.gameIni.readTextOrEmpty(UtPlatform.CHARSET),
             userIni = files.userIni.readTextOrEmpty(UtPlatform.CHARSET),
             exec = files.exec.readLinesOrEmpty(UtPlatform.CHARSET),
         )
+
+    /**
+     * Returns the lines of the run's log that [logFilter] accepts, in log order.
+     *
+     * When the game of the installation echoes its log, the lines come from the output of [process]. Otherwise, they
+     * come from the log in [files].
+     */
+    private suspend fun log(
+        files: UtProcessFiles,
+        process: ExecutableProcess,
+    ): List<String> =
+        when (installation.platform.echoesLog) {
+            true -> process.filteredOutput
+            false -> files.log.readFilteredLinesOrEmpty(UtPlatform.CHARSET, filter = logFilter)
+        }
+
+    /**
+     * Returns the last [LOG_TAIL_LINES] lines of the run's log, whatever [logFilter] accepts, in log order.
+     *
+     * When the game of the installation echoes its log, the lines come from the output of [process]. Otherwise, they
+     * come from the log in [files].
+     */
+    private suspend fun logTail(
+        files: UtProcessFiles,
+        process: ExecutableProcess,
+    ): List<String> =
+        when (installation.platform.echoesLog) {
+            true -> process.output.takeLast(LOG_TAIL_LINES)
+            false -> files.log.readLastLinesOrEmpty(LOG_TAIL_LINES, UtPlatform.CHARSET)
+        }
 
     companion object {
         /**
@@ -455,6 +486,11 @@ class UtProcess(
          * The name of the log a run writes.
          */
         private const val LOG_FILE = "UnrealTournament.log"
+
+        /**
+         * The number of last lines of the log a run keeps in [UtProcessResult.logTail].
+         */
+        private const val LOG_TAIL_LINES = 100
 
         /**
          * The name of the lock file the game writes while it runs, left behind by a run that was killed.
@@ -507,9 +543,15 @@ class UtProcessFiles(
  *
  * Returned by [UtProcess.launch].
  *
- * @property exitCode The code the process exited with, or `-1` for a killed run that reported none.
- * @property log The lines of the run's log that the run's log filter accepts, in log order. A line longer than 65536
- * characters is cut to its first 65536 characters. If the run wrote no log, it is empty.
+ * @property exitCode The code the process exited with, or `-1` for a killed run that reported none. On Linux, a process
+ * that a signal ended reports 128 plus the number of the signal, such as `139` for a segmentation fault.
+ * @property log The lines of the run's log that the run's log filter accepts, in log order. On a platform whose game
+ * echoes its log, they are read from the output of the game, so none is lost when the game can no longer write its log
+ * file. Otherwise, they are read from the log file, and a line longer than 65536 characters is cut to its first 65536
+ * characters. If the run wrote no log, it is empty.
+ * @property logTail The last lines of the run's log, at most 100 of them, whatever the run's log filter accepts, in log
+ * order. On a platform whose game echoes its log, they are the last lines of the output of the game. Otherwise, only
+ * the lines within the last 1 MiB of the log file are kept. If the run wrote no log, it is empty.
  * @property gameIni The game configuration as the run left it.
  * @property userIni The user configuration as the run left it.
  * @property exec The lines of the exec script the run played.
@@ -517,7 +559,23 @@ class UtProcessFiles(
 data class UtProcessResult(
     val exitCode: Int,
     val log: List<String>,
+    val logTail: List<String>,
     val gameIni: String,
     val userIni: String,
     val exec: List<String>,
-)
+) {
+    /**
+     * Returns the result of [block].
+     *
+     * If [block] throws an [IllegalStateException], throws one whose message also names the exit code of this run
+     * instead, with the original as its cause. A [CancellationException] propagates unchanged.
+     */
+    inline fun <T> namingExitCode(block: () -> T): T =
+        try {
+            block()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: IllegalStateException) {
+            throw IllegalStateException("${failure.message} (exit code $exitCode)", failure)
+        }
+}
