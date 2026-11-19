@@ -49,7 +49,7 @@ import kotlin.time.Duration.Companion.milliseconds
 class FrameEncoder(
     private val config: VideoCaptureConfig,
     private val format: VideoFormat,
-    private val listenTimeout: Duration,
+    val listenTimeout: Duration,
     val target: Path,
     private val ffmpeg: MediaTool = FfmpegMediaTool(),
     private val onProgress: (MediaProgress) -> Unit = {},
