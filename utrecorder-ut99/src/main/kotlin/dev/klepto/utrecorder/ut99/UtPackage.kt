@@ -7,6 +7,7 @@ import java.nio.ByteOrder
 import java.nio.channels.SeekableByteChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.Objects
 import kotlin.io.path.extension
 import kotlin.io.path.isDirectory
@@ -55,6 +56,21 @@ class UtPackage private constructor(
         name.equals(required.name, ignoreCase = true) &&
             required.guid().let { it.isEmpty() || guid().equals(it, ignoreCase = true) }
 
+    /**
+     * Returns `true` after rewriting the last generation of the file this package is held in to the export and name
+     * counts of its header. The game counts the objects of a package in the package map of a demo by that generation,
+     * so a stale one shifts the objects of every package the demo names after it. Leaves every other byte of the file,
+     * its GUID included, as it is. If the generation already holds those counts, or the file is not a package with
+     * generations, writes nothing and returns `false` instead. Returns `false` for a package a demo names.
+     *
+     * @throws java.io.IOException if the file cannot be read or written.
+     */
+    suspend fun repairGenerations(): Boolean =
+        when (path) {
+            null -> false
+            else -> withContext(Dispatchers.IO) { repairGenerations(path) }
+        }
+
     override fun equals(other: Any?): Boolean = other is UtPackage && name.equals(other.name, ignoreCase = true) && path == other.path
 
     override fun hashCode(): Int = Objects.hash(name.lowercase(), path)
@@ -86,6 +102,32 @@ class UtPackage private constructor(
          * The offset a package header of [HERITAGE_VERSION] or later holds its GUID at.
          */
         private const val GUID_OFFSET = 36
+
+        /**
+         * The offset a package header holds its name count at.
+         */
+        private const val NAME_COUNT_OFFSET = 12
+
+        /**
+         * The offset a package header holds its export count at.
+         */
+        private const val EXPORT_COUNT_OFFSET = 20
+
+        /**
+         * The offset a package header of [HERITAGE_VERSION] or later holds its generation count at, right after its
+         * GUID. A version before it holds no generations.
+         */
+        private const val GENERATION_COUNT_OFFSET = 52
+
+        /**
+         * The offset a package header of [HERITAGE_VERSION] or later holds its first generation at.
+         */
+        private const val GENERATIONS_OFFSET = 56
+
+        /**
+         * The size of one generation, an export count followed by a name count, in bytes.
+         */
+        private const val GENERATION_BYTES = 8
 
         /**
          * The size of a GUID, in bytes.
@@ -158,6 +200,43 @@ class UtPackage private constructor(
                 val guid = channel.readAt(offset, GUID_BYTES) ?: return ""
                 (0 until GUID_WORDS).joinToString("") { "%08X".format(guid.getInt(it * WORD_BYTES)) }
             }
+
+        /**
+         * Returns `true` after rewriting the last generation of the package file at [path] to the export and name
+         * counts of its header. If the generation already holds them, or the file is not a package with generations,
+         * writes nothing and returns `false` instead. The file is opened for writing only when it needs the repair.
+         */
+        private fun repairGenerations(path: Path): Boolean {
+            val (offset, counts) =
+                Files.newByteChannel(path).use { channel -> staleGeneration(channel) } ?: return false
+            Files.newByteChannel(path, StandardOpenOption.WRITE).use { channel ->
+                channel.position(offset)
+                while (counts.hasRemaining()) channel.write(counts)
+            }
+            return true
+        }
+
+        /**
+         * Returns the offset of the last generation of the package file this [channel] reads, with the export and name
+         * counts of its header that the generation should hold. If the generation already holds them, or the file is
+         * not a package with generations, returns `null` instead.
+         */
+        private fun staleGeneration(channel: SeekableByteChannel): Pair<Long, ByteBuffer>? {
+            val header = channel.readAt(0, GENERATIONS_OFFSET) ?: return null
+            if (header.getInt(0) != PACKAGE_TAG) return null
+            if ((header.getShort(VERSION_OFFSET).toInt() and VERSION_BITMASK) < HERITAGE_VERSION) return null
+
+            val generationCount = header.getInt(GENERATION_COUNT_OFFSET)
+            if (generationCount < 1) return null
+            val offset = GENERATIONS_OFFSET + (generationCount - 1).toLong() * GENERATION_BYTES
+            val generation = channel.readAt(offset, GENERATION_BYTES) ?: return null
+            val exportCount = header.getInt(EXPORT_COUNT_OFFSET)
+            val nameCount = header.getInt(NAME_COUNT_OFFSET)
+            if (generation.getInt(0) == exportCount && generation.getInt(Int.SIZE_BYTES) == nameCount) return null
+
+            val counts = ByteBuffer.allocate(GENERATION_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+            return offset to counts.putInt(exportCount).putInt(nameCount).flip()
+        }
 
         /**
          * Returns the offset of the file [header] opens that holds its GUID. A version before [HERITAGE_VERSION] holds

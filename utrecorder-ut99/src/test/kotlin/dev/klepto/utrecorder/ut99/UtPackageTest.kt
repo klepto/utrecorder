@@ -5,12 +5,15 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Path
 import kotlin.io.path.createDirectories
 import kotlin.io.path.createParentDirectories
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.deleteExisting
 import kotlin.io.path.div
+import kotlin.io.path.readBytes
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
 
@@ -34,6 +37,47 @@ class UtPackageTest :
             tagAndVersion.forEachIndexed { index, value -> header[index] = value.toByte() }
             guidBytes.forEachIndexed { index, value -> header[36 + index] = value.toByte() }
             return path.createParentDirectories().also { it.writeBytes(header) }
+        }
+
+        fun writeGenerations(
+            path: Path,
+            exportCount: Int,
+            nameCount: Int,
+            generations: List<Pair<Int, Int>>,
+            version: Short = 69,
+        ): Path {
+            val bytes = ByteBuffer.allocate(56 + generations.size * 8 + 16).order(ByteOrder.LITTLE_ENDIAN)
+            bytes
+                .putInt(0x9E2A83C1.toInt())
+                .putShort(version)
+                .putShort(0)
+                .putInt(1)
+            bytes
+                .putInt(12, nameCount)
+                .putInt(16, 0x100)
+                .putInt(20, exportCount)
+                .putInt(24, 0x200)
+            bytes.putInt(28, 7).putInt(32, 0x300)
+            guidHeaderBytes.forEachIndexed { index, value -> bytes.put(36 + index, value.toByte()) }
+            bytes.putInt(52, generations.size)
+            generations.forEachIndexed { index, (exports, names) -> bytes.putInt(56 + index * 8, exports).putInt(60 + index * 8, names) }
+            (0 until 16).forEach { bytes.put(56 + generations.size * 8 + it, (0xA0 + it).toByte()) }
+            return path.createParentDirectories().also { it.writeBytes(bytes.array()) }
+        }
+
+        fun generationsOf(path: Path): List<Pair<Int, Int>> {
+            val bytes = ByteBuffer.wrap(path.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+            return (0 until bytes.getInt(52)).map { bytes.getInt(56 + it * 8) to bytes.getInt(60 + it * 8) }
+        }
+
+        suspend fun repairedReadOnly(path: Path): Boolean {
+            val file = path.toFile()
+            file.setWritable(false)
+            try {
+                return UtPackage.read(path).repairGenerations()
+            } finally {
+                file.setWritable(true)
+            }
         }
 
         test("named returns a package with that name and GUID, and a null path") {
@@ -169,6 +213,103 @@ class UtPackageTest :
 
             UtPackage.read(path).toString() shouldBe "Engine at $path"
             UtPackage.named("Engine", guid).toString() shouldBe "Engine[12345678]"
+        }
+
+        test("repairGenerations rewrites a stale last generation to the header counts, and leaves every other byte") {
+            val path = writeGenerations(root / "repair-stale" / "Snowlvl.utx", exportCount = 5, nameCount = 23, listOf(1 to 1, 1 to 1))
+            val before = path.readBytes()
+
+            UtPackage.read(path).repairGenerations() shouldBe true
+
+            generationsOf(path) shouldBe listOf(1 to 1, 5 to 23)
+            val after = path.readBytes()
+            after.size shouldBe before.size
+            after.indices.filter { after[it] != before[it] }.all { it in 64 until 72 } shouldBe true
+            UtPackage.read(path).guid() shouldBe guid
+        }
+
+        test("repairGenerations rewrites the only generation of a package that holds one") {
+            val path = writeGenerations(root / "repair-only" / "Snowlvl.utx", exportCount = 5, nameCount = 23, listOf(1 to 1))
+
+            UtPackage.read(path).repairGenerations() shouldBe true
+
+            generationsOf(path) shouldBe listOf(5 to 23)
+            UtPackage.read(path).guid() shouldBe guid
+        }
+
+        test("repairGenerations rewrites a last generation whose export count matches and whose name count does not") {
+            val path = writeGenerations(root / "repair-names" / "Snowlvl.utx", exportCount = 5, nameCount = 23, listOf(5 to 22))
+
+            UtPackage.read(path).repairGenerations() shouldBe true
+
+            generationsOf(path) shouldBe listOf(5 to 23)
+        }
+
+        test("repairGenerations does not write to a package whose last generation already holds the header counts") {
+            val path = writeGenerations(root / "repair-correct" / "Engine.u", exportCount = 5, nameCount = 23, listOf(1 to 1, 5 to 23))
+            val before = path.readBytes()
+
+            repairedReadOnly(path) shouldBe false
+
+            path.readBytes() shouldBe before
+        }
+
+        test("repairGenerations does not write to a file that is not a package") {
+            val path = (root / "repair-not-a-package" / "Engine.u").createParentDirectories()
+            path.writeText("not a package, but long enough to hold a whole package header and a generation")
+            val before = path.readBytes()
+
+            repairedReadOnly(path) shouldBe false
+
+            path.readBytes() shouldBe before
+        }
+
+        test("repairGenerations does not write to a package version before 68, which holds no generations") {
+            val path =
+                writeGenerations(root / "repair-old-version" / "Engine.u", exportCount = 5, nameCount = 23, listOf(1 to 1), version = 61)
+            val before = path.readBytes()
+
+            repairedReadOnly(path) shouldBe false
+
+            path.readBytes() shouldBe before
+        }
+
+        test("repairGenerations does not write to a package that holds no generation") {
+            val path = writeGenerations(root / "repair-no-generation" / "Engine.u", exportCount = 5, nameCount = 23, emptyList())
+            val before = path.readBytes()
+
+            repairedReadOnly(path) shouldBe false
+
+            path.readBytes() shouldBe before
+        }
+
+        test("repairGenerations does not write to a package whose last generation lies past the end of the file") {
+            val path = (root / "repair-truncated" / "Engine.u").createParentDirectories()
+            val bytes = ByteBuffer.allocate(60).order(ByteOrder.LITTLE_ENDIAN)
+            bytes
+                .putInt(0x9E2A83C1.toInt())
+                .putShort(69)
+                .putInt(12, 23)
+                .putInt(20, 5)
+                .putInt(52, 3)
+            path.writeBytes(bytes.array())
+            val before = path.readBytes()
+
+            repairedReadOnly(path) shouldBe false
+
+            path.readBytes() shouldBe before
+        }
+
+        test("repairGenerations returns false for a package a demo names") {
+            UtPackage.named("Snowlvl", guid).repairGenerations() shouldBe false
+        }
+
+        test("repairGenerations of a package whose file was deleted after it was read throws IOException") {
+            val path = writeGenerations(root / "repair-deleted" / "Snowlvl.utx", exportCount = 5, nameCount = 23, listOf(1 to 1))
+            val held = UtPackage.read(path)
+            path.deleteExisting()
+
+            shouldThrow<IOException> { held.repairGenerations() }
         }
 
         test("list returns the regular files held directly in the directory whose extension is one of the extensions, ignoring case") {
