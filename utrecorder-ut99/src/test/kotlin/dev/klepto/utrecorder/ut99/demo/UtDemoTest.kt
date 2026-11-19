@@ -158,6 +158,12 @@ class UtDemoTest :
             vararg names: String,
         ) = CapLine(time, 1, names.joinToString(" and ") + " capped! Red team scores!")
 
+        fun captured(
+            time: Float,
+            name: String,
+            reported: String,
+        ) = CapLine(time, 1, "$name captured the blue flag in $reported")
+
         fun capRecord(
             line: CapLine,
             shift: Int,
@@ -666,6 +672,41 @@ class UtDemoTest :
 
                 UtDemo.read(bytes).cap shouldBe
                     UtDemoCap(capper = "fierd_1", id = "CAPID1", runTime = 54.5.seconds, demoTime = 57.seconds)
+            }
+        }
+
+        context("BT++ cap lines") {
+            test("read returns the capper and the run time in centiseconds of a captured line") {
+                val bytes = capDemo(captured(807f, "Artur509", "9:53.82"), CapLine(807f, 1, "Cap Time: 9:53.82"))
+
+                UtDemo.read(bytes).cap shouldBe
+                    UtDemoCap(capper = "Artur509", id = null, runTime = 593.82.seconds, demoTime = 807.seconds)
+            }
+
+            test("read returns the run time in milliseconds of a captured line") {
+                val bytes = capDemo(captured(77f, "kleps", "1:02.345"))
+
+                UtDemo.read(bytes).cap shouldBe
+                    UtDemoCap(capper = "kleps", id = null, runTime = 62.345.seconds, demoTime = 77.seconds)
+            }
+
+            test("read returns the cap of a capped line over an earlier captured line") {
+                val bytes =
+                    capDemo(
+                        captured(70f, "fierd_1", "1:00.00"),
+                        finished(77f, "kleps", "1:14.500", "1/1"),
+                        capped(77f, "kleps"),
+                    )
+
+                UtDemo.read(bytes).cap shouldBe
+                    UtDemoCap(capper = "kleps", id = null, runTime = 74.5.seconds, demoTime = 77.seconds)
+            }
+
+            test("read ignores the time of a captured line when the demo holds a cap marker") {
+                val bytes = capDemo(capMarker(77f, "CAPID1"), captured(77f, "kleps", "1:14.50"))
+
+                UtDemo.read(bytes).cap shouldBe
+                    UtDemoCap(capper = null, id = "CAPID1", runTime = null, demoTime = 77.seconds)
             }
         }
     })

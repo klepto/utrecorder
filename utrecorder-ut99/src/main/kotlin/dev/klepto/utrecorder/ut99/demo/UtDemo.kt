@@ -37,7 +37,8 @@ data class UtDemo(
         private val CAP_MARKER = Regex("""BTPOG_CAP_MARKER:(\S+)""")
         private val CAPPED = Regex("""(.+) capped! \S+ team scores!""")
         private val FINISHED = Regex("""\[UTBT] (.+) finished in (\S+) \(.*\)""")
-        private val REPORTED_TIME = Regex("""(?:(\d{1,3}):)?(\d{1,3})\.(\d{3})""")
+        private val CAPTURED = Regex("""(.+) captured the \S+ flag in (\S+)""")
+        private val REPORTED_TIME = Regex("""(?:(\d{1,3}):)?(\d{1,3})\.(\d{2,3})""")
         private val log = logger<UtDemo>()
 
         /**
@@ -101,10 +102,19 @@ data class UtDemo(
         }
 
         /**
-         * Returns the first cap [records] hold. If they hold none, returns `null` instead.
+         * Returns the first cap [records] hold. A cap marker or a `capped!` line wins over a BT++ `captured the ...
+         * flag in` line. If [records] hold none of them, returns `null` instead.
          */
         private fun capOf(records: List<UtDemoRecord>): UtDemoCap? {
             val lines = records.flatMap(::linesOf)
+            return markedCapOf(lines) ?: capturedCapOf(lines)
+        }
+
+        /**
+         * Returns the cap the first cap marker or `capped!` line of [lines] gives, with the run time of the `finished
+         * in` lines. If [lines] hold no cap marker and no `capped!` line, returns `null` instead.
+         */
+        private fun markedCapOf(lines: List<Line>): UtDemoCap? {
             val marker = lines.firstNotNullOfOrNull { it.marker(CAP_MARKER) }
             val capped = lines.firstNotNullOfOrNull { it.capped() }
             val demoTime = marker?.time ?: capped?.time ?: return null
@@ -119,6 +129,15 @@ data class UtDemo(
                 demoTime = demoTime,
             )
         }
+
+        /**
+         * Returns the cap the first BT++ `captured the ... flag in` line of [lines] gives: the one player it names as
+         * the capper, and the time it reports as the run time. If [lines] hold no such line, returns `null` instead.
+         */
+        private fun capturedCapOf(lines: List<Line>): UtDemoCap? =
+            lines
+                .firstNotNullOfOrNull { it.captured() }
+                ?.let { UtDemoCap(capper = it.name, id = null, runTime = it.runTime, demoTime = it.time) }
 
         /**
          * Returns every candidate line one [record] carries, at the demo time the record arrives at.
@@ -179,13 +198,15 @@ data class UtDemo(
                 ?.value
 
         /**
-         * Returns the run time a reported time of the form `M:SS.mmm` or `SS.mmm` holds. If [text] is in neither form,
-         * returns `null` instead.
+         * Returns the run time a reported time of the form `M:SS.fff` or `SS.fff` holds, with a fraction of 2 or 3
+         * digits. A fraction of 2 digits counts centiseconds. If [text] is in none of these forms, returns `null`
+         * instead.
          */
         private fun timeOf(text: String): Duration? {
             val match = REPORTED_TIME.matchEntire(text) ?: return null
-            val (minutes, seconds, millis) = match.destructured
-            return (minutes.toIntOrNull() ?: 0).minutes + seconds.toInt().seconds + millis.toInt().milliseconds
+            val (minutes, seconds, fraction) = match.destructured
+            val millis = fraction.padEnd(3, '0').toInt()
+            return (minutes.toIntOrNull() ?: 0).minutes + seconds.toInt().seconds + millis.milliseconds
         }
 
         /**
@@ -221,6 +242,15 @@ data class UtDemo(
                 val time = timeOf(match.groupValues[2]) ?: return null
                 return match.groupValues[1] to time
             }
+
+            /**
+             * Returns the cap this line broadcasts. If the line is not a BT++ `captured the ... flag in` line, returns
+             * `null` instead.
+             */
+            fun captured(): Captured? =
+                CAPTURED
+                    .matchEntire(text)
+                    ?.let { Captured(it.groupValues[1], timeOf(it.groupValues[2]), time) }
         }
 
         /**
@@ -242,6 +272,19 @@ data class UtDemo(
          */
         private class Capped(
             val names: List<String>,
+            val time: Duration,
+        )
+
+        /**
+         * The BT++ `captured the ... flag in` line a demo broadcasts.
+         *
+         * @property name The player the line names.
+         * @property runTime The run time the line reports. If it is in no known format, it is `null` instead.
+         * @property time The demo time the line arrives at.
+         */
+        private class Captured(
+            val name: String,
+            val runTime: Duration?,
             val time: Duration,
         )
     }
