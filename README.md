@@ -131,7 +131,7 @@ UnrealScript package loaded into the game.
 - **Console:** drives unattended playback, logs the start and end marks of the run and quits once the demo ends.
 - **HUD:** hides chat and other text messages.
 - **Smoothing:** smooths the movement and view of the player who recorded the demo. Ported from DemoSmoothing by
-  Berserker_BG, with his permission.
+  [Berserker_BG](https://github.com/BerserkerBG), with his permission.
 - **NPLoader guard:** stops the NPLoader client checks that a demo replays from running.
 
 ### [utrecorder-server](utrecorder-server)
@@ -168,7 +168,8 @@ downloads, archives, embedded artifacts, logging and progress reporting.
 
 - [OldUnreal](https://www.oldunreal.com) for the [469 patch](https://github.com/OldUnreal/UnrealTournamentPatches),
   which keeps Unreal Tournament 99 running on modern systems.
-- Berserker_BG for DemoSmoothing, which the demo smoothing in [utrecorder-uscript](utrecorder-uscript) is ported from.
+- [Berserker_BG](https://github.com/BerserkerBG) for DemoSmoothing, which the demo smoothing in
+  [utrecorder-uscript](utrecorder-uscript) is ported from.
 - [UT Files](https://ut-files.com) for the package redirect.
 - [utbt.net](https://utbt.net) for the cap list, the demos and the package redirect.
 - The [Internet Archive](https://archive.org) for hosting the game ISO and the recorded videos.
