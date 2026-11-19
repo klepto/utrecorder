@@ -21,6 +21,10 @@ services:
     stop_grace_period: 1m
     # At most four cores of CPU time. The JVM reads the limit, so the llvmpipe thread count follows it.
     cpus: 4
+    # A crashing game writes a core dump of about 700 MB into its System directory in the volume, and nothing removes
+    # it, so dumps are turned off.
+    ulimits:
+      core: 0
 
   # Terminates TLS for the domain that UTRECORDER_DOMAIN names, with a Let's Encrypt certificate, and proxies to the
   # server. The Caddyfile reads the domain from this environment.
