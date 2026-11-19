@@ -22,6 +22,7 @@ import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.paths.shouldExist
 import io.kotest.matchers.paths.shouldNotExist
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -54,6 +55,11 @@ class DefaultRecorderProviderTest :
         server.createContext("/missing") { exchange ->
             requests += exchange.requestURI.path
             exchange.sendResponseHeaders(404, -1)
+            exchange.close()
+        }
+        server.createContext("/broken") { exchange ->
+            requests += exchange.requestURI.path
+            exchange.sendResponseHeaders(500, -1)
             exchange.close()
         }
         server.createContext("/demo.dem") { exchange ->
@@ -154,10 +160,23 @@ class DefaultRecorderProviderTest :
                     listOf("Could not delete the orphaned workspace ${workspace / "recording-held"}")
             }
 
-        test("returns a failed result for a demo the server does not serve, and leaves no directory under the workspace") {
+        test("returns an unavailable result for a demo the server answers with 404, and leaves no directory under the workspace") {
+            val directories = directories()
+            val demoUrl = url("missing/cap.dem")
+
+            val result = provider(directories).record(demo(demoUrl))
+
+            result.shouldBeInstanceOf<RecorderResult.Unavailable>()
+            result.exception.url shouldBe demoUrl
+            result.exception.status shouldBe 404
+            result.exception.message shouldBe "Demo $demoUrl is unavailable: HTTP 404"
+            directories.workspace.listDirectoryEntries().shouldBeEmpty()
+        }
+
+        test("returns a failed result for a demo the server answers with 500, and leaves no directory under the workspace") {
             val directories = directories()
 
-            val result = provider(directories).record(demo(url("missing/cap.dem")))
+            val result = provider(directories).record(demo(url("broken/cap.dem")))
 
             result.shouldBeInstanceOf<RecorderResult.Failed>()
             directories.workspace.listDirectoryEntries().shouldBeEmpty()

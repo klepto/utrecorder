@@ -13,6 +13,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.engine.spec.tempdir
@@ -185,9 +186,18 @@ class RecordingEndpointTest :
         }
 
         test("lists every recording of the statuses named in any case, an outdated one without its mp4 included") {
-            http(mapOf("failed" to Failed, "unresolvable" to Unresolvable, "recorded" to Recorded, "outdated" to Outdated)) {
+            val statuses =
+                mapOf(
+                    "failed" to Failed,
+                    "unresolvable" to Unresolvable,
+                    "unavailable" to Unavailable,
+                    "recorded" to Recorded,
+                    "outdated" to Outdated,
+                )
+            http(statuses) {
                 capIds(client.get("/api/recordings?status=failed,UNRESOLVABLE").bodyAsText()) shouldBe
                     listOf("unresolvable", "failed")
+                capIds(client.get("/api/recordings?status=unavailable").bodyAsText()) shouldBe listOf("unavailable")
                 capIds(client.get("/api/recordings?status=Outdated").bodyAsText()) shouldBe listOf("outdated")
             }
         }

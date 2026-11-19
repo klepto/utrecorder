@@ -10,6 +10,7 @@ import dev.klepto.utrecorder.server.recording.RecordingQueue
 import dev.klepto.utrecorder.server.recording.RecordingRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import kotlinx.coroutines.flow.first
@@ -88,6 +89,7 @@ class StatisticsReport(
             recording = running,
             failed = all.count { it.status == Failed },
             unresolvable = all.count { it.status == Unresolvable },
+            unavailable = all.count { it.status == Unavailable },
         )
     }
 

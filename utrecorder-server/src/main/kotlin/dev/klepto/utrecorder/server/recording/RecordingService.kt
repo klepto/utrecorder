@@ -11,6 +11,7 @@ import dev.klepto.utrecorder.server.Service
 import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -154,6 +155,11 @@ class RecordingService(
                 log.error(result.exception) { "Giving up on recording $capId, couldn't resolve required packages" }
                 val missingPackage = MissingPackage(result.exception.packageName, result.exception.guid)
                 repository.finish(capId, Unresolvable, result.exception.toString(), missingPackage)
+            }
+
+            is RecorderResult.Unavailable -> {
+                log.error(result.exception) { "Giving up on recording $capId, its demo is unavailable" }
+                repository.finish(capId, Unavailable, result.exception.toString())
             }
         }
     }

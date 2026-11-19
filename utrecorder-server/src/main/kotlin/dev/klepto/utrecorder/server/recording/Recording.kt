@@ -122,4 +122,10 @@ enum class RecordingStatus(
      * and once every `server.recording.retry_interval` while the server runs.
      */
     Unresolvable(isCompleted = false),
+
+    /**
+     * Given up on because the source of its demo answered the download with a client error, such as `404 Not Found`.
+     * Set to [Pending] again when the server starts, never while the server runs.
+     */
+    Unavailable(isCompleted = false),
 }

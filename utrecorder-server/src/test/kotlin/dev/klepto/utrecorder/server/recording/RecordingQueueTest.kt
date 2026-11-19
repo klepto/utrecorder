@@ -11,6 +11,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import io.kotest.assertions.nondeterministic.eventually
@@ -875,6 +876,17 @@ class RecordingQueueTest :
             got shouldBe (listOf("unresolvable", "failed", "recording") to Recorded)
         }
 
+        test("queues an unavailable recording again on start, whatever its interruptions") {
+            val got =
+                stored(maxAttempts = 3) { _, repository, queue ->
+                    repository += listOf(demo("unavailable", 1.hours))
+                    repository.finish("unavailable", Unavailable, "Demo is unavailable: HTTP 404")
+                    repository.update("unavailable") { it.copy(interruptions = 3) }
+                    running(queue) { capIds(queue) to repository["unavailable"]?.status }
+                }
+            got shouldBe (listOf("unavailable") to Pending)
+        }
+
         test("counts an interruption of each recording found recording on start, and queues it again below the limit") {
             val got =
                 stored(maxAttempts = 3) { _, repository, queue ->
@@ -951,7 +963,7 @@ class RecordingQueueTest :
             }
         }
 
-        test("queues failed and unresolvable recordings again once the retry interval passes, and leaves outdated and the rest") {
+        test("queues failed and unresolvable recordings again once the retry interval passes, and leaves unavailable and the rest") {
             stored(retryInterval = 300.milliseconds) { _, repository, queue ->
                 running(queue) {
                     repository +=
@@ -961,12 +973,14 @@ class RecordingQueueTest :
                             demo("unresolvable", 3.hours),
                             demo("recorded", 2.hours),
                             demo("outdated", 1.hours),
+                            demo("unavailable", 30.minutes),
                         )
                     repository.claim("busy")
                     repository.finish("failed", Failed, "Capture failed")
                     repository.finish("unresolvable", Unresolvable, "Missing BTPog")
                     repository.finish("recorded", Recorded)
                     repository.finish("outdated", Outdated, "Capture failed")
+                    repository.finish("unavailable", Unavailable, "Demo is unavailable: HTTP 404")
                     eventually(5.seconds) { capIds(queue) shouldBe listOf("unresolvable", "failed") }
                     delay(600.milliseconds)
                     repository.all().map { it.demo.capId to it.status } shouldBe
@@ -976,6 +990,7 @@ class RecordingQueueTest :
                             "unresolvable" to Pending,
                             "recorded" to Recorded,
                             "outdated" to Outdated,
+                            "unavailable" to Unavailable,
                         )
                 }
             }

@@ -64,7 +64,8 @@ export type RecordingStatus =
   | "Archived"
   | "Outdated"
   | "Failed"
-  | "Unresolvable";
+  | "Unresolvable"
+  | "Unavailable";
 
 /** A package a demo names that no source holds. */
 export interface MissingPackage {
@@ -141,6 +142,8 @@ export interface QueueStatistics {
   recording: number;
   failed: number;
   unresolvable: number;
+  /** The recordings given up on because the source no longer serves their demo. */
+  unavailable: number;
 }
 
 /** What the recorder produced in the last day. */
