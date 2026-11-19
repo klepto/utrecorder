@@ -7,8 +7,9 @@
 // and an end mark around the demo, then stops playback and exits the process
 // once the demo passes the end TimerStop set, the demo is over, the demo
 // spectator is gone, or a timeout runs out. While bAutoExit is on, it also
-// stops warp zones from moving actors on the client and NPLoader's client
-// checks from running.
+// stops warp zones from moving actors on the client, and stops NPLoader's
+// client checks on each NPLoader replication info the demo spawns once the
+// guard exists.
 //
 // Exec commands, typically run from an -EXEC script. They act whether
 // bAutoExit is on or not:
@@ -235,8 +236,9 @@ function DisableWarpSimulation()
 }
 
 // Keeps a UTRecorderNPLoaderGuard spawned in the demo level, which destroys
-// every NPLoader replication info the demo spawns from then on, and destroys
-// those spawned before it.
+// every NPLoader replication info the demo spawns from then on. When it
+// spawns the guard, logs each NPLoader replication info spawned before it,
+// which the guard leaves alive.
 function DisableNPLoader()
 {
 	local DemoPlaybackSpec Spec;
@@ -249,15 +251,16 @@ function DisableNPLoader()
 	if (Spec == None)
 		return;
 
-	if (NPLoaderGuard == None || NPLoaderGuard.bDeleteMe)
-	{
-		NPLoaderGuard = Spec.Spawn(class'UTRecorderNPLoaderGuard');
-		if (NPLoaderGuard != None)
-			Log("UTRecorder: spawned NPLoader guard" @ NPLoaderGuard, 'UTRecorder');
-	}
+	if (NPLoaderGuard != None && !NPLoaderGuard.bDeleteMe)
+		return;
 
+	NPLoaderGuard = Spec.Spawn(class'UTRecorderNPLoaderGuard');
+	if (NPLoaderGuard == None)
+		return;
+
+	Log("UTRecorder: spawned NPLoader guard" @ NPLoaderGuard, 'UTRecorder');
 	foreach Spec.AllActors(class'ReplicationInfo', Info)
-		class'UTRecorderNPLoaderGuard'.static.DisableActor(Info);
+		class'UTRecorderNPLoaderGuard'.static.ReportActor(Info);
 }
 
 // Logs the tick delta and the level and demo clocks.
