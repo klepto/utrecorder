@@ -36,7 +36,8 @@ import kotlin.time.DurationUnit
  * demo windowed and without sound. The run is killed once ffmpeg has encoded no new frame for
  * [VideoCaptureConfig.idleTimeout], however long the whole run takes. The frames are encoded into a video file in a
  * workspace of the capture's own. The progress of a capture is the number of frames encoded out of the number
- * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. Every line the hook library prints is logged at
+ * [DemoPlaybackConfig.runDuration] makes at [VideoCaptureConfig.fps]. The capture waits for the hook library to connect
+ * for up to [DemoPlaybackConfig.timeout]. Every line the hook library prints is logged at
  * DEBUG. A run that logs no marks fails with an [IllegalStateException] naming the missing mark and the exit code. A
  * run whose hook library reports that it stopped the frame capture fails with an [IllegalStateException] naming the
  * reason it gave. A run whose game reports that it cannot play the demo fails with a [DemoUnplayableException] naming
@@ -72,12 +73,25 @@ class FfmpegVideoCapture(
                 val format = config.format(description.runDuration(), audioBitrate)
                 val frames = MutableStateFlow(0L)
                 val onFrames = frameProgress(description, frames, onProgress)
-                val encoder = FrameEncoder(config, format, DemoPlaybackConfig.STARTUP_TIMEOUT, target, ffmpeg, onFrames)
+                val encoder = encoder(description, format, target, onFrames)
                 val hooks = DemoPlaybackHooks.extract(system)
                 val marks = DemoPlaybackMarks.parse(play(description, format, hooks, encoder, frames))
                 track(target, format, marks)
             }
         }
+
+    /**
+     * Returns the encoder of the run of [description] in [format], which encodes into [target] and reports its progress
+     * to [onProgress]. It waits for the hook library to connect for as long as the run may take,
+     * [DemoPlaybackConfig.timeout], since the console arms the hook library only once the followed player spawns, which
+     * without a known run start takes a spawn timeout of stepped engine time.
+     */
+    fun encoder(
+        description: DemoPlaybackConfig,
+        format: VideoFormat,
+        target: Path,
+        onProgress: (MediaProgress) -> Unit = {},
+    ): FrameEncoder = FrameEncoder(config, format, description.timeout, target, ffmpeg, onProgress)
 
     /**
      * Returns the listener that publishes the frames encoded to [encoded], and reports them out of the frames the run

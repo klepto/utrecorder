@@ -6,15 +6,20 @@ import dev.klepto.utrecorder.common.io.Executable
 import dev.klepto.utrecorder.common.io.workspace
 import dev.klepto.utrecorder.core.demo.DemoPlaybackConfig
 import dev.klepto.utrecorder.core.demo.DemoPlaybackRenderDevice
+import dev.klepto.utrecorder.core.media.MediaProgress
+import dev.klepto.utrecorder.core.media.MediaTool
 import dev.klepto.utrecorder.ut99.UtConfig
 import dev.klepto.utrecorder.ut99.UtIni
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtPackage
 import dev.klepto.utrecorder.ut99.UtPlatform
 import dev.klepto.utrecorder.ut99.UtProcessFiles
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.withTimeout
+import java.io.OutputStream
 import java.nio.file.Path
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.createDirectories
@@ -22,6 +27,8 @@ import kotlin.io.path.createTempDirectory
 import kotlin.io.path.div
 import kotlin.io.path.writeText
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 class FfmpegVideoCaptureTest :
@@ -232,5 +239,47 @@ class FfmpegVideoCaptureTest :
 
             capture(VideoCaptureConfig(ConfigReader.EMPTY, fps = 60, smoothRecorder = false)).execScript(description) shouldBe
                 listOf("SeekStart", "DemoFrames 120.000000", "TimerReset 10.120962", "TimerStop 64.572962", "HideMessages")
+        }
+
+        test("encoder waits for the hook library for the run timeout of the demo, its duration plus 180 seconds") {
+            val description = DemoPlaybackConfig.of("staged-demo", 10.minutes)
+
+            val encoder = capture().encoder(description, format, home / "video.mp4")
+
+            encoder.listenTimeout shouldBe 10.minutes + 180.seconds
+            encoder.listenTimeout shouldBe description.timeout
+        }
+
+        test("encoder waits for the hook library longer than the startup timeout for a short demo") {
+            val description = DemoPlaybackConfig.of("staged-demo", Duration.ZERO)
+
+            capture().encoder(description, format, home / "video.mp4").listenTimeout shouldBe 180.seconds
+        }
+
+        test("encoder fails at once with a long run timeout when the game exits before the hook library connects") {
+            val relaying =
+                object : MediaTool {
+                    override suspend fun run(
+                        vararg arguments: String,
+                        input: (suspend (OutputStream) -> Unit)?,
+                        onProgress: ((MediaProgress) -> Unit)?,
+                    ) {
+                        input?.invoke(OutputStream.nullOutputStream())
+                    }
+
+                    override suspend fun frames(file: Path): Int = 1
+
+                    override suspend fun duration(file: Path): Double = 0.0
+                }
+            val settings = VideoCaptureConfig(ConfigReader.EMPTY, port = 0)
+            val capture = FfmpegVideoCapture(settings, "96k", installation, directories, relaying)
+            val description = DemoPlaybackConfig.of("staged-demo", 1.hours)
+            val tiny = format.copy(width = 1, height = 1)
+
+            withTimeout(10.seconds) {
+                shouldThrow<IllegalStateException> {
+                    capture.encoder(description, tiny, home / "unconnected.mp4").encode { }
+                }.message shouldBe "Hook library did not connect before the capture ended"
+            }
         }
     })
