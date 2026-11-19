@@ -49,6 +49,13 @@ describe("StatisticsPage", () => {
     expect(screen.getByText(line("23 recent"))).toBeInTheDocument();
   });
 
+  test("counts the recordings whose demo is unavailable among the failed ones", async () => {
+    serve({ ...statistics, queue: { ...statistics.queue, failed: 3, unavailable: 2 } });
+    renderPage();
+
+    expect(await screen.findByText(line("5 failed"))).toBeInTheDocument();
+  });
+
   test("shows the share of both parts of the bar on hover anywhere over it", async () => {
     renderPage();
 
@@ -200,7 +207,16 @@ describe("StatisticsPage", () => {
       days.map((day) => ({ ...day, recordings: 0, capTime: "PT0S" }));
     serve({
       ...statistics,
-      queue: { size: 0, recent: 0, backlog: 0, capTime: "PT0S", recording: 0, failed: 0, unresolvable: 0 },
+      queue: {
+        size: 0,
+        recent: 0,
+        backlog: 0,
+        capTime: "PT0S",
+        recording: 0,
+        failed: 0,
+        unresolvable: 0,
+        unavailable: 0,
+      },
       recorder: { ...statistics.recorder, days: empty(statistics.recorder.days) },
     });
     renderPage();

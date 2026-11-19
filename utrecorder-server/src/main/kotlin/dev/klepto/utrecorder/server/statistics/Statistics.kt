@@ -43,6 +43,7 @@ data class Statistics(
  * @property recording The number of recordings a recorder is running.
  * @property failed The number of failed recordings.
  * @property unresolvable The number of unresolvable recordings.
+ * @property unavailable The number of recordings whose demo is unavailable.
  */
 @Serializable
 data class QueueStatistics(
@@ -53,6 +54,7 @@ data class QueueStatistics(
     val recording: Int,
     val failed: Int,
     val unresolvable: Int,
+    val unavailable: Int,
 )
 
 /**

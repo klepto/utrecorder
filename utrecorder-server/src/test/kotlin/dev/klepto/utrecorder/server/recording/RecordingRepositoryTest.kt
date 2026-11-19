@@ -7,6 +7,7 @@ import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -117,11 +118,12 @@ class RecordingRepositoryTest :
         test("removes the unrecorded recordings that are not kept, and keeps every other one") {
             val capIds =
                 repository { repository ->
-                    val capIds = listOf("pending", "failed", "unresolvable", "recording", "recorded", "viewed", "kept")
+                    val capIds = listOf("pending", "failed", "unresolvable", "unavailable", "recording", "recorded", "viewed", "kept")
                     repository += capIds.mapIndexed { minute, capId -> demo(capId, minute) }
                     repository.update("recording") { it.copy(status = RecordingStatus.Recording) }
                     repository.finish("failed", Failed)
                     repository.finish("unresolvable", Unresolvable)
+                    repository.finish("unavailable", Unavailable)
                     repository.finish("recorded", Recorded)
                     repository.update("viewed") { it.copy(recordedAt = now.get()) }
                     repository.retainUnrecorded { it == "kept" }

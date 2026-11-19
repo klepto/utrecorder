@@ -78,7 +78,8 @@ class StatisticsEndpointTest :
                         statistics.keys shouldBe setOf("generatedAt", "queue", "recorder", "storage", "personalBests")
                         statistics["generatedAt"]!!.jsonPrimitive.content shouldBe "2026-10-05T12:00:00Z"
                         val queued = statistics["queue"]!!.jsonObject
-                        queued.keys shouldBe setOf("size", "recent", "backlog", "capTime", "recording", "failed", "unresolvable")
+                        queued.keys shouldBe
+                            setOf("size", "recent", "backlog", "capTime", "recording", "failed", "unresolvable", "unavailable")
                         queued["capTime"]!!.jsonPrimitive.content shouldBe "PT1M30S"
                         val recorder = statistics["recorder"]!!.jsonObject
                         recorder.keys shouldBe setOf("pace", "lastDay", "days", "completed", "views")

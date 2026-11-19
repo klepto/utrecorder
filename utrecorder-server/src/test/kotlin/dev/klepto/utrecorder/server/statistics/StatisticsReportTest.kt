@@ -17,6 +17,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Archived
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import io.kotest.core.spec.style.FunSpec
@@ -123,7 +124,7 @@ class StatisticsReportTest :
                 val statistics = report.read()
 
                 statistics.generatedAt shouldBe now
-                statistics.queue shouldBe QueueStatistics(0, 0, 0, Duration.ZERO, 0, 0, 0)
+                statistics.queue shouldBe QueueStatistics(0, 0, 0, Duration.ZERO, 0, 0, 0, 0)
                 statistics.recorder.pace shouldBe null
                 statistics.recorder.lastDay shouldBe DayOutput(0, Duration.ZERO)
                 statistics.recorder.days.size shouldBe 30
@@ -177,6 +178,7 @@ class StatisticsReportTest :
                         demo("backlog", now - 3.days, 20.seconds),
                         demo("failed", now - 3.days),
                         demo("unresolvable", now - 3.days),
+                        demo("unavailable", now - 3.days),
                         demo("recorded", now - 3.days, 60.seconds),
                         demo("archived", now - 3.days, 30.seconds),
                         demo("archived-old", now - 20.days, 40.seconds),
@@ -186,6 +188,7 @@ class StatisticsReportTest :
             ) {
                 recordings.finish("failed", Failed)
                 recordings.finish("unresolvable", Unresolvable)
+                recordings.finish("unavailable", Unavailable)
                 set("recorded") {
                     it.copy(status = Recorded, recordedAt = now - 1.hours, processingTime = 150.seconds, size = 100, views = 3)
                 }
@@ -224,7 +227,7 @@ class StatisticsReportTest :
 
                     val statistics = report.read()
 
-                    statistics.queue shouldBe QueueStatistics(2, 1, 1, 30.seconds, 1, 1, 1)
+                    statistics.queue shouldBe QueueStatistics(2, 1, 1, 30.seconds, 1, 1, 1, 1)
                     statistics.recorder.pace shouldBe 2.3
                     statistics.recorder.lastDay shouldBe DayOutput(3, 90.seconds)
                     statistics.recorder.days.filter { it.recordings > 0 } shouldBe

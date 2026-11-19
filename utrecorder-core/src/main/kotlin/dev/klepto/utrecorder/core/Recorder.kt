@@ -15,12 +15,14 @@ import dev.klepto.utrecorder.core.demo.DemoPlayback
 import dev.klepto.utrecorder.core.demo.DemoPlaybackMarks
 import dev.klepto.utrecorder.core.demo.DemoPlaybackResources
 import dev.klepto.utrecorder.core.demo.DemoPlaybackUscript
+import dev.klepto.utrecorder.core.demo.DemoUnavailableException
 import dev.klepto.utrecorder.ut99.UtInstallation
 import dev.klepto.utrecorder.ut99.UtInstaller
 import dev.klepto.utrecorder.ut99.UtMapInstaller
 import dev.klepto.utrecorder.ut99.UtPackageCache
 import dev.klepto.utrecorder.ut99.UtPackageException
 import dev.klepto.utrecorder.ut99.demo.UtDemo
+import io.ktor.client.plugins.ClientRequestException
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.file.Path
@@ -89,10 +91,13 @@ class Recorder(
      * @param name The name of the mp4 and of its thumbnail without their extensions. If not provided, uses the file name
      * of the downloaded demo without its `.dem` extension.
      * @throws IllegalArgumentException If [url] names no demo file.
+     * @throws DemoUnavailableException If the server answers the demo download with a client error, a status from `400`
+     * to `499`.
      * @throws java.io.IOException If the connection that downloads the demo fails or times out.
-     * @throws IllegalStateException If the server answers the demo download with a status other than success, if the demo
-     * cannot be resolved, if a capture fails the recording, if the length of the mp4 does not match the run time the demo
-     * reports, or if the thumbnail cannot be written. A failed audio capture always fails the recording.
+     * @throws IllegalStateException If the server answers the demo download with a status that is neither a success nor
+     * a client error, if the demo cannot be resolved, if a capture fails the recording, if the length of the mp4 does
+     * not match the run time the demo reports, or if the thumbnail cannot be written. A failed audio capture always
+     * fails the recording.
      * @throws UtPackageException If no source serves one of the packages the demo names at the GUID it recorded.
      */
     suspend fun record(
@@ -112,13 +117,18 @@ class Recorder(
      * [onProgress] receives how much of the demo is downloaded, and `1.0` once the download is done.
      *
      * @throws IllegalArgumentException If [url] names no demo file.
+     * @throws DemoUnavailableException If the server answers with a client error, a status from `400` to `499`.
      */
     private suspend fun Workspace.downloadDemo(
         url: String,
         onProgress: ProgressListener<Unit>,
     ): Path {
         val demo = directory / demoFileName(url)
-        Downloader(url, timeout = 10.minutes, directories = directories).download(demo, onProgress)
+        try {
+            Downloader(url, timeout = 10.minutes, directories = directories).download(demo, onProgress)
+        } catch (exception: ClientRequestException) {
+            throw DemoUnavailableException(url, exception.response.status.value, exception)
+        }
         onProgress(Progress(1.0))
         return demo
     }

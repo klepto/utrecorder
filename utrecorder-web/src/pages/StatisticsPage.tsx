@@ -106,7 +106,7 @@ const SummaryPanel = ({ queue, recorder }: { queue: QueueStatistics; recorder: R
               <Figure>{formatCount(recorder.lastDay.recordings)}</Figure> recent
             </Text>
             <Text>
-              <Figure>{formatCount(queue.failed)}</Figure> failed
+              <Figure>{formatCount(queue.failed + queue.unavailable)}</Figure> failed
             </Text>
             <Text>
               <Figure>{formatCount(queue.unresolvable)}</Figure> missing packages

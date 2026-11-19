@@ -1,6 +1,7 @@
 package dev.klepto.utrecorder.server.recording
 
 import dev.klepto.utrecorder.core.capture.video.VideoStream
+import dev.klepto.utrecorder.core.demo.DemoUnavailableException
 import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.ut99.UtPackageException
 import java.nio.file.Path
@@ -50,5 +51,15 @@ sealed interface RecorderResult {
      */
     data class Unplayable(
         val exception: DemoUnplayableException,
+    ) : RecorderResult
+
+    /**
+     * The source of the demo answered its download with a client error, so no capture can succeed until the source
+     * serves the demo again.
+     *
+     * @property exception The failure that names the URL of the demo and the status of the answer.
+     */
+    data class Unavailable(
+        val exception: DemoUnavailableException,
     ) : RecorderResult
 }

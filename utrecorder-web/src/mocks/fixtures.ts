@@ -209,7 +209,16 @@ export const unresolvable: Recording[] = [
 /** Sample statistics: 30 days oldest first, one day of zeros in the middle and a partial today. */
 export const statistics: Statistics = {
   generatedAt: "2026-09-28T17:45:00Z",
-  queue: { size: 148, recent: 31, backlog: 117, capTime: "PT2H4M", recording: 2, failed: 3, unresolvable: 5 },
+  queue: {
+    size: 148,
+    recent: 31,
+    backlog: 117,
+    capTime: "PT2H4M",
+    recording: 2,
+    failed: 3,
+    unresolvable: 5,
+    unavailable: 1,
+  },
   recorder: {
     pace: 2.5,
     lastDay: { recordings: 23, capTime: "PT19M56S" },

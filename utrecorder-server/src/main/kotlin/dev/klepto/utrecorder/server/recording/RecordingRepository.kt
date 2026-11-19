@@ -10,6 +10,7 @@ import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,7 +79,7 @@ class RecordingRepository(
 
     /**
      * Removes every recording that has not been recorded and whose cap id [keep] does not accept. A recording has not
-     * been recorded if it is [Pending], [Failed] or [Unresolvable], without a [Recording.recordedAt].
+     * been recorded if it is [Pending], [Failed], [Unresolvable] or [Unavailable], without a [Recording.recordedAt].
      */
     suspend fun retainUnrecorded(keep: (String) -> Boolean) {
         transaction { recordings ->
@@ -161,7 +162,8 @@ class RecordingRepository(
     }
 
     /**
-     * Returns `true` if this recording is [Pending], [Failed] or [Unresolvable], without a [Recording.recordedAt].
+     * Returns `true` if this recording is [Pending], [Failed], [Unresolvable] or [Unavailable], without a
+     * [Recording.recordedAt].
      */
     private fun Recording.isUnrecorded(): Boolean = status in UNRECORDED && recordedAt == null
 
@@ -316,6 +318,6 @@ class RecordingRepository(
     }
 
     private companion object {
-        val UNRECORDED = setOf(Pending, Failed, Unresolvable)
+        val UNRECORDED = setOf(Pending, Failed, Unresolvable, Unavailable)
     }
 }

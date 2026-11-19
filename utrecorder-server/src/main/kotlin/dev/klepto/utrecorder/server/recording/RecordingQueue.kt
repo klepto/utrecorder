@@ -9,6 +9,7 @@ import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Outdated
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Pending
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Uploaded
 import kotlinx.coroutines.CompletableDeferred
@@ -48,11 +49,12 @@ import kotlin.time.Instant
  * On [start], every [RecordingStatus.Recording] recording was interrupted by a server stop: its
  * [Recording.interruptions] goes up by one, and it is set to [Pending] again below [ServerConfig.recordingMaxAttempts],
  * or to [Failed] at it. Every [Failed] recording whose [Recording.interruptions] is below
- * [ServerConfig.recordingMaxAttempts], and every [Unresolvable] one, is set to [Pending] again. All of it is one
- * transaction, then the queue is built. After that, the queue is built again whenever [DemoRepository.changes] or
- * [RecordingRepository.statusChanges] signals a change, a change of the withdrawn demos included, and every [Failed]
- * or [Unresolvable] recording is set to [Pending] again once every [ServerConfig.recordingRetryInterval]. A build that
- * changes nothing changes no status.
+ * [ServerConfig.recordingMaxAttempts], and every [Unresolvable] or [Unavailable] one, is set to [Pending] again. All
+ * of it is one transaction, then the queue is built. After that, the queue is built again whenever
+ * [DemoRepository.changes] or [RecordingRepository.statusChanges] signals a change, a change of the withdrawn demos
+ * included, and every [Failed] or [Unresolvable] recording is set to [Pending] again once every
+ * [ServerConfig.recordingRetryInterval]. An [Unavailable] recording is not. A build that changes nothing changes no
+ * status.
  *
  * Every build sets the [Recording.runMedal] of each recording: the [Demo.medal] of the fastest stored demo of its
  * [Demo.teamRunId] that has a medal, or its own [Demo.medal] for a solo demo.
@@ -155,7 +157,7 @@ class RecordingQueue(
     /**
      * Counts an interruption of every [RecordingStatus.Recording] recording of [recordings], and sets it to [Pending]
      * or, at [ServerConfig.recordingMaxAttempts], to [Failed]. Sets every [Failed] recording below that limit and every
-     * [Unresolvable] one to [Pending]. Runs as one transaction.
+     * [Unresolvable] or [Unavailable] one to [Pending]. Runs as one transaction.
      */
     private suspend fun requeue() {
         recordings.updateAll { requeued(it, config.recordingMaxAttempts) }
@@ -172,7 +174,7 @@ class RecordingQueue(
     }
 
     /**
-     * Sets every [Failed] or [Unresolvable] recording of [recordings] to [Pending].
+     * Sets every [Failed] or [Unresolvable] recording of [recordings] to [Pending]. Leaves every [Unavailable] one.
      */
     private suspend fun retry() {
         setStatus(Pending) { it.status in GIVEN_UP }
@@ -382,7 +384,8 @@ class RecordingQueue(
          * [Recording.interruptions]. A [RecordingStatus.Recording] one was interrupted by a server stop: its
          * [Recording.interruptions] goes up by one, and it becomes [Pending] below [maxAttempts], or [Failed] with the
          * count in its [Recording.error] at it. A [Failed] one becomes [Pending] while its [Recording.interruptions] is
-         * below [maxAttempts], and an [Unresolvable] one always does. Any other recording is returned unchanged.
+         * below [maxAttempts], and an [Unresolvable] or [Unavailable] one always does. Any other recording is returned
+         * unchanged.
          */
         fun requeued(
             recording: Recording,
@@ -391,7 +394,7 @@ class RecordingQueue(
             when (recording.status) {
                 RecordingStatus.Recording -> interrupted(recording, maxAttempts)
                 Failed if recording.interruptions >= maxAttempts -> recording
-                Failed, Unresolvable -> recording.copy(status = Pending)
+                Failed, Unresolvable, Unavailable -> recording.copy(status = Pending)
                 else -> recording
             }
 

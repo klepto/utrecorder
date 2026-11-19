@@ -11,6 +11,7 @@ import dev.klepto.utrecorder.common.ProgressListener
 import dev.klepto.utrecorder.core.RecorderStage
 import dev.klepto.utrecorder.core.RecorderStage.FetchingDemo
 import dev.klepto.utrecorder.core.capture.video.VideoStream
+import dev.klepto.utrecorder.core.demo.DemoUnavailableException
 import dev.klepto.utrecorder.core.demo.DemoUnplayableException
 import dev.klepto.utrecorder.server.DiskSpace
 import dev.klepto.utrecorder.server.ServerConfig
@@ -20,6 +21,7 @@ import dev.klepto.utrecorder.server.demo.Demo
 import dev.klepto.utrecorder.server.demo.DemoRepository
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Failed
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Recorded
+import dev.klepto.utrecorder.server.recording.RecordingStatus.Unavailable
 import dev.klepto.utrecorder.server.recording.RecordingStatus.Unresolvable
 import dev.klepto.utrecorder.ut99.UtPackageException
 import io.kotest.assertions.nondeterministic.eventually
@@ -456,6 +458,39 @@ class RecordingServiceTest :
             ) { repository ->
                 eventually(5.seconds) { names(recordings) shouldContainExactly listOf("cap.mp4") }
                 repository["unplayable"]?.status shouldBe Failed
+            }
+
+            attempts.get() shouldBe 1
+        }
+
+        test("gives up on a demo at once when its download answers a client error, and stores the error") {
+            val recordings = createTempDirectory(root, "recordings")
+            val attempts = AtomicInteger()
+            val unavailable = DemoUnavailableException("http://demos.example/unavailable.dem", 404, null)
+            running(
+                listOf(demo("unavailable", 1), demo("cap", 0)),
+                { repository, queue ->
+                    RecordingService(
+                        repository,
+                        queue,
+                        listOf(
+                            recorder { demo, _ ->
+                                if (demo.capId == "cap") return@recorder done(demo)
+                                attempts.incrementAndGet()
+                                RecorderResult.Unavailable(unavailable)
+                            },
+                        ),
+                        config(recordings),
+                        diskSpace = enough,
+                    )
+                },
+            ) { repository ->
+                eventually(5.seconds) { names(recordings) shouldContainExactly listOf("cap.mp4") }
+                val recording = repository["unavailable"]
+                recording?.status shouldBe Unavailable
+                recording?.error shouldBe
+                    "dev.klepto.utrecorder.core.demo.DemoUnavailableException: " +
+                    "Demo http://demos.example/unavailable.dem is unavailable: HTTP 404"
             }
 
             attempts.get() shouldBe 1
