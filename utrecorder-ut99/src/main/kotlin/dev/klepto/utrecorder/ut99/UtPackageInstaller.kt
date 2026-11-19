@@ -25,7 +25,9 @@ import kotlin.io.path.extension
  * package from the packages directory first, and downloads it from the redirects straight into the installation after.
  * The packages directory is only read. A source serving the package at another GUID is passed over, and a package
  * downloaded at another GUID is discarded. When no source holds a package at the GUID the demo names, [install] throws
- * [UtPackageException]. A package fetched before a later one fails is kept, on disk and in [installed].
+ * [UtPackageException]. A package fetched before a later one fails is kept, on disk and in [installed]. Each package
+ * the installation holds for the demo, whether it held it before or fetched it just now, then gets its stale last
+ * generation repaired, as [UtPackage.repairGenerations] does.
  *
  * [uninstall] deletes only the packages this installer fetched, and leaves the ones the installation already held.
  *
@@ -67,16 +69,29 @@ class UtPackageInstaller(
     }
 
     /**
-     * Fetches [required] into the installation, unless the installation already holds it.
+     * Fetches [required] into the installation, unless the installation already holds it. Then repairs the stale last
+     * generation of the package the installation holds, whether it held it before or fetched it just now.
      *
      * @throws UtPackageException If no source holds [required] at the GUID the demo recorded.
      */
     private suspend fun install(required: UtPackage) {
-        if (installedPackage(required) != null) return
-        fetched +=
+        val held = installedPackage(required) ?: fetchedPackage(required)
+        if (held.repairGenerations()) log.warn { "Repaired the stale last generation of ${held.name}" }
+    }
+
+    /**
+     * Returns the package [required] fetched into the installation, copied from the packages directory or else
+     * downloaded from the redirects.
+     *
+     * @throws UtPackageException If no source holds [required] at the GUID the demo recorded.
+     */
+    private suspend fun fetchedPackage(required: UtPackage): UtPackage {
+        val fetchedPackage =
             copiedPackage(required)
                 ?: downloadedPackage(required)
                 ?: throw UtPackageException(required.name, required.guid(), sources)
+        fetched += fetchedPackage
+        return fetchedPackage
     }
 
     override suspend fun uninstall() {

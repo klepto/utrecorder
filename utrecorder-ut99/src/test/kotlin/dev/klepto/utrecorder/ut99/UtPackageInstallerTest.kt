@@ -1,5 +1,9 @@
 package dev.klepto.utrecorder.ut99
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import com.sun.net.httpserver.HttpServer
 import dev.klepto.utrecorder.common.ConfigReader
 import dev.klepto.utrecorder.common.DirectoriesConfig
@@ -11,6 +15,7 @@ import dev.klepto.utrecorder.ut99.UtPlatform.WINDOWS
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
@@ -24,6 +29,7 @@ import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.io.path.listDirectoryEntries
 import kotlin.io.path.name
+import kotlin.io.path.readBytes
 import kotlin.io.path.readText
 import kotlin.io.path.writeBytes
 import kotlin.io.path.writeText
@@ -216,6 +222,43 @@ class UtPackageInstallerTest :
             path: Path,
             guid: String,
         ): Path = path.createParentDirectories().also { it.writeBytes(packageBytes(guid)) }
+
+        fun generationBytes(
+            guid: String,
+            generation: Pair<Int, Int>,
+        ): ByteArray {
+            val bytes = ByteBuffer.wrap(packageBytes(guid)).order(ByteOrder.LITTLE_ENDIAN)
+            bytes
+                .putShort(4, 69)
+                .putInt(12, 23)
+                .putInt(20, 5)
+                .putInt(52, 1)
+            bytes.putInt(56, generation.first).putInt(60, generation.second)
+            return bytes.array()
+        }
+
+        fun writeGeneration(
+            path: Path,
+            guid: String,
+            generation: Pair<Int, Int>,
+        ): Path = path.createParentDirectories().also { it.writeBytes(generationBytes(guid, generation)) }
+
+        fun generationOf(path: Path): Pair<Int, Int> {
+            val bytes = ByteBuffer.wrap(path.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+            return bytes.getInt(56) to bytes.getInt(60)
+        }
+
+        suspend fun warnings(block: suspend () -> Unit): List<String> {
+            val logger = LoggerFactory.getLogger(UtPackageInstaller::class.java.name) as Logger
+            val appender = ListAppender<ILoggingEvent>().also { it.start() }
+            logger.addAppender(appender)
+            try {
+                block()
+                return appender.list.filter { it.level == Level.WARN }.map { it.formattedMessage }
+            } finally {
+                logger.detachAppender(appender)
+            }
+        }
 
         context("install from a local source") {
             test("does not fetch a package the installation already holds") {
@@ -467,6 +510,55 @@ class UtPackageInstallerTest :
                 installer.installed.map { it.name } shouldBe listOf("Engine")
                 installationPath(installation, UtDirectory.System, "Engine.u").exists() shouldBe true
                 requests.none { it.contains("BTPog") } shouldBe true
+            }
+        }
+
+        context("stale last generation") {
+            test("repairs a package the installation already held, and warns naming it") {
+                val installation = installation("repair-held")
+                val target = writeGeneration(installationPath(installation, UtDirectory.Textures, "Snowlvl.utx"), guid, 1 to 1)
+                val installer = installer(installation, UtPackage.named("Snowlvl", guid))
+
+                warnings { installer.install() } shouldBe listOf("Repaired the stale last generation of Snowlvl")
+
+                generationOf(target) shouldBe (5 to 23)
+                UtPackage.read(target).guid() shouldBe "123456789ABCDEF0876543210BADF00D"
+                installer.installed shouldBe emptyList()
+            }
+
+            test("repairs the copy of a package it copied from the packages directory, and leaves the source as it is") {
+                val installation = installation("repair-copied")
+                val source = writeGeneration(packagesDirectory("repair-copied") / "Snowlvl.utx", guid, 1 to 1)
+                val installer = installer(installation, UtPackage.named("Snowlvl", guid))
+
+                warnings { installer.install() } shouldBe listOf("Repaired the stale last generation of Snowlvl")
+
+                generationOf(installationPath(installation, UtDirectory.Textures, "Snowlvl.utx")) shouldBe (5 to 23)
+                generationOf(source) shouldBe (1 to 1)
+            }
+
+            test("repairs a package it downloaded from a redirect") {
+                val installation = installation("repair-downloaded")
+                served["/first/Snowlvl.utx.uz"] = archive("Snowlvl.utx", generationBytes(guid, 1 to 1))
+                val installer = installer(installation, UtPackage.named("Snowlvl", guid))
+
+                warnings { installer.install() } shouldBe listOf("Repaired the stale last generation of Snowlvl")
+
+                val target = installationPath(installation, UtDirectory.Textures, "Snowlvl.utx")
+                generationOf(target) shouldBe (5 to 23)
+                UtPackage.read(target).guid() shouldBe "123456789ABCDEF0876543210BADF00D"
+                installer.installed.map { it.path } shouldBe listOf(target)
+            }
+
+            test("leaves a package whose last generation already holds the header counts, without a warning") {
+                val installation = installation("repair-correct")
+                val target = writeGeneration(installationPath(installation, UtDirectory.Textures, "Snowlvl.utx"), guid, 5 to 23)
+                val before = target.readBytes()
+                val installer = installer(installation, UtPackage.named("Snowlvl", guid))
+
+                warnings { installer.install() } shouldBe emptyList()
+
+                target.readBytes() shouldBe before
             }
         }
 
